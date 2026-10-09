@@ -341,16 +341,17 @@ test('the top bar shows one clear login state at a time, each with only its own 
   assert.doesNotMatch(VIEW_SRC, /[Ss]ign(ed)? in to Amazon|[Ss]ign in again|Amazon: not signed in/, 'log in, not sign in, everywhere on the screen');
 });
 
-test('the marketplace tabs: Amazon is chosen; Flipkart says "Coming soon" and cannot be chosen', () => {
+test('the marketplace tabs: Amazon is chosen; pressing Flipkart opens the Flipkart screen', () => {
   const s = screen(fakeLocal(standard));
   const tree = s.draw();
   const tabs = byId(tree, 'market');
   assert.equal(tabs.attrs.role, 'tablist');
-  assert.deepEqual(findAll(tabs, (n) => n.attrs?.role === 'tab').map(textOf), ['Amazon', 'FlipkartComing soon']);
+  assert.deepEqual(findAll(tabs, (n) => n.attrs?.role === 'tab').map(textOf), ['Amazon', 'Flipkart'], 'no "Coming soon"');
   assert.equal(byId(tree, 'market-amazon').attrs['aria-selected'], 'true');
   const flipkart = byId(tree, 'market-flipkart');
-  assert.deepEqual([flipkart.attrs['aria-selected'], flipkart.attrs['aria-disabled'], flipkart.attrs.disabled], ['false', 'true', true]);
-  assert.equal(flipkart.attrs.onclick, undefined, 'pressing it does nothing');
+  assert.deepEqual([flipkart.attrs['aria-selected'], flipkart.attrs['aria-disabled'], flipkart.attrs.disabled, flipkart.attrs.title], ['false', undefined, undefined, undefined], 'it can be pressed, and has no hover words');
+  s.click('market-flipkart');
+  assert.deepEqual(s.went, ['flipkart'], 'to #/flipkart');
 });
 
 test('"Log in to Amazon": the top bar follows the login every 2 seconds, with no reload, until it says logged in', async () => {

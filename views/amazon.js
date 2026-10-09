@@ -1206,13 +1206,13 @@ function pill(h, text, tone) {
   return h('span', { class: `pill pill-${tone === 'info' ? 'quiet' : tone}` }, text || EMPTY);
 }
 
-/** The marketplace tabs: Amazon, and Flipkart, which cannot be chosen until its checking is built. */
-function marketTabs(h) {
+/** The marketplace tabs: Amazon, and Flipkart, which opens the Flipkart screen (go is the screen's ctx.go). */
+function marketTabs(h, go) {
   return h(
     'div',
     { class: 'market', role: 'tablist', 'aria-label': 'Marketplace', key: 'market', 'data-id': 'market' },
     h('button', { type: 'button', role: 'tab', class: 'market-tab', 'aria-selected': 'true', 'data-id': 'market-amazon' }, icon(h, 'bag'), 'Amazon'),
-    h('button', { type: 'button', role: 'tab', class: 'market-tab', 'aria-selected': 'false', 'aria-disabled': 'true', disabled: true, title: 'Flipkart checking is not built yet.', 'data-id': 'market-flipkart' }, icon(h, 'bag'), 'Flipkart', h('span', { class: 'soon' }, 'Coming soon')),
+    h('button', { type: 'button', role: 'tab', class: 'market-tab', 'aria-selected': 'false', onclick: () => go('flipkart'), 'data-id': 'market-flipkart' }, icon(h, 'bag'), 'Flipkart'),
   );
 }
 
@@ -1278,7 +1278,7 @@ function googleBar(ctx) {
 function renderBar(ctx) {
   const amazon = loginBar(ctx);
   const google = googleBar(ctx);
-  return [marketTabs(ctx.h), amazon[0], google[0], amazon[1], google[1]];
+  return [marketTabs(ctx.h, ctx.go), amazon[0], google[0], amazon[1], google[1]];
 }
 
 function columnLetter(col) {

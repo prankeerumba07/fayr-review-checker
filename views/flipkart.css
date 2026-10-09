@@ -1,0 +1,12 @@
+/* The Flipkart screen, in the shared look (styles.css). The marketplace tabs
+   look the same as on the Amazon screen: their look is copied from
+   views/amazon.css under Flipkart's own names (fk-), so nothing here can
+   change the Amazon screen. */
+
+.fk-market { display: inline-flex; gap: 2px; padding: 2px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; }
+.fk-market-tab { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; font: inherit; font-size: 13px; font-weight: 500; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; transition: background-color .15s, color .15s; }
+.fk-market-tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(74, 52, 28, .08); cursor: default; }
+.fk-market-tab[aria-selected="true"] .icon { color: #c99a1e; }
+
+/* The one plain box: no space under its words. */
+.fk-box p { margin: 0; }

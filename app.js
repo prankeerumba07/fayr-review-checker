@@ -4,8 +4,9 @@ import { h, render } from './lib/vdom.js';
 import { createClient } from './lib/api.js';
 import * as words from './lib/words.js';
 import amazon from './views/amazon.js';
+import flipkart from './views/flipkart.js';
 
-const SCREENS = [amazon];
+const SCREENS = [amazon, flipkart];
 const DEFAULT = 'amazon';
 
 const root = document.getElementById('app');

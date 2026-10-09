@@ -147,9 +147,10 @@ function sendText(res, status, text, head) {
 
 /**
  * local(req, res, url) — the dashboard's routes; answers true when the path
- * was theirs. Without it, /local/ paths are not found.
+ * was theirs. Without it, /local/ paths are not found. flipkart(req, res, url)
+ * — Flipkart's routes, the same way: they get every path under /local/flipkart/.
  */
-export function createHandler({ root = ROOT, sessions, local = null }) {
+export function createHandler({ root = ROOT, sessions, local = null, flipkart = null }) {
   return async function handle(req, res) {
     baseHeaders(res);
     const head = req.method === 'HEAD';
@@ -161,7 +162,8 @@ export function createHandler({ root = ROOT, sessions, local = null }) {
       return sendText(res, 400, 'Bad request.', head);
     }
     if (url.pathname.startsWith('/local/')) {
-      if (local && (await local(req, res, url))) return;
+      const routes = url.pathname.startsWith('/local/flipkart/') ? flipkart : local;
+      if (routes && (await routes(req, res, url))) return;
       return sendText(res, 404, 'Not found.', head);
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -224,6 +226,7 @@ export async function startDashboard({ port = PORT, dataDir = join(ROOT, 'data')
   const { createAmazonRoutes } = await import('./amazon/routes.js');
   const { createLogin } = await import('./amazon/login.js');
   const { createGoogleLogin } = await import('./amazon/google-login.js');
+  const { createFlipkartRoutes } = await import('./flipkart/routes.js');
   const sessions = createSessions();
   const store = createStore(dataDir);
   await store.init();
@@ -236,7 +239,8 @@ export async function startDashboard({ port = PORT, dataDir = join(ROOT, 'data')
   // Every try at sending an email, kept in data/email-log.txt: the time, the row, what happened and the reason; never the email's words or address.
   const emailLines = createLineLog(join(store.dataDir, EMAIL_LOG), { log });
   const local = createAmazonRoutes({ store, live, images, log, login, google, emailLog: emailLines, auth: (req) => sessions.verify(bearerOf(req)) });
-  const server = createServer(createHandler({ sessions, local }));
+  const flipkart = createFlipkartRoutes({ auth: (req) => sessions.verify(bearerOf(req)) });
+  const server = createServer(createHandler({ sessions, local, flipkart }));
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', () => {
