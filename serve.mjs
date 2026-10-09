@@ -239,7 +239,7 @@ export async function startDashboard({ port = PORT, dataDir = join(ROOT, 'data')
   // Every try at sending an email, kept in data/email-log.txt: the time, the row, what happened and the reason; never the email's words or address.
   const emailLines = createLineLog(join(store.dataDir, EMAIL_LOG), { log });
   const local = createAmazonRoutes({ store, live, images, log, login, google, emailLog: emailLines, auth: (req) => sessions.verify(bearerOf(req)) });
-  const flipkart = createFlipkartRoutes({ auth: (req) => sessions.verify(bearerOf(req)) });
+  const flipkart = createFlipkartRoutes({ dataDir, log, auth: (req) => sessions.verify(bearerOf(req)) });
   const server = createServer(createHandler({ sessions, local, flipkart }));
   await new Promise((resolve, reject) => {
     server.once('error', reject);
