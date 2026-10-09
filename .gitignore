@@ -1,0 +1,9 @@
+# Users, screenshots, sheets, check results and browser profile. Private.
+data/
+node_modules/
+# Copies of data/ (private customer data and browser logins), wherever they are made.
+data-backup*/
+# Browser login folders, if one is ever kept outside data/.
+*-profile/
+# Mac Finder's folder files.
+.DS_Store

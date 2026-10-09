@@ -1,0 +1,155 @@
+{
+  "about": "The words and numbers the checks decide by. Change a value between its quotes, keep the commas and brackets as they are, and save the file. The next check uses it.",
+  "typeWords": {
+    "verified": "Verified",
+    "ratingOnly": "Rating Only",
+    "duplicate": "Duplicate",
+    "orderShotMissing": "Purchase screenshot missing",
+    "deliveryShotMissing": "Delivery screenshot missing",
+    "reviewLinkMissing": "Review link or screenshot missing",
+    "needDriveAccess": "Need Google Drive Access",
+    "needAccess": "Need Access",
+    "orderNotClear": "Purchase screenshot not clear",
+    "deliveryNotClear": "Delivery screenshot not clear",
+    "reviewNotClear": "Review screenshot not clear",
+    "orderIdNotMatching": "Order ID is not matching",
+    "orderDetailsNotMatching": "Order details not matching",
+    "notDelivered": "Not delivered",
+    "productNotMatching": "Product is not matching",
+    "wrongReviewLink": "Wrong review link",
+    "reviewDeleted": "Amazon review is deleted",
+    "reviewNotLive": "Review not live",
+    "reviewLinkNeeded": "Review link needed",
+    "reviewerNotMatching": "Reviewer name is different",
+    "reviewShotNotMatching": "Review screenshot not matching",
+    "cannotAddReviews": "User not being able to add reviews",
+    "somethingElse": "Something else"
+  },
+  "passingMarks": {
+    "productNameShare": 0.8,
+    "reviewTextShare": 0.85,
+    "amountDifferenceRupees": 1,
+    "feeAllowanceRupees": 5
+  },
+  "allowedPictureWebsites": [
+    "storage.googleapis.com",
+    "tryboxs.in",
+    "www.tryboxs.in"
+  ],
+  "reviewRefusedPhrases": [
+    "has not met the minimum eligibility requirements to write a review",
+    "unable to accept your review",
+    "you cannot review this product",
+    "can't review this product",
+    "not accepting reviews on this item",
+    "is not accepting reviews"
+  ],
+  "ratingOnlyPhrases": [
+    "thank you for rating",
+    "thanks for rating",
+    "thanks for your rating"
+  ],
+  "notDeliveredWords": [
+    "Cancelled",
+    "Canceled",
+    "Lost",
+    "In transit",
+    "Not delivered",
+    "Returned",
+    "Arriving",
+    "Out for delivery",
+    "Shipped",
+    "Expected",
+    "Cancel items"
+  ],
+  "secondsBetweenDownloads": 1,
+  "emails": {
+    "signOff": "Thank you,\nThe support team",
+    "templates": {
+      "duplicate": {
+        "subject": "Your order {order ID}: it was already sent",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\nThe same order, screenshot or review was already sent for another entry.\n\nIf this is a mistake, please reply to this email and tell us.\n\n{sign-off}"
+      },
+      "orderShotMissing": {
+        "subject": "Your order {order ID}: please send the purchase screenshot",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\nThe purchase screenshot was not added in the form, so we cannot see the order.\n\nPlease reply to this email with the purchase screenshot: a screenshot of this order on Amazon that shows the order ID, the amount and the product.\n\nHow to take it:\nIn the Amazon app: tap \"You\", then \"Your Orders\", then this order.\nOn the Amazon website: click \"Returns & Orders\", then \"View order details\" for this order.\nThe screenshot must show the order ID, the amount and the product.\n\n{sign-off}"
+      },
+      "deliveryShotMissing": {
+        "subject": "Your order {order ID}: please send the delivery screenshot",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\nThe delivery screenshot was not added in the form, so we cannot see that the order was delivered.\n\nPlease reply to this email with the delivery screenshot: a screenshot of this order on Amazon that shows the word \"Delivered\" and the product.\n\nHow to take it:\nIn the Amazon app: tap \"You\", then \"Your Orders\", then this order.\nOn the Amazon website: click \"Returns & Orders\", then \"View order details\" for this order.\nThe screenshot must show the word \"Delivered\" and the product.\n\n{sign-off}"
+      },
+      "reviewLinkMissing": {
+        "subject": "Your order {order ID}: please send the link to your review",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\nThe link to your review and the screenshot of it were not added in the form, so we cannot see your review.\n\nPlease reply to this email with the link to your own review and a screenshot of it, or with Amazon's email saying your review is live.\n\nHow to copy the link to your review:\nIn the Amazon app: open your review, tap \"Share\", then \"Copy\".\nOn the Amazon website: click the title of your review, then copy the link at the top of the page.\n\nHow to find Amazon's email about your review:\nOpen your email and search for \"review is live\". Open the email from Amazon and take a screenshot of it.\n\n{sign-off}"
+      },
+      "needDriveAccess": {
+        "subject": "Your order {order ID}: please send the screenshot again",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nPlease reply to this email with the same screenshot again, as a clear picture.\n\n{sign-off}"
+      },
+      "needAccess": {
+        "subject": "Your order {order ID}: please send the screenshot again",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nPlease reply to this email with the same screenshot again, as a clear picture.\n\n{sign-off}"
+      },
+      "orderNotClear": {
+        "subject": "Your order {order ID}: please send a clear purchase screenshot",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nPlease reply to this email with a clear screenshot of this order on Amazon that shows the order ID, the amount and the product.\n\nHow to take it:\nIn the Amazon app: tap \"You\", then \"Your Orders\", then this order.\nOn the Amazon website: click \"Returns & Orders\", then \"View order details\" for this order.\nThe screenshot must show the order ID, the amount and the product.\n\n{sign-off}"
+      },
+      "deliveryNotClear": {
+        "subject": "Your order {order ID}: please send a clear delivery screenshot",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nPlease reply to this email with a screenshot of this order on Amazon that shows the word \"Delivered\" and the product.\n\nHow to take it:\nIn the Amazon app: tap \"You\", then \"Your Orders\", then this order.\nOn the Amazon website: click \"Returns & Orders\", then \"View order details\" for this order.\nThe screenshot must show the word \"Delivered\" and the product.\n\n{sign-off}"
+      },
+      "reviewNotClear": {
+        "subject": "Your order {order ID}: please send the review screenshot again",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nPlease reply to this email with the same screenshot again, as a clear picture.\n\n{sign-off}"
+      },
+      "orderIdNotMatching": {
+        "subject": "Your order {order ID}: the order ID does not match",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nPlease reply to this email with the screenshot of the right order, or with the right order ID.\n\nHow to take it:\nIn the Amazon app: tap \"You\", then \"Your Orders\", then this order.\nOn the Amazon website: click \"Returns & Orders\", then \"View order details\" for this order.\nThe screenshot must show the order ID, the amount and the product.\n\n{sign-off}"
+      },
+      "orderDetailsNotMatching": {
+        "subject": "Your order {order ID}: the order details do not match",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nPlease reply to this email with the right screenshot, or with the right details.\n\nHow to take it:\nIn the Amazon app: tap \"You\", then \"Your Orders\", then this order.\nOn the Amazon website: click \"Returns & Orders\", then \"View order details\" for this order.\nThe screenshot must show the order ID, the amount and the product.\n\n{sign-off}"
+      },
+      "notDelivered": {
+        "subject": "Your order {order ID}: please send the delivery screenshot once it is delivered",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nOnce the order is delivered, please reply to this email with the delivery screenshot: a screenshot of this order on Amazon that shows the word \"Delivered\" and the product.\n\nHow to take it:\nIn the Amazon app: tap \"You\", then \"Your Orders\", then this order.\nOn the Amazon website: click \"Returns & Orders\", then \"View order details\" for this order.\nThe screenshot must show the word \"Delivered\" and the product.\n\n{sign-off}"
+      },
+      "notDeliveredCancelled": {
+        "subject": "Your order {order ID}: the screenshot says it was cancelled or returned",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nIf the order was in fact delivered, please reply to this email with the delivery screenshot: a screenshot of this order on Amazon that shows the word \"Delivered\" and the product.\n\nHow to take it:\nIn the Amazon app: tap \"You\", then \"Your Orders\", then this order.\nOn the Amazon website: click \"Returns & Orders\", then \"View order details\" for this order.\nThe screenshot must show the word \"Delivered\" and the product.\n\n{sign-off}"
+      },
+      "productNotMatching": {
+        "subject": "Your order {order ID}: the product does not match",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nPlease reply to this email with the right screenshot, or with the review of the right product.\n\nHow to take it:\nIn the Amazon app: tap \"You\", then \"Your Orders\", then this order.\nOn the Amazon website: click \"Returns & Orders\", then \"View order details\" for this order.\nThe screenshot must show the order ID, the amount and the product.\n\n{sign-off}"
+      },
+      "wrongReviewLink": {
+        "subject": "Your order {order ID}: please send the link to your review",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\nThe review link you gave does not open your review.\n\nPlease reply to this email with the link to your own review and a screenshot of it, or with Amazon's email saying your review is live.\n\nHow to copy the link to your review:\nIn the Amazon app: open your review, tap \"Share\", then \"Copy\".\nOn the Amazon website: click the title of your review, then copy the link at the top of the page.\n\nHow to find Amazon's email about your review:\nOpen your email and search for \"review is live\". Open the email from Amazon and take a screenshot of it.\n\n{sign-off}"
+      },
+      "reviewDeleted": {
+        "subject": "Your order {order ID}: Amazon no longer shows your review",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\nAmazon no longer shows your review for this product.\n\nPlease reply to this email with two screenshots:\n1. Amazon's email saying your review is live. It must show your name, the product and the words of your review.\n2. The page or email where Amazon says why your review was removed.\n\nHow to find Amazon's email about your review:\nOpen your email and search for \"review is live\". Open the email from Amazon and take a screenshot of it.\n\n{sign-off}"
+      },
+      "reviewNotLive": {
+        "subject": "Your order {order ID}: please send the link to your review",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\nWe could not find your review among the reviews of this product on Amazon.\n\nPlease reply to this email with the link to your own review and a screenshot of it, or with Amazon's email saying your review is live.\n\nHow to copy the link to your review:\nIn the Amazon app: open your review, tap \"Share\", then \"Copy\".\nOn the Amazon website: click the title of your review, then copy the link at the top of the page.\n\nHow to find Amazon's email about your review:\nOpen your email and search for \"review is live\". Open the email from Amazon and take a screenshot of it.\n\n{sign-off}"
+      },
+      "reviewLinkNeeded": {
+        "subject": "Your order {order ID}: please send the link to your review",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\nWe could not find your review on Amazon from what you sent, so we need the link to it.\n\nPlease reply to this email with the link to your own review and a screenshot of it, or with Amazon's email saying your review is live.\n\nHow to copy the link to your review:\nIn the Amazon app: open your review, tap \"Share\", then \"Copy\".\nOn the Amazon website: click the title of your review, then copy the link at the top of the page.\n\nHow to find Amazon's email about your review:\nOpen your email and search for \"review is live\". Open the email from Amazon and take a screenshot of it.\n\n{sign-off}"
+      },
+      "reviewerNotMatching": {
+        "subject": "Your order {order ID}: the name on the review is different",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nPlease reply to this email and tell us whose Amazon account wrote the review, and why the name is different.\n\n{sign-off}"
+      },
+      "reviewShotNotMatching": {
+        "subject": "Your order {order ID}: the review screenshot does not match",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n{what is wrong}\n\nPlease reply to this email with a screenshot of your own review.\n\n{sign-off}"
+      },
+      "cannotAddReviews": {
+        "subject": "Your order {order ID}: please send the message Amazon showed",
+        "message": "Hello {name},\n\nThis is about your order {order ID} for {product}.\n\nAmazon did not let you add a review for this product.\n\nPlease reply to this email with a screenshot of the message Amazon shows after you tap Submit. It often starts with \"Error\", or says Amazon is not taking reviews for this product or brand.\n\nIf you have not sent them yet, please also send the purchase screenshot and the delivery screenshot of this order.\n\n{sign-off}"
+      }
+    }
+  }
+}

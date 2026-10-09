@@ -1,0 +1,15 @@
+{
+  "name": "amazon-review-checker",
+  "private": true,
+  "type": "module",
+  "description": "Local staff dashboard for checking Amazon reviews.",
+  "scripts": {
+    "start": "node serve.mjs",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs",
+    "check": "node syntax-check.mjs"
+  },
+  "dependencies": {
+    "exceljs": "4.4.0",
+    "playwright-core": "1.63.0"
+  }
+}
