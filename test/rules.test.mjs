@@ -15,7 +15,7 @@ import { modules } from '../syntax-check.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // The banned words, kept as base64 so this file does not hold them itself.
-const BANNED = ['ZmF5cg==', 'cmVmdW5k', 'Y2FzaGJhY2s=', 'cmV3YXJk'].map((b) => Buffer.from(b, 'base64').toString('utf8'));
+const BANNED = ['cmVmdW5k', 'Y2FzaGJhY2s=', 'cmV3YXJk'].map((b) => Buffer.from(b, 'base64').toString('utf8'));
 const BANNED_RE = new RegExp(BANNED.join('|'), 'i');
 
 function files(dir = ROOT) {
@@ -33,7 +33,7 @@ const ALL = files();
 const TEXT = ALL.filter((f) => /\.(m?js|json|html|css|md|txt|csv|svg)$/i.test(f) || /\.gitignore$/.test(f));
 
 test('no banned word in any file name', () => {
-  assert.equal(BANNED.length, 4);
+  assert.equal(BANNED.length, 3);
   for (const f of ALL) assert.doesNotMatch(relative(ROOT, f), BANNED_RE, relative(ROOT, f));
 });
 

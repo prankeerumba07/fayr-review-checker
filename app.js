@@ -213,7 +213,7 @@ function topBar() {
   return h(
     'header',
     { class: 'topbar', key: 'top' },
-    h('div', { class: 'brand' }, h('img', { src: 'favicon.svg', alt: '', width: '36', height: '36' }), h('span', { class: 'brand-name' }, 'Amazon Review Checker')),
+    h('div', { class: 'brand' }, h('img', { src: 'favicon.svg', alt: '', width: '36', height: '36' }), h('span', { class: 'brand-name' }, 'Fayr')),
     more,
   );
 }
