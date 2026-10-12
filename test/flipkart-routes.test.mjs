@@ -2,9 +2,11 @@
 // /local/flipkart/ goes to flipkart/routes.js (the status, ready: false, and
 // the uploaded file's rows), with the page's session token and from this page
 // only; every other /local/ path still goes to the Amazon routes. Uploading a
-// file keeps it and its rows only in data/flipkart/, and they show again after
-// a restart. Temporary data folders and a Live Amazon Browser that is never
-// used: nothing reaches Amazon, Flipkart, Google or any other website.
+// file finds what its columns hold as on Amazon (or asks for them), and keeps
+// it, its rows, the pictures in its cells and the columns chosen only in
+// data/flipkart/; they show again after a restart. Temporary data folders and
+// a Live Amazon Browser that is never used: nothing reaches Amazon, Flipkart,
+// Google or any other website.
 // Run: node test/flipkart-routes.test.mjs
 
 import { test, after } from 'node:test';
@@ -22,7 +24,7 @@ import { createFlipkartRoutes } from '../flipkart/routes.js';
 import { MAX_SHEET_BYTES } from '../flipkart/store.js';
 import { createStore } from '../amazon/store.js';
 import { createAmazonRoutes } from '../amazon/routes.js';
-import { FILE, HEADER, orderId, orderShot, deliveryShot, person } from './fixtures/flipkart/make-flipkart.mjs';
+import { FILE, HEADER, orderId, orderShot, deliveryShot, reviewLink, reviewShot, person } from './fixtures/flipkart/make-flipkart.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE = readFileSync(FILE);
@@ -85,7 +87,7 @@ function call(method, path, { token = TOKEN, site = 'same-origin', at = port, bo
   });
 }
 
-/** A multipart form, as the page sends it: the file, and any other fields (the tab chosen). */
+/** A multipart form, as the page sends it: the file, and any other fields (the tab chosen, the columns chosen). */
 function form(file, fields = {}) {
   const boundary = 'flipkart-test-form-boundary';
   const parts = Object.entries(fields).map(([k, v]) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
@@ -148,7 +150,7 @@ test('the file routes have the same safety: the session token, this page only, a
   }
   const put = await call('PUT', '/local/flipkart/sheet');
   assert.deepEqual([put.status, put.headers.allow], [405, 'GET, HEAD, POST']);
-  assert.deepEqual((await call('GET', '/local/flipkart/sheet')).json, { sheet: null, headers: [], rows: [] }, 'nothing was kept by any of these');
+  assert.deepEqual((await call('GET', '/local/flipkart/sheet')).json, { sheet: null, rows: [] }, 'nothing was kept by any of these');
   assert.deepEqual(readdirSync(dataDir).includes('flipkart'), false, 'not even the folder');
 });
 
@@ -182,38 +184,135 @@ test("npm start plugs Flipkart's routes in beside the Amazon routes, with the sa
   assert.match(src, /createServer\(createHandler\(\{ sessions, local, flipkart \}\)\)/);
 });
 
-test('uploading the made-up file keeps the file and its rows only in data/flipkart/, for this user only, and they show again after a restart', async () => {
+test('uploading the made-up file finds what each column holds and keeps the file, its rows, the pictures in its cells and the columns used only in data/flipkart/, for this user only; they show again after a restart', async () => {
   const { dir, at } = await fresh();
   const up = await upload(at, 'flipkart-orders.xlsx', FIXTURE);
   assert.equal(up.status, 200, up.text);
-  assert.deepEqual({ ...up.json.sheet, uploadedAt: typeof up.json.sheet.uploadedAt }, { fileName: 'flipkart-orders.xlsx', kind: 'xlsx', tab: 'Flipkart', rowCount: 5, uploadedAt: 'string' });
-  assert.deepEqual(up.json.headers, HEADER);
-  assert.deepEqual(up.json.rows.map((r) => r.n), [1, 2, 3, 4, 5], 'numbered from 1');
-  assert.ok(up.json.rows.every((r) => r.cells.length === HEADER.length), 'every row has every column');
-  const first = up.json.rows[0].cells;
-  assert.deepEqual([first[0], first[4], first[5], first[6]], [{ parts: [{ text: orderId(2) }] }, { parts: [{ text: person(2) }] }, { parts: [{ text: 'Screenshot' }, { text: ' ' }, { link: orderShot(2) }] }, { parts: [{ link: deliveryShot(2) }] }]);
-  assert.deepEqual(up.json.rows[1].cells[5], { parts: [], picture: true }, 'a picture inside a cell');
-  assert.deepEqual(filesIn(dir), ['flipkart/rows.json', 'flipkart/upload.xlsx'], 'nothing anywhere else in the data folder');
+  const { made, tab, unplaced, sheet, rows } = up.json;
+  assert.deepEqual([made, tab, unplaced], [5, 'Flipkart', []]);
+  assert.deepEqual([sheet.fileName, sheet.kind, sheet.tab, sheet.rowCount, typeof sheet.uploadedAt], ['flipkart-orders.xlsx', 'xlsx', 'Flipkart', 5, 'string']);
+  assert.deepEqual(sheet.headers.map((h) => h.text), HEADER);
+  assert.deepEqual(sheet.mapping, { orderId: 1, orderDate: 2, product: 3, amount: 4, reviewer: 5, orderShot: 6, deliveryShot: 7, reviewLink: 8, email: 9, reviewShot: 10, status: null, type: null, note: null });
+  // The table's columns, as on Amazon: every column of the file with its letter, then Status, Type and Note after the last one.
+  assert.deepEqual(sheet.columns.map((c) => `${c.letter} ${c.name} ${c.key}`), ['A Order ID orderId', 'B Order Date orderDate', 'C Product product', 'D Amount amount', 'E Reviewer Name reviewer', 'F Order Screenshot orderShot', 'G Delivery Screenshot deliveryShot', 'H Review Link reviewLink', 'I Email ID email', 'J Review Screenshot reviewShot', 'K Status status', 'L Type type', 'M Note note']);
+  assert.deepEqual(sheet.about, [
+    'Used for checking: Order ID, Order Date, Product, Amount, Order Screenshot, Delivery Screenshot, Review Link and Review Screenshot.',
+    'Only shown, not used for checking: Reviewer Name and Email ID.',
+    'It has no Status, Type or Note column, so the checked Excel file adds them after the last column.',
+  ]);
+  assert.deepEqual(rows.map((r) => [r.n, r.label, r.orderId, r.orderDate, r.amount, r.product]), [
+    [1, 'Row 1', orderId(2), '20-07-2026', '₹349', 'Test Brand Steel Bottle'],
+    [2, 'Row 2', orderId(3), '21-07-2026', '₹499', 'Test Brand Lunch Box'],
+    [3, 'Row 3', orderId(4), '22-07-2026', '₹349.50', 'Test Brand Steel Bottle'],
+    [4, 'Row 4', orderId(6), '23-07-2026', '₹499', 'Test Brand Lunch Box'],
+    [5, 'Row 5', '', '', '', ''],
+  ], 'numbered from 1');
+  assert.deepEqual(rows[0].shots.order, { text: 'Screenshot', link: orderShot(2), links: [orderShot(2)], labels: [{ link: orderShot(2), label: 'Google Drive' }], words: 'Screenshot', mismatch: null, how: null });
+  assert.deepEqual([rows[0].shots.delivery.labels, rows[0].shots.review.labels], [[{ link: deliveryShot(2), label: 'Google Drive' }], [{ link: reviewLink(2), label: "Flipkart product's reviews" }]]);
+  assert.deepEqual(rows[0].values, { 5: { text: person(2), labels: [] }, 9: { text: 'test.person2@example.test', labels: [] } });
+  assert.deepEqual([rows[1].shots.order.how, rows[1].shots.delivery.how, rows[1].shots.reviewShot.how, rows[4].shots.order.how], ['cell', 'floating', 'cell', 'floating']);
+  assert.deepEqual([rows[3].shots.review.links, rows[3].shots.reviewShot.labels], [[], [{ link: reviewShot(6), label: 'Google Drive' }]], 'a review screenshot and no review link');
+  assert.ok(rows.every((r) => /^r[0-9a-f]{12}$/.test(r.id) && r.prev === null));
+  assert.doesNotMatch(JSON.stringify(up.json), /"data"|sha256|\.png/, 'no picture, and no picture file, goes to the screen');
+  // Kept: the file, its rows, its four pictures and the columns used, and nothing anywhere else in the data folder.
+  const files = filesIn(dir);
+  assert.deepEqual(files.filter((p) => !p.startsWith('flipkart/pictures/')), ['flipkart/rows.json', 'flipkart/settings.json', 'flipkart/upload.xlsx']);
+  const kept = JSON.parse(readFileSync(join(dir, 'flipkart', 'rows.json'), 'utf8')).rows;
+  const pictures = kept.flatMap((r) => ['order', 'delivery', 'review', 'reviewShot'].flatMap((w) => r.pictures[w].map((p) => `flipkart/pictures/${p.file}`)));
+  assert.equal(pictures.length, 4);
+  assert.deepEqual(files.filter((p) => p.startsWith('flipkart/pictures/')), [...pictures].sort());
+  assert.deepEqual(pictures.map((p) => p.replace(/^flipkart\/pictures\/r[0-9a-f]{12}-/, '')), ['order-0.png', 'delivery-0.png', 'reviewShot-0.png', 'order-0.png']);
+  assert.ok(readFileSync(join(dir, pictures[0])).subarray(1, 4).equals(Buffer.from('PNG')), 'a picture as it is in the file');
   assert.ok(readFileSync(join(dir, 'flipkart', 'upload.xlsx')).equals(FIXTURE), 'the file as it was uploaded');
-  assert.equal(statSync(join(dir, 'flipkart')).mode & 0o777, 0o700);
-  for (const f of ['rows.json', 'upload.xlsx']) assert.equal(statSync(join(dir, 'flipkart', f)).mode & 0o777, 0o600, f);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'flipkart', 'settings.json'), 'utf8')), { columnChoice: Object.fromEntries(Object.entries(sheet.mapping).filter(([, col]) => col).map(([k, col]) => [k, HEADER[col - 1]])) }, 'the columns used, by their names, for the next file');
+  for (const d of ['flipkart', 'flipkart/pictures']) assert.equal(statSync(join(dir, d)).mode & 0o777, 0o700, d);
+  for (const p of files) assert.equal(statSync(join(dir, p)).mode & 0o777, 0o600, p);
   // The dashboard started again, on the same data folder: the same rows, with nothing uploaded again.
   const again = await fresh(dir);
   const reloaded = await call('GET', '/local/flipkart/sheet', { at: again.at });
   assert.equal(reloaded.status, 200);
-  assert.deepEqual(reloaded.json, up.json);
+  assert.deepEqual(reloaded.json, { sheet, rows });
+  // Another file: its rows replace these, and these rows' pictures go.
+  const csv = await upload(at, 'flipkart orders.csv', Buffer.from(`Order ID,Review Screenshot\n${orderId(7)},${reviewShot(7)}\n`));
+  assert.equal(csv.status, 200, csv.text);
+  assert.deepEqual(filesIn(dir), ['flipkart/rows.json', 'flipkart/settings.json', 'flipkart/upload.csv']);
+});
+
+test('a needed column that cannot be found: the columns are asked for and nothing changes; the file sent again with the columns chosen is kept, and those columns are found by themselves next time', async () => {
+  const { dir, at } = await fresh();
+  const odd = await workbook({ Flipkart: [['Ref', 'Evidence', 'Buyer'], [orderId(2), reviewShot(2), person(2)], [orderId(3), reviewShot(3), person(3)], [orderId(5), reviewShot(5), person(5)]] });
+  const asked = await upload(at, 'odd names.xlsx', odd);
+  assert.equal(asked.status, 200, asked.text);
+  assert.deepEqual(asked.json, {
+    columns: {
+      says: 'No column of this file could be found for the review link or the review screenshot, so choose one of them below (every other column can be left as "Not in this file").',
+      kind: 'xlsx',
+      tab: 'Flipkart',
+      headers: [{ col: 1, text: 'Ref' }, { col: 2, text: 'Evidence' }, { col: 3, text: 'Buyer' }],
+      lastCol: 3,
+      mapping: { orderId: 1, orderDate: null, amount: null, product: null, orderShot: null, deliveryShot: null, reviewShot: null, reviewLink: null, reviewer: 3, email: null, status: null, type: null, note: null },
+      fields: asked.json.columns.fields,
+    },
+  }, 'the order ID was found by its cells (Flipkart order IDs), the reviewer by the name "Buyer"');
+  assert.deepEqual(asked.json.columns.fields.map((f) => [f.key, f.label, f.required, Boolean(f.review)]).slice(0, 8), [
+    ['orderId', 'Order ID', true, false],
+    ['orderDate', 'Order date', false, false],
+    ['amount', 'Amount', false, false],
+    ['product', 'Product ordered', false, false],
+    ['orderShot', 'Purchase screenshot', false, false],
+    ['deliveryShot', 'Delivery screenshot', false, false],
+    ['reviewShot', 'Review screenshot', false, true],
+    ['reviewLink', 'Review link', false, true],
+  ]);
+  assert.deepEqual(filesIn(dir), [], 'nothing kept yet');
+  const wrong = await upload(at, 'odd names.xlsx', odd, { mapping: JSON.stringify({ orderId: 1, reviewShot: 1 }) });
+  assert.deepEqual([wrong.status, wrong.json.message, wrong.json.problems], [400, 'One column cannot hold two things: Order ID and Review screenshot.', ['One column cannot hold two things: Order ID and Review screenshot.']]);
+  const broken = await upload(at, 'odd names.xlsx', odd, { mapping: 'not json' });
+  assert.deepEqual([broken.status, broken.json.message], [400, 'The chosen columns could not be read.']);
+  assert.deepEqual(filesIn(dir), [], 'still nothing kept');
+  const chosen = await upload(at, 'odd names.xlsx', odd, { mapping: JSON.stringify({ orderId: 1, reviewShot: 2, reviewer: 3 }) });
+  assert.equal(chosen.status, 200, chosen.text);
+  assert.deepEqual([chosen.json.made, chosen.json.rows.map((r) => r.orderId), chosen.json.rows[0].shots.reviewShot.labels[0].label], [3, [orderId(2), orderId(3), orderId(5)], 'Google Drive']);
+  assert.deepEqual(chosen.json.sheet.about, [
+    'Used for checking: Ref and Evidence.',
+    'Only shown, not used for checking: Buyer.',
+    'This file has no order date, so order dates are not compared.',
+    'This file has no amount, so amounts are not compared.',
+    'This file has no product name, so products are not compared.',
+    'This file has no purchase screenshot, so every row needs a staff member to check the purchase.',
+    'This file has no delivery screenshot, so every row needs a staff member to check the delivery.',
+    'This file has no review link, so each review is read from its review screenshot.',
+    'It has no Status, Type or Note column, so the checked Excel file adds them after the last column.',
+  ]);
+  // The next file with the same column names: found by themselves, from the choice remembered in Flipkart's own settings.
+  const next = await upload(at, 'odd names again.xlsx', await workbook({ Flipkart: [['REF', 'evidence', 'Buyer'], [orderId(4), reviewShot(4), person(4)]] }));
+  assert.equal(next.status, 200, next.text);
+  assert.deepEqual([next.json.sheet.mapping.orderId, next.json.sheet.mapping.reviewShot, next.json.sheet.mapping.reviewer], [1, 2, 3]);
+  assert.deepEqual(filesIn(dir), ['flipkart/rows.json', 'flipkart/settings.json', 'flipkart/upload.xlsx'], "never Amazon's settings");
+});
+
+test('a file kept before its columns were found shows no rows, and the screen is told to upload it again', async () => {
+  const { dir, at } = await fresh();
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  mkdirSync(join(dir, 'flipkart'), { recursive: true });
+  // rows.json as it was kept before 12-10-2026: the cells of each row, and no columns found.
+  writeFileSync(join(dir, 'flipkart', 'rows.json'), JSON.stringify({ sheet: { fileName: 'old.xlsx', kind: 'xlsx', tab: 'Flipkart', headerRow: 1, file: 'upload.xlsx', uploadedAt: '2026-10-09T12:00:00.000Z' }, headers: [{ col: 1, text: 'Order ID' }], rows: [{ row: 2, cells: { 1: { text: orderId(2), behind: '' } } }] }));
+  const old = await call('GET', '/local/flipkart/sheet', { at });
+  assert.deepEqual([old.status, old.json], [200, { sheet: null, rows: [], uploadAgain: true }]);
+  assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
+  assert.equal((await call('GET', '/local/flipkart/sheet', { at })).json.rows.length, 5, 'uploaded again: its rows show');
 });
 
 test('several tabs and none named "Flipkart": the tabs are named and nothing is kept; the chosen tab is read and kept', async () => {
   const { dir, at } = await fresh();
-  const head = ['Order ID', 'Product'];
-  const several = await workbook({ Orders: [head, [orderId(2), 'Test Bottle']], Returns: [head, [orderId(3), 'Test Lid'], [orderId(4), 'Test Jar']] });
+  const head = ['Order ID', 'Product', 'Review Screenshot'];
+  const several = await workbook({ Orders: [head, [orderId(2), 'Test Bottle', reviewShot(2)]], Returns: [head, [orderId(3), 'Test Lid', reviewShot(3)], [orderId(4), 'Test Jar', reviewShot(4)]] });
   const asked = await upload(at, 'two tabs.xlsx', several);
   assert.deepEqual([asked.status, asked.json], [200, { chooseTab: { tabs: ['Orders', 'Returns'], says: 'This file has no tab named "Flipkart", and it has 2 tabs: "Orders" and "Returns". Choose the tab with the orders.' } }]);
   assert.deepEqual(filesIn(dir), [], 'nothing kept yet');
   const chosen = await upload(at, 'two tabs.xlsx', several, { tab: 'Returns' });
   assert.equal(chosen.status, 200, chosen.text);
-  assert.deepEqual([chosen.json.sheet.tab, chosen.json.sheet.rowCount, chosen.json.rows.map((r) => r.cells[0].parts[0].text)], ['Returns', 2, [orderId(3), orderId(4)]]);
+  assert.deepEqual([chosen.json.sheet.tab, chosen.json.sheet.rowCount, chosen.json.rows.map((r) => r.orderId)], ['Returns', 2, [orderId(3), orderId(4)]]);
   const wrong = await upload(at, 'two tabs.xlsx', several, { tab: 'Nope' });
   assert.deepEqual([wrong.status, wrong.json.message], [400, 'This file has no tab named "Nope". Its tabs are "Orders" and "Returns".']);
   assert.equal((await call('GET', '/local/flipkart/sheet', { at })).json.sheet.tab, 'Returns', 'the rows kept before stay');
@@ -222,15 +321,16 @@ test('several tabs and none named "Flipkart": the tabs are named and nothing is 
 test('a CSV file is kept in place of the Excel file, with no tab', async () => {
   const { dir, at } = await fresh();
   assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
-  const csv = await upload(at, 'flipkart orders.csv', Buffer.from(`Order ID,Reviewer Name\n${orderId(2)},${person(2)}\n`));
+  const csv = await upload(at, 'flipkart orders.csv', Buffer.from(`Order ID,Reviewer Name,Review Link\n${orderId(2)},${person(2)},${reviewLink(2)}\n`));
   assert.equal(csv.status, 200, csv.text);
   assert.deepEqual([csv.json.sheet.fileName, csv.json.sheet.kind, csv.json.sheet.tab, csv.json.sheet.rowCount], ['flipkart orders.csv', 'csv', null, 1]);
-  assert.deepEqual(filesIn(dir), ['flipkart/rows.json', 'flipkart/upload.csv'], 'the Excel file before is gone');
+  assert.deepEqual(filesIn(dir), ['flipkart/rows.json', 'flipkart/settings.json', 'flipkart/upload.csv'], 'the Excel file before and its pictures are gone');
 });
 
 test('a file that is too big is refused in plain words, and the rows kept before stay', async () => {
   const { at } = await fresh();
-  const before = await upload(at, 'flipkart-orders.xlsx', FIXTURE);
+  assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
+  const before = await call('GET', '/local/flipkart/sheet', { at });
   const justOver = await upload(at, 'big.csv', Buffer.alloc(MAX_SHEET_BYTES + 1, 0x61));
   assert.deepEqual([justOver.status, justOver.json?.message], [413, TOO_BIG]);
   const farOver = await upload(at, 'bigger.csv', Buffer.alloc(MAX_SHEET_BYTES + 512 * 1024, 0x61));

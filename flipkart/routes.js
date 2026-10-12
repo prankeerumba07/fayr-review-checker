@@ -5,15 +5,17 @@
 // yet), /local/flipkart/sheet (GET the uploaded file's rows, POST a file to
 // upload) and /local/flipkart/campaigns (GET them; POST to add one, to
 // change one, or to end, delete or read again one). The file is read on this
-// computer and kept in data/flipkart/; its links are only shown, never
+// computer, its columns are found as on Amazon (or chosen on the screen when
+// a needed one cannot be found), and it is kept in data/flipkart/ with its
+// rows and the pictures placed in its cells; its links are only shown, never
 // opened, and nothing is downloaded. A campaign's products are read, after it
 // is saved, from their Flipkart pages in the Live Flipkart Browser
 // (browser.js), one page at a time; the window opens only then, never when
 // the dashboard starts.
 
-import { openWorkbook, SheetError } from './workbook.js';
-import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES } from './store.js';
-import { cellParts } from './links.js';
+import { openWorkbook, guessColumns, columnProblems, rememberedChoice, sheetRows, SheetError, FIELDS, RESULT_FIELDS, RESULT_HEADERS, columnLetter, resultColumns, dayFirst } from './workbook.js';
+import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS } from './store.js';
+import { cellLinks, linkLabel, linksIn } from './links.js';
 import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct } from './campaigns.js';
 import { FlipkartBrowser } from './browser.js';
 
@@ -102,25 +104,120 @@ function sendJson(res, status, body) {
   res.end(text);
 }
 
-function refuse(res, status, message) {
-  sendJson(res, status, { statusCode: status, message });
+function refuse(res, status, message, extra = {}) {
+  sendJson(res, status, { statusCode: status, message, ...extra });
+}
+
+// ---- the rows as the screen sees them (copied from the Amazon routes, amazon/routes.js, and changed for Flipkart) ----
+
+/** An amount as rupees, as the table shows it: ₹654, ₹851.95, ₹1,299. Null when there is none. */
+export function rupees(value) {
+  if (!Number.isFinite(value) || value < 0) return null;
+  const n = Math.round(value * 100) / 100;
+  return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`;
 }
 
 /**
- * What the screen shows of the kept file: its name, the tab read (null for a
- * CSV file), how many rows it has, the column names, and every row's cells
- * in the columns' order, numbered from 1. A cell is its words in pieces
- * ({ text } or { link }), and picture: true when a picture is in it.
+ * A row as the screen sees it, as on Amazon: its number on the dashboard
+ * (from 1), its order ID, order date, amount and product, each picture or
+ * link cell with a few words saying where each link goes (`words` are the
+ * cell's own words when they are not a link themselves) and how a picture
+ * was given ('cell' or 'floating'), the file's other columns, and the
+ * Status, Type and Note the file already had. Pictures never come with it.
+ */
+export function rowView(r) {
+  const shot = (which) => {
+    const s = r.shots?.[which] ?? {};
+    const links = s.links ?? [];
+    return {
+      text: s.text ?? '',
+      link: s.link ?? '',
+      links,
+      labels: links.map((link) => ({ link, label: linkLabel(link) })),
+      words: links.length && !linksIn(s.text ?? '').length ? s.text ?? '' : '',
+      mismatch: s.mismatch ?? null,
+      how: s.picture ?? null,
+    };
+  };
+  return {
+    id: r.id,
+    row: r.row ?? null,
+    n: r.n ?? null,
+    label: `Row ${r.n ?? '?'}`,
+    orderId: r.orderId?.text ?? '',
+    orderDate: r.orderDate?.value ? dayFirst(r.orderDate.value) : r.orderDate?.text ?? '',
+    orderDateRead: Boolean(r.orderDate?.value),
+    amount: rupees(r.amount?.value) ?? r.amount?.text ?? '',
+    amountRead: Number.isFinite(r.amount?.value),
+    product: r.product?.text ?? '',
+    shots: Object.fromEntries(SHOTS.map((w) => [w, shot(w)])),
+    // The file's other columns (such as the reviewer's name), by column number: their words, and where each link goes.
+    values: Object.fromEntries(Object.entries(r.values ?? {}).map(([col, v]) => [col, { text: v?.text ?? '', labels: cellLinks(v?.text ?? '', v?.behind ?? '').links.map((link) => ({ link, label: linkLabel(link) })) }])),
+    prev: r.prev ?? null,
+  };
+}
+
+/**
+ * The table's columns: every column of the file, in its order, each with its
+ * letter, its name in the heading row, and the field it holds (key, or null
+ * for a column only shown, such as the reviewer's name); then the Status, Type
+ * and Note columns the file does not have, after the last one. A file's own
+ * Status, Type or Note column is that same column, never shown twice.
+ */
+function tableColumns(sheet, mapping) {
+  const results = resultColumns(mapping, sheet.lastCol);
+  const fieldAt = new Map(FIELDS.filter((f) => Number.isInteger(mapping[f.key])).map((f) => [mapping[f.key], f.key]));
+  const cols = (sheet.headers ?? []).map((h) => ({ key: fieldAt.get(h.col) ?? null, col: h.col, letter: columnLetter(h.col), name: h.text, added: false }));
+  for (const a of results.added) cols.push({ key: RESULT_FIELDS.find((k) => results[k] === a.col) ?? null, col: a.col, letter: columnLetter(a.col), name: a.header, added: true });
+  return cols;
+}
+
+/** The fields checked against the screenshots and the review, in the order a row is checked. */
+const CHECKED_FIELDS = ['orderId', 'orderDate', 'amount', 'product', 'orderShot', 'deliveryShot', 'reviewShot', 'reviewLink'];
+
+/** What the file does not have, and what that means: the same words as on Amazon. */
+const LACKS = {
+  orderDate: 'This file has no order date, so order dates are not compared.',
+  amount: 'This file has no amount, so amounts are not compared.',
+  product: 'This file has no product name, so products are not compared.',
+  orderShot: 'This file has no purchase screenshot, so every row needs a staff member to check the purchase.',
+  deliveryShot: 'This file has no delivery screenshot, so every row needs a staff member to check the delivery.',
+  reviewLink: 'This file has no review link, so each review is read from its review screenshot.',
+};
+
+/**
+ * The short lines under the upload line, as on Amazon: which of the file's
+ * columns are used for checking, which are only shown, and what the file
+ * does not have and what that means.
+ */
+function aboutFile(view) {
+  const m = view.mapping;
+  const named = (h) => (/^Column [A-Z]{1,3}$/.test(h.text) ? 'a column with no name' : h.text);
+  const list = (items) => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : items[0] ?? '');
+  const checked = new Set(CHECKED_FIELDS.map((k) => m[k]).filter(Number.isInteger));
+  const results = new Set(RESULT_FIELDS.map((k) => m[k]).filter(Number.isInteger));
+  const out = [`Used for checking: ${list(view.headers.filter((h) => checked.has(h.col)).map(named))}.`];
+  const shown = view.headers.filter((h) => !checked.has(h.col) && !results.has(h.col)).map(named);
+  if (shown.length) out.push(`Only shown, not used for checking: ${list(shown)}.`);
+  for (const [k, said] of Object.entries(LACKS)) if (!Number.isInteger(m[k])) out.push(said);
+  const added = RESULT_FIELDS.filter((k) => !Number.isInteger(m[k])).map((k) => RESULT_HEADERS[k]);
+  if (added.length) out.push(`It has no ${added.length > 1 ? `${added.slice(0, -1).join(', ')} or ${added.at(-1)}` : added[0]} column, so the checked Excel file adds ${added.length === 1 ? 'it' : 'them'} after the last column.`);
+  return out;
+}
+
+/**
+ * What the screen shows of the kept file: { sheet, rows }. sheet: its name,
+ * the tab read (null for a CSV file), its column names, the columns found,
+ * the table's columns, the lines about it and how many rows it has; rows:
+ * every row as rowView gives it. A file kept before its columns were found
+ * shows no rows: it must be uploaded again (uploadAgain).
  */
 export function sheetView(saved) {
-  if (!saved) return { sheet: null, headers: [], rows: [] };
-  const cols = saved.headers.map((h) => h.col);
-  const cell = (c) => (c ? { parts: cellParts(c.text, c.behind), ...(c.picture ? { picture: true } : {}) } : { parts: [] });
-  return {
-    sheet: { fileName: saved.sheet.fileName, kind: saved.sheet.kind, tab: saved.sheet.tab, rowCount: saved.rows.length, uploadedAt: saved.sheet.uploadedAt },
-    headers: saved.headers.map((h) => h.text),
-    rows: saved.rows.map((r, i) => ({ n: i + 1, cells: cols.map((col) => cell(r.cells?.[col])) })),
-  };
+  if (!saved || saved.old) return { sheet: null, rows: [], ...(saved?.old ? { uploadAgain: true } : {}) };
+  const s = saved.sheet;
+  const sheet = { fileName: s.fileName, kind: s.kind, tab: s.tab, headers: s.headers, lastCol: s.lastCol, mapping: s.mapping, columns: tableColumns(s, s.mapping), rowCount: saved.rows.length, uploadedAt: s.uploadedAt };
+  sheet.about = aboutFile(sheet);
+  return { sheet, rows: saved.rows.map(rowView) };
 }
 
 /**
@@ -312,17 +409,46 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
     return sendJson(res, 200, await campaignsView());
   }
 
+  // ---- the file (copied from the Amazon routes, amazon/routes.js, and changed for Flipkart) ----
+
+  /** The columns staff chose, sent with the file again: { [field]: column number | null }, or null when none were sent. */
+  function chosenColumns(raw) {
+    if (raw === undefined || raw === '') return null;
+    let m;
+    try {
+      m = JSON.parse(raw);
+    } catch {
+      throw new HttpError(400, 'The chosen columns could not be read.');
+    }
+    if (!m || typeof m !== 'object' || Array.isArray(m)) throw new HttpError(400, 'The chosen columns could not be read.');
+    return Object.fromEntries(FIELDS.map((f) => [f.key, m[f.key] === null || m[f.key] === undefined || m[f.key] === '' ? null : m[f.key]]));
+  }
+
+  /** The one sentence saying which needed column could not be found: the order ID, or the review link and the review screenshot. */
+  function missingSays(mapping) {
+    const noId = !Number.isInteger(mapping.orderId);
+    const noReview = !Number.isInteger(mapping.reviewLink) && !Number.isInteger(mapping.reviewShot);
+    if (noId && noReview) return 'No column of this file could be found for the order ID, nor for the review link or the review screenshot, so choose them below (every other column can be left as "Not in this file").';
+    if (noId) return 'No column of this file could be found for the order ID, so choose it below (every other column can be left as "Not in this file").';
+    return 'No column of this file could be found for the review link or the review screenshot, so choose one of them below (every other column can be left as "Not in this file").';
+  }
+
   /**
-   * An uploaded file: read at once and kept with its rows, in place of the
-   * file before. When the file has several tabs and none is named
+   * An uploaded file: read at once, its columns found as on Amazon, and its
+   * rows made and kept, in place of the file before, with the pictures placed
+   * in its cells. When the file has several tabs and none is named
    * "Flipkart", nothing changes: the screen is told the tabs, and sends the
-   * file again with the one chosen (tab).
+   * file again with the one chosen (tab). When a needed column cannot be
+   * found, nothing changes either: the screen is told which, and sends the
+   * file again with the columns chosen (mapping). The columns used are
+   * remembered for the next file.
    */
   async function uploadSheet(req, res) {
     const { fields, files } = await readForm(req);
     const file = files.file;
     if (!file) return refuse(res, 400, 'Choose the Flipkart file first.');
     if (file.data.length > MAX_SHEET_BYTES) return refuse(res, 413, TOO_BIG);
+    const chosen = chosenColumns(fields.mapping);
     let book;
     try {
       book = await openWorkbook(file.data, { fileName: file.filename, tab: fields.tab ? fields.tab : null });
@@ -331,8 +457,23 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       throw err;
     }
     if (book.chooseTab) return sendJson(res, 200, { chooseTab: book.chooseTab });
-    const saved = await store.saveSheet({ fileName: file.filename, kind: book.kind, tab: book.tab, headerRow: book.headerRow }, file.data, book.headers, book.rows);
-    return sendJson(res, 200, sheetView(saved));
+    const { tab, kind } = book;
+    const mapping = chosen ?? guessColumns(tab.headers, await store.columnChoice(), tab);
+    const problems = columnProblems(mapping, tab.headers);
+    if (problems.length && chosen) return refuse(res, 400, problems.join(' '), { problems });
+    if (problems.length) {
+      return sendJson(res, 200, { columns: { says: missingSays(mapping), kind, tab: tab.name, headers: tab.headers, lastCol: tab.lastCol, mapping, fields: FIELDS } });
+    }
+    let made;
+    try {
+      made = sheetRows(tab, mapping);
+    } catch (err) {
+      if (err instanceof SheetError) return refuse(res, 400, err.message);
+      throw err;
+    }
+    const saved = await store.saveSheet({ fileName: file.filename, kind, tab: tab.name, headerRow: tab.headerRow, headers: tab.headers, lastCol: tab.lastCol, mapping }, file.data, made.rows);
+    await store.setColumnChoice(rememberedChoice(mapping, tab.headers));
+    return sendJson(res, 200, { made: saved.rows.length, tab: tab.name, unplaced: made.unplaced, ...sheetView(saved) });
   }
 
   /** True when the path was one of these routes (answered or refused). */

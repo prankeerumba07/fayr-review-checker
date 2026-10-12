@@ -23,23 +23,113 @@ const classesOf = (tree) => findAll(tree, () => true).flatMap((n) => String(n.at
 
 const ORDER_SHOT = 'https://drive.google.com/open?id=1TestFlipkartOrder02abcd';
 const DELIVERY_SHOT = 'https://drive.google.com/open?id=1TestFlipkartDelivery02ab';
-const NONE = { sheet: null, headers: [], rows: [] };
-/** The kept file as the server shows it: three rows, a link behind words, a link alone, a picture, two lines, and a link that is not a web link. */
+const REVIEW_SHOT = 'https://drive.google.com/open?id=1TestFlipkartReview03abcd';
+const REVIEW_LINK = 'https://www.flipkart.com/reviews/TESTPID0000002:3?reviewId=0a1b2c3d-0000-4000-8000-000000000002';
+const NONE = { sheet: null, rows: [] };
+const HEADERS = ['Reviewer Name', 'Order ID', 'Amount', 'Product Ordered', 'Order Screenshot', 'Delivery Screenshot', 'Review Screenshot', 'Review Link'];
+const KEYS = ['reviewer', 'orderId', 'amount', 'product', 'orderShot', 'deliveryShot', 'reviewShot', 'reviewLink'];
+const LETTERS = 'ABCDEFGHIJK';
+const ABOUT = [
+  'Used for checking: Order ID, Amount, Product Ordered, Order Screenshot, Delivery Screenshot, Review Screenshot and Review Link.',
+  'Only shown, not used for checking: Reviewer Name.',
+  'This file has no order date, so order dates are not compared.',
+  'It has no Status, Type or Note column, so the checked Excel file adds them after the last column.',
+];
+/** A picture or link cell as the server shows it. */
+const shot = (over = {}) => ({ text: '', link: '', links: [], labels: [], words: '', mismatch: null, how: null, ...over });
+const drive = (link, words = '') => shot({ text: words || link, link, links: [link], labels: [{ link, label: 'Google Drive' }], words });
+/** The kept file as the server shows it: its columns as on Amazon, and three rows with links behind words, links alone, pictures in and over cells, no review link, two lines, and a link that is not a web link. */
 const SAVED = {
-  sheet: { fileName: 'flipkart-orders.xlsx', kind: 'xlsx', tab: 'Flipkart', rowCount: 3, uploadedAt: '2026-10-09T12:00:00.000Z' },
-  headers: ['Order ID', 'Reviewer Name', 'Order Screenshot', 'Delivery Screenshot'],
+  sheet: {
+    fileName: 'flipkart-orders.xlsx',
+    kind: 'xlsx',
+    tab: 'Flipkart',
+    headers: HEADERS.map((text, i) => ({ col: i + 1, text })),
+    lastCol: 8,
+    mapping: { ...Object.fromEntries(KEYS.map((k, i) => [k, i + 1])), orderDate: null, email: null, status: null, type: null, note: null },
+    columns: [...HEADERS.map((name, i) => ({ key: KEYS[i], col: i + 1, letter: LETTERS[i], name, added: false })), ...['Status', 'Type', 'Note'].map((name, i) => ({ key: name.toLowerCase(), col: 9 + i, letter: LETTERS[8 + i], name, added: true }))],
+    about: ABOUT,
+    rowCount: 3,
+    uploadedAt: '2026-10-12T12:00:00.000Z',
+  },
   rows: [
-    { n: 1, cells: [{ parts: [{ text: 'OD-TEST-000000000002' }] }, { parts: [{ text: 'Test Person Two' }] }, { parts: [{ text: 'Screenshot' }, { text: ' ' }, { link: ORDER_SHOT }] }, { parts: [{ link: DELIVERY_SHOT }] }] },
-    { n: 2, cells: [{ parts: [{ text: 'OD-TEST-000000000003' }] }, { parts: [{ text: 'Test Person Three' }] }, { parts: [], picture: true }, { parts: [{ text: 'Delivered\nLeft at the door' }] }] },
-    { n: 3, cells: [{ parts: [] }, { parts: [] }, { parts: [{ link: 'javascript:alert(1)' }] }, { parts: [] }] },
+    {
+      id: 'r000000000001',
+      n: 1,
+      label: 'Row 1',
+      orderId: 'OD100000000000000002',
+      orderDate: '',
+      amount: '₹349',
+      product: 'Test Brand Steel Bottle',
+      shots: { order: drive(ORDER_SHOT, 'Screenshot'), delivery: drive(DELIVERY_SHOT), review: shot({ text: REVIEW_LINK, link: REVIEW_LINK, links: [REVIEW_LINK], labels: [{ link: REVIEW_LINK, label: 'Flipkart review' }] }), reviewShot: shot({ how: 'cell' }) },
+      values: { 1: { text: 'Test Person Two', labels: [] } },
+      prev: null,
+    },
+    {
+      id: 'r000000000002',
+      n: 2,
+      label: 'Row 2',
+      orderId: 'OD100000000000000003',
+      orderDate: '',
+      amount: '₹499',
+      product: 'Test Brand Lunch Box',
+      shots: { order: shot({ how: 'cell' }), delivery: shot({ how: 'floating' }), review: shot(), reviewShot: drive(REVIEW_SHOT) },
+      values: { 1: { text: 'Test Person Three', labels: [] } },
+      prev: null,
+    },
+    {
+      id: 'r000000000003',
+      n: 3,
+      label: 'Row 3',
+      orderId: '',
+      orderDate: '',
+      amount: '',
+      product: '',
+      shots: { order: shot({ text: 'javascript:alert(1)', links: ['javascript:alert(1)'], labels: [{ link: 'javascript:alert(1)', label: 'Link' }] }), delivery: shot({ text: 'Delivered\nLeft at the door' }), review: shot({ text: ORDER_SHOT, link: DELIVERY_SHOT, links: [DELIVERY_SHOT], labels: [{ link: DELIVERY_SHOT, label: 'Google Drive' }], mismatch: { text: ORDER_SHOT, link: DELIVERY_SHOT } }), reviewShot: shot() },
+      values: {},
+      prev: null,
+    },
   ],
 };
-const CSV_SAVED = { sheet: { fileName: 'flipkart orders.csv', kind: 'csv', tab: null, rowCount: 1, uploadedAt: '2026-10-09T12:00:00.000Z' }, headers: ['Order ID', 'Product'], rows: [{ n: 1, cells: [{ parts: [{ text: 'OD-TEST-000000000004' }] }, { parts: [{ text: 'Test Jar' }] }] }] };
+/** What an upload answers: what it made, and the kept file as the server shows it. */
+const UPLOADED = { made: 3, tab: 'Flipkart', unplaced: [], ...SAVED };
+const CSV_SAVED = {
+  sheet: { ...SAVED.sheet, fileName: 'flipkart orders.csv', kind: 'csv', tab: null, rowCount: 1 },
+  rows: [SAVED.rows[0]],
+};
 const CHOOSE = { chooseTab: { tabs: ['Orders', 'Returns'], says: 'This file has no tab named "Flipkart", and it has 2 tabs: "Orders" and "Returns". Choose the tab with the orders.' } };
+/** The fields, as the server sends them with the columns it could not find: the same as on Amazon. */
+const FIELD_LIST = [
+  { key: 'orderId', label: 'Order ID', required: true },
+  { key: 'orderDate', label: 'Order date', required: false },
+  { key: 'amount', label: 'Amount', required: false },
+  { key: 'product', label: 'Product ordered', required: false },
+  { key: 'orderShot', label: 'Purchase screenshot', required: false },
+  { key: 'deliveryShot', label: 'Delivery screenshot', required: false },
+  { key: 'reviewShot', label: 'Review screenshot', required: false, review: true },
+  { key: 'reviewLink', label: 'Review link', required: false, review: true },
+  { key: 'reviewer', label: 'Reviewer name', required: false },
+  { key: 'email', label: 'Email address', required: false },
+  { key: 'status', label: 'Status', required: false },
+  { key: 'type', label: 'Type', required: false },
+  { key: 'note', label: 'Note', required: false },
+];
+/** A file whose review column the server could not find. */
+const NEED = {
+  columns: {
+    says: 'No column of this file could be found for the review link or the review screenshot, so choose one of them below (every other column can be left as "Not in this file").',
+    kind: 'xlsx',
+    tab: 'Flipkart',
+    headers: [{ col: 1, text: 'Ref' }, { col: 2, text: 'Evidence' }, { col: 3, text: 'Buyer' }],
+    lastCol: 3,
+    mapping: { orderId: 1, orderDate: null, amount: null, product: null, orderShot: null, deliveryShot: null, reviewShot: null, reviewLink: null, reviewer: 3, email: null, status: null, type: null, note: null },
+    fields: FIELD_LIST,
+  },
+};
 const aFile = (name = 'flipkart-orders.xlsx') => new File([Buffer.from('made-up bytes')], name);
 
 /** A client like lib/api.js: what the server keeps (saved), what an upload answers (answer), and every request made. */
-function fakeLocal({ saved = NONE, answer = () => SAVED } = {}) {
+function fakeLocal({ saved = NONE, answer = () => UPLOADED } = {}) {
   const calls = [];
   return {
     calls,
@@ -94,6 +184,13 @@ async function choose(s, file = aFile()) {
 }
 
 const rowsOf = (tree) => findAll(byId(tree, 'rows-table'), (n) => n.tag === 'tr').map((tr) => findAll(tr, (n) => n.tag === 'td' || n.tag === 'th').map(textOf));
+/** The table of the kept file, as the screen shows it: the column names with their letters, then each row. */
+const TABLE = [
+  ['Row', 'A: Reviewer Name', 'B: Order ID', 'C: Amount', 'D: Product Ordered', 'E: Order Screenshot', 'F: Delivery Screenshot', 'G: Review Screenshot', 'H: Review Link', 'I: Status', 'J: Type', 'K: Note'],
+  ['1', 'Test Person Two', 'OD100000000000000002', '₹349', 'Test Brand Steel Bottle', 'Google DriveScreenshot', 'Google Drive', 'Picture in the cell', 'Flipkart review', 'Empty', 'Empty', 'Empty'],
+  ['2', 'Test Person Three', 'OD100000000000000003', '₹499', 'Test Brand Lunch Box', 'Picture in the cell', 'Picture over the cell', 'Google Drive', 'Empty', 'Empty', 'Empty', 'Empty'],
+  ['3', 'Empty', 'Empty', 'Empty', 'Empty', 'Link', 'Delivered\nLeft at the door', 'Empty', 'Google DriveThe written link is different', 'Empty', 'Empty', 'Empty'],
+];
 
 test('before a file is in: the tabs, and an upload area like the Amazon one for an .xlsx or .csv file; no table and no login lines', async () => {
   const first = screen(flipkart);
@@ -115,7 +212,7 @@ test('before a file is in: the tabs, and an upload area like the Amazon one for 
   assert.deepEqual(s.local.calls.map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/sheet', 'GET /local/flipkart/campaigns'], 'it asks only for the kept file and the campaigns');
 });
 
-test('choosing a file uploads it at once: its name, its tab and how many rows in one slim line, with "Replace file", and every row with every column, numbered from 1', async () => {
+test('choosing a file uploads it at once: its name, its tab and how many rows in one slim line, with "Replace file", the lines about its columns, and its rows in a table like the Amazon one, numbered from 1', async () => {
   const s = await opened(fakeLocal());
   const file = aFile();
   await choose(s, file);
@@ -127,31 +224,106 @@ test('choosing a file uploads it at once: its name, its tab and how many rows in
   assert.equal(textOf(byId(tree, 'sheet-line')), 'flipkart-orders.xlsx, the Flipkart tab: 3 rows.');
   assert.equal(textOf(byId(tree, 'upload-done')), 'Uploaded');
   assert.deepEqual([byId(tree, 'replace-file').tag, byId(tree, 'replace-file').attrs.for, textOf(byId(tree, 'replace-file'))], ['label', 'fk-file', 'Replace file']);
+  assert.deepEqual(findAll(byId(tree, 'about-file'), (n) => n.tag === 'li').map(textOf), ABOUT, 'the same lines as on Amazon, under the slim line');
   assert.equal(textOf(byId(tree, 'rows-count')), '3 rows');
-  assert.deepEqual(rowsOf(tree), [
-    ['Row', 'Order ID', 'Reviewer Name', 'Order Screenshot', 'Delivery Screenshot'],
-    ['1', 'OD-TEST-000000000002', 'Test Person Two', 'Screenshot Link', 'Link'],
-    ['2', 'OD-TEST-000000000003', 'Test Person Three', 'Picture in the file', 'Delivered\nLeft at the door'],
-    ['3', '', '', 'javascript:alert(1)', ''],
-  ]);
+  assert.deepEqual(rowsOf(tree), TABLE);
+  assert.equal(byId(tree, 'unplaced'), null, 'every picture of the file was used');
   // Another file replaces it, through the same file chooser.
   await choose(s, aFile('flipkart orders.csv'));
   assert.equal(s.local.calls.filter((c) => c.method === 'POST').length, 2);
 });
 
-test('a link shows as "Link" and opens in a new tab; a link that is not a web link is only words; a picture in a cell shows as "Picture in the file"', async () => {
+test('as on Amazon: each link a small label saying where it goes, opening in a new tab; a link that is not a web link opens nothing; a picture in a cell or over it said so; Status, Type and Note empty; no Check button and no Status cards', async () => {
   const s = await opened(fakeLocal({ saved: SAVED }));
   const table = byId(s.page(), 'rows-table');
   const links = findAll(table, (n) => n.tag === 'a');
-  assert.deepEqual(links.map((a) => [textOf(a), a.attrs.href, a.attrs.target, a.attrs.rel]), [
-    ['Link', ORDER_SHOT, '_blank', 'noopener noreferrer'],
-    ['Link', DELIVERY_SHOT, '_blank', 'noopener noreferrer'],
+  assert.deepEqual(links.map((a) => [textOf(a), a.attrs.href, a.attrs.target, a.attrs.rel, a.attrs.title, a.attrs.class]), [
+    ['Google Drive', ORDER_SHOT, '_blank', 'noopener noreferrer', ORDER_SHOT, 'fk-link-label'],
+    ['Google Drive', DELIVERY_SHOT, '_blank', 'noopener noreferrer', DELIVERY_SHOT, 'fk-link-label'],
+    ['Flipkart review', REVIEW_LINK, '_blank', 'noopener noreferrer', REVIEW_LINK, 'fk-link-label'],
+    ['Google Drive', REVIEW_SHOT, '_blank', 'noopener noreferrer', REVIEW_SHOT, 'fk-link-label'],
+    ['Google Drive', DELIVERY_SHOT, '_blank', 'noopener noreferrer', DELIVERY_SHOT, 'fk-link-label'],
   ]);
-  const picture = findAll(table, (n) => /\bfk-picture\b/.test(n.attrs?.class ?? ''));
-  assert.deepEqual(picture.map(textOf), ['Picture in the file']);
-  assert.deepEqual(findAll(picture[0], (n) => /\bicon\b/.test(n.attrs?.class ?? '')).map((n) => n.attrs.class), ['icon icon-image']);
+  const icons = (n) => findAll(n, (x) => /\bicon\b/.test(x.attrs?.class ?? '')).map((x) => x.attrs.class);
+  assert.deepEqual(links.map((a) => icons(a)[0]), ['icon icon-image', 'icon icon-image', 'icon icon-link', 'icon icon-image', 'icon icon-link'], 'a picture mark for the screenshots, a link mark for the review link');
+  const plain = findAll(table, (n) => /\bfk-nolink\b/.test(n.attrs?.class ?? ''));
+  assert.deepEqual(plain.map((n) => [n.tag, textOf(n)]), [['span', 'Picture in the cell'], ['span', 'Picture in the cell'], ['span', 'Picture over the cell'], ['span', 'Link']]);
+  assert.equal(plain[3].attrs.title, 'javascript:alert(1)', 'the link that is not a web link is only shown, never opened');
+  assert.deepEqual(findAll(table, (n) => /\bfk-link-warning\b/.test(n.attrs?.class ?? '')).map(textOf), ['The written link is different']);
+  assert.deepEqual(findAll(table, (n) => n.attrs?.['data-cell'] === 'status').map(textOf), ['Empty', 'Empty', 'Empty']);
+  assert.equal(findAll(table, (n) => /\bfk-empty-cell\b/.test(n.attrs?.class ?? '')).length, 15, 'each "Empty" in the table above');
+  assert.deepEqual(findAll(table, (n) => n.tag === 'th').map((n) => n.attrs['data-col'] ?? null), [null, ...KEYS, 'status', 'type', 'note']);
+  assert.deepEqual(findAll(table, (n) => /\bfk-col-letter\b/.test(n.attrs?.class ?? '')).map(textOf), [...LETTERS]);
+  const page = s.page();
+  assert.equal(findAll(page, (n) => n.tag === 'button' && /^(Check|Check again|Start checking)$/.test(textOf(n))).length, 0, 'no Check button');
+  assert.doesNotMatch(textOf(page), /Needs Manual|Not checked yet|Start checking/, 'no Status cards');
   assert.equal(findAll(table, (n) => n.tag === 'img').length, 0, 'no picture is shown or fetched');
+  assert.equal(findAll(table, (n) => n.attrs?.onclick).length, 0, 'a row opens nothing: there is no row page yet');
   assert.deepEqual(s.local.calls.map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/sheet', 'GET /local/flipkart/campaigns'], 'a link is only opened when it is pressed');
+});
+
+test('a needed column that cannot be found: the same column chooser as on Amazon; "Use these columns" sends the same file again with the columns chosen, a refusal stays under it, and Cancel lets the file go', async () => {
+  let refuse = false;
+  const s = await opened(fakeLocal({ saved: SAVED, answer: (fd) => (refuse ? Promise.reject(new ApiError(400, 'One column cannot hold two things: Order ID and Review screenshot.')) : fd.get('mapping') ? UPLOADED : NEED) }));
+  await choose(s, aFile('odd names.xlsx'));
+  const tree = s.draw();
+  const box = byId(tree, 'columns');
+  assert.equal(textOf(findAll(box, (n) => n.tag === 'p')[0]), NEED.columns.says);
+  assert.deepEqual(findAll(box, (n) => n.tag === 'label').map(textOf), [
+    'Order ID (required)', 'Order date (optional)', 'Amount (optional)', 'Product ordered (optional)', 'Purchase screenshot (optional)', 'Delivery screenshot (optional)',
+    'Review screenshot (or the review link)', 'Review link (or the review screenshot)', 'Reviewer name (optional)', 'Email address (optional)', 'Status (optional)', 'Type (optional)', 'Note (optional)',
+  ]);
+  const options = (key) => findAll(byId(tree, `col-${key}`), (n) => n.tag === 'option').map(textOf);
+  assert.deepEqual(options('orderId'), ['Choose a column', 'A: Ref', 'B: Evidence', 'C: Buyer']);
+  assert.deepEqual([options('reviewShot')[0], options('status')[0]], ['Not in this file', 'A new column after the last one']);
+  assert.deepEqual([byId(tree, 'col-orderId').attrs.value, byId(tree, 'col-reviewer').attrs.value, byId(tree, 'col-reviewShot').attrs.value], ['1', '3', ''], 'what the server found, chosen already');
+  assert.equal(textOf(byId(tree, 'results-go')), 'In the checked Excel file, the Status goes in a new column headed "Status", the Type goes in a new column headed "Type" and the Note goes in a new column headed "Note". New columns go after the last one.');
+  assert.equal(textOf(findAll(byId(tree, 'sheet'), (n) => n.tag === 'p' && /choose the columns/.test(textOf(n)))[0]), 'odd names.xlsx: choose the columns below.');
+  assert.equal(textOf(byId(tree, 'rows-waiting')), 'The rows of "odd names.xlsx" show here once its columns are chosen above. Cancel brings back the rows shown before.');
+  assert.equal(byId(tree, 'rows-table'), null, "the old file's rows are not shown meanwhile");
+  assert.equal(byId(tree, 'about-file'), null);
+  byId(tree, 'col-reviewShot').attrs.onchange({ target: { value: '2' } });
+  refuse = true;
+  byId(s.page(), 'use-columns').attrs.onclick();
+  await settle();
+  assert.match(textOf(byId(s.page(), 'columns')), /One column cannot hold two things: Order ID and Review screenshot\./, 'said under the chooser, which stays');
+  refuse = false;
+  byId(s.page(), 'use-columns').attrs.onclick();
+  await settle();
+  const posts = s.local.calls.filter((c) => c.method === 'POST');
+  assert.equal(posts.length, 3);
+  assert.equal(posts[2].form.get('file').name, 'odd names.xlsx', 'the same file again');
+  assert.deepEqual(JSON.parse(posts[2].form.get('mapping')), { ...NEED.columns.mapping, reviewShot: 2 });
+  assert.equal(posts[2].form.get('tab'), null);
+  assert.deepEqual([byId(s.page(), 'columns'), textOf(byId(s.page(), 'rows-count'))], [null, '3 rows']);
+  // A tab chosen first is sent again with the columns.
+  const t = await opened(fakeLocal({ answer: (fd) => (fd.get('mapping') ? UPLOADED : fd.get('tab') ? NEED : CHOOSE) }));
+  await choose(t, aFile('two tabs.xlsx'));
+  byId(t.page(), 'tab-1').attrs.onclick();
+  await settle();
+  assert.equal(textOf(findAll(byId(t.page(), 'drop'), (n) => n.tag === 'p')[1]), 'Choose the columns below.');
+  byId(t.page(), 'use-columns').attrs.onclick();
+  await settle();
+  assert.deepEqual(t.local.calls.filter((c) => c.method === 'POST').map((c) => [c.form.get('tab'), c.form.get('mapping') !== null]), [[null, false], ['Returns', false], ['Returns', true]]);
+  // Cancel lets the file go, and the rows shown before come back.
+  const c = await opened(fakeLocal({ saved: SAVED, answer: () => NEED }));
+  await choose(c);
+  byId(c.page(), 'cancel-file').attrs.onclick();
+  assert.deepEqual([byId(c.page(), 'columns'), c.state.upload.file], [null, null]);
+  assert.deepEqual(rowsOf(c.page()), TABLE);
+});
+
+test('a picture in the file that was not used is said under the upload line; a file uploaded before its columns could be found is asked for again', async () => {
+  const unplaced = 'A picture over the "Reviewer Name" column, in Row 2, is not in the Order Screenshot, Delivery Screenshot, Review Screenshot or Review Link column, so it was not used.';
+  const s = await opened(fakeLocal({ answer: () => ({ ...UPLOADED, unplaced: [unplaced] }) }));
+  await choose(s);
+  assert.deepEqual(findAll(byId(s.page(), 'unplaced'), (n) => n.tag === 'li').map(textOf), [unplaced]);
+  const old = await opened(fakeLocal({ saved: { sheet: null, rows: [], uploadAgain: true } }));
+  assert.equal(textOf(byId(old.page(), 'upload-again')), 'Upload the Flipkart file again. It was uploaded before the dashboard could find what each column holds, so its rows are not shown.');
+  assert.equal(byId(old.page(), 'rows'), null);
+  await choose(old);
+  assert.equal(byId(old.page(), 'upload-again'), null);
+  assert.deepEqual(rowsOf(old.page()), TABLE);
 });
 
 test('a file dropped anywhere on the page is uploaded at once; held over the page, the upload area lights up', async () => {
@@ -172,7 +344,7 @@ test('a file dropped anywhere on the page is uploaded at once; held over the pag
 });
 
 test('several tabs and none named "Flipkart": the sentence naming them, a button for each, and the tab pressed is sent with the same file', async () => {
-  const s = await opened(fakeLocal({ answer: (fd) => (fd.get('tab') ? SAVED : CHOOSE) }));
+  const s = await opened(fakeLocal({ answer: (fd) => (fd.get('tab') ? UPLOADED : CHOOSE) }));
   const file = aFile('two tabs.xlsx');
   await choose(s, file);
   const box = byId(s.page(), 'choose-tab');
@@ -213,7 +385,8 @@ test('what stops an upload is said under the upload area, and the rows kept befo
 test('the rows still show after the page is reloaded, and a CSV file says it has no tabs', async () => {
   const reloaded = await opened(fakeLocal({ saved: SAVED }));
   assert.equal(textOf(byId(reloaded.page(), 'sheet-line')), 'flipkart-orders.xlsx, the Flipkart tab: 3 rows.');
-  assert.equal(rowsOf(reloaded.page()).length, 4, 'the column names and the 3 rows');
+  assert.deepEqual(rowsOf(reloaded.page()), TABLE, 'the column names and the 3 rows');
+  assert.deepEqual(findAll(byId(reloaded.page(), 'about-file'), (n) => n.tag === 'li').map(textOf), ABOUT);
   assert.equal(byId(reloaded.page(), 'upload-done'), null, 'nothing was uploaded just now');
   const csv = await opened(fakeLocal({ saved: CSV_SAVED }));
   assert.equal(textOf(byId(csv.page(), 'sheet-line')), 'flipkart orders.csv, a CSV file with no tabs: 1 row.');
@@ -244,7 +417,7 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   const selectors = [...css.matchAll(/([^{}]+)\{[^}]*\}/g)].flatMap((m) => m[1].split(',')).map((x) => x.trim());
   assert.ok(selectors.length >= 20, selectors.join(' | '));
   for (const sel of selectors) assert.match(sel, /^\.fk-/, `${sel}: only Flipkart's own names`);
-  // Every state the screen draws: opening, no file, a file held over the page, uploading, tabs to choose, a file in, a link, a picture, no rows, an error.
+  // Every state the screen draws: opening, no file, a file held over the page, uploading, tabs to choose, columns to choose, a file in, a link, a picture, a picture not used, no rows, an error, a file to upload again.
   const used = new Set(classesOf(screen(flipkart).draw()));
   const add = (s) => classesOf(s.draw()).forEach((c) => used.add(c));
   const none = await opened(fakeLocal());
@@ -260,15 +433,26 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   const kept = await opened(fakeLocal({ answer: () => { throw new ApiError(400, 'The file is empty.'); } }));
   await choose(kept);
   add(kept);
-  const done = await opened(fakeLocal());
+  const done = await opened(fakeLocal({ answer: () => ({ ...UPLOADED, unplaced: ['A picture over the "Reviewer Name" column, in Row 2, is not in the Order Screenshot column, so it was not used.'] }) }));
   await choose(done);
   add(done);
+  const columns = await opened(fakeLocal({ saved: SAVED, answer: () => NEED }));
+  await choose(columns);
+  add(columns);
   add(await opened(fakeLocal({ saved: { ...SAVED, rows: [] } })));
+  add(await opened(fakeLocal({ saved: { sheet: null, rows: [], uploadAgain: true } })));
   for (const cls of used) {
     const from = cls.startsWith('fk-') ? css : shared;
     assert.match(from, new RegExp(`\\.${cls}\\b`), `${cls}: from ${cls.startsWith('fk-') ? 'views/flipkart.css' : 'styles.css'}`);
   }
-  for (const cls of ['fk-drop', 'fk-drop-over', 'fk-slim', 'fk-choose-tab', 'fk-rows-table', 'fk-picture', 'fk-rows-empty', 'notice-error', 'icon-spin']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
+  for (const cls of ['fk-drop', 'fk-drop-over', 'fk-slim', 'fk-choose-tab', 'fk-columns', 'fk-column-grid', 'fk-req', 'fk-opt', 'fk-about-file', 'fk-missing', 'fk-rows-table', 'fk-col-letter', 'fk-link-label', 'fk-nolink', 'fk-link-warning', 'fk-cell-words', 'fk-empty-cell', 'fk-empty-state', 'fk-status-cell', 'notice-warn', 'notice-error', 'icon-spin']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
+  // The table and the column chooser look like the Amazon ones: each of their rules is the Amazon rule, under Flipkart's own name.
+  const amazonCss = readFileSync(join(ROOT, 'views', 'amazon.css'), 'utf8');
+  const rule = (src, sel) => src.match(new RegExp(`(?:^|\\n)${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`))?.[1]?.trim() ?? null;
+  for (const name of ['about-file', 'columns', 'column-grid', 'req', 'opt', 'col-letter', 'row-cell', 'strong-cell', 'product-cell', 'status-cell', 'type-cell', 'note-cell', 'cell-words', 'link-cell', 'other-cell', 'link-label', 'nolink', 'link-warning', 'empty-cell', 'empty-state', 'rows-wrap', 'rows-count']) {
+    assert.ok(rule(amazonCss, `.${name}`), `.${name} is an Amazon rule`);
+    assert.equal(rule(css, `.fk-${name}`), rule(amazonCss, `.${name}`), `.fk-${name} is the same as .${name}`);
+  }
   const html = readFileSync(join(ROOT, 'index.html'), 'utf8');
   assert.deepEqual([...html.matchAll(/<link rel="stylesheet" href="([^"]+)">/g)].map((m) => m[1]), ['styles.css', 'views/amazon.css', 'views/flipkart.css']);
 });

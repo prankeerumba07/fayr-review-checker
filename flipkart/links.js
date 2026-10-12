@@ -1,12 +1,10 @@
-// Links. The links in a cell of the Flipkart file, for the screen: copied from
-// the Amazon reader's way of finding links in words (amazon/links.js) and
-// changed so a cell's words stay as they are: each web address written in
-// them becomes a link, and a link behind the words follows them when it is
-// not one of those. Only addresses that start with http://, https:// or www.
-// count, since every column is shown and "1.5L/2L" or "Rs.349/-" is no link.
-// And Flipkart's own links, for the campaigns: which websites are Flipkart's,
-// the product ID (pid) and the item ID in a link, and the page opened for a
-// product. Nothing here opens a link.
+// Links. Flipkart's own links, for the campaigns: which websites are
+// Flipkart's, the product ID (pid) and the item ID in a link, and the page
+// opened for a product. And the links in a cell of the Flipkart file, copied
+// from the Amazon reader (amazon/links.js) and changed for Flipkart: the links
+// in a cell's words and behind them, the key two links share when they open
+// the same thing, and where a link goes, in a few words for the table of rows
+// ("Google Drive", "Flipkart review"). Nothing here opens a link.
 
 export const FLIPKART_ORIGIN = 'https://www.flipkart.com';
 /** A Flipkart product ID (pid) typed alone: 16 capital letters and digits, for example FCPHEW7AM9C7RU24. */
@@ -84,75 +82,131 @@ export function pageForLink(raw) {
   return u.href;
 }
 
-/** A piece of words without the brackets, quotes and full stop around it: { lead, core, trail }. */
-function trimmed(token) {
-  const lead = token.match(/^[(<["']*/)[0];
-  const rest = token.slice(lead.length);
-  const trail = rest.match(/[)>\]"'.]*$/)[0];
-  return { lead, core: rest.slice(0, rest.length - trail.length), trail };
+// ---- links in a cell, and where each goes (copied from amazon/links.js and changed for Flipkart) ----
+
+/** Flipkart's own short links. */
+export const SHORT_HOSTS = new Set(['fkrt.it']);
+export const DRIVE_HOSTS = new Set(['drive.google.com', 'docs.google.com', 'drive.usercontent.google.com']);
+const DRIVE_FILE_ID = /^[A-Za-z0-9_-]{10,}$/;
+const hostOf = (u) => u.hostname.toLowerCase().replace(/\.$/, '');
+/** A Flipkart link's path without the "/dl" some shared links start with. */
+const flipkartPath = (u) => u.pathname.replace(/^\/dl(?=\/)/i, '');
+
+/** A short link to Flipkart: fkrt.it, or a link shared from Flipkart's app (dl.flipkart.com/s/…). */
+export function isShortLink(raw) {
+  const u = urlOf(raw);
+  return Boolean(u && (SHORT_HOSTS.has(hostOf(u)) || (hostOf(u) === 'dl.flipkart.com' && /^\/s\//i.test(u.pathname))));
 }
 
-/** The web address a piece of words is, or null. */
-function linkOf(core) {
-  if (!/^(?:https?:\/\/|www\.)/i.test(core)) return null;
-  return parseUrl(core)?.href ?? null;
+/** An app store's page (Apple's App Store, Google Play): never a review or a picture. */
+export function isAppStore(raw) {
+  const u = urlOf(raw);
+  return Boolean(u && /^(apps|itunes)\.apple\.com$|^play\.google\.com$/.test(hostOf(u)));
 }
 
-/** Every web link in some words, in order: separated by spaces, commas, semicolons or new lines. */
+/** The Drive file id in a link, or null. Links on other hosts give null. */
+export function driveFileId(raw) {
+  const u = urlOf(raw);
+  if (!u || !DRIVE_HOSTS.has(hostOf(u))) return null;
+  const inPath = u.pathname.match(/\/(?:file\/(?:u\/\d+\/)?d|document\/d|presentation\/d|spreadsheets\/d)\/([^/?#]+)/);
+  const id = inPath ? inPath[1] : u.searchParams.get('id');
+  return id && DRIVE_FILE_ID.test(id) ? id : null;
+}
+
+export function isDriveLink(raw) {
+  return driveFileId(raw) !== null;
+}
+
+/** The review ID in a link to one Flipkart review (/reviews/<product ID>:<n>?reviewId=…), in small letters, or null. */
+export function reviewIdFrom(raw) {
+  const u = urlOf(raw);
+  if (!u || !isFlipkart(u) || !/^\/reviews\//i.test(flipkartPath(u))) return null;
+  const id = String(u.searchParams.get('reviewId') ?? '').trim();
+  return /^[0-9a-f][0-9a-f-]{7,63}$/i.test(id) ? id.toLowerCase() : null;
+}
+
+/**
+ * Where a link goes, in a few words for the table of rows: "Google Drive",
+ * "tryboxs", "storage.googleapis.com", "Flipkart review", "Flipkart product's
+ * reviews", "Flipkart product page", "Flipkart short link", "Flipkart page",
+ * "App store", or the website's name.
+ */
+export function linkLabel(raw) {
+  const u = urlOf(raw);
+  if (!u) return 'Link';
+  const host = hostOf(u);
+  if (isShortLink(u)) return 'Flipkart short link';
+  if (DRIVE_HOSTS.has(host)) return 'Google Drive';
+  if (host === 'tryboxs.in' || host.endsWith('.tryboxs.in')) return 'tryboxs';
+  if (isAppStore(u)) return 'App store';
+  if (!isFlipkart(u)) return host.replace(/^www\./, '');
+  const path = flipkartPath(u);
+  if (/^\/reviews\//i.test(path)) return 'Flipkart review';
+  if (/^\/[^/]+\/product-reviews\/itm/i.test(path)) return "Flipkart product's reviews";
+  if (/^\/[^/]+\/p\/itm/i.test(path)) return 'Flipkart product page';
+  return 'Flipkart page';
+}
+
+const KNOWN_HOST = /^(?:www\.)?(?:flipkart\.com|dl\.flipkart\.com|fkrt\.it|drive\.google\.com|docs\.google\.com|storage\.googleapis\.com|tryboxs\.in)\//i;
+
+/** Every web link in a cell's words, in order: separated by spaces, commas or new lines. A file name is not a link. */
 export function linksIn(text) {
   const out = [];
-  for (const m of String(text ?? '').matchAll(/[^\s,;]+/g)) {
-    const link = linkOf(trimmed(m[0]).core);
-    if (link && !out.includes(link)) out.push(link);
+  for (let token of String(text ?? '').split(/[\s,;]+/)) {
+    token = token.replace(/^[(<["']+/, '').replace(/[)>\]"'.]+$/, '');
+    if (!token) continue;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(token) && !/^https?:\/\//i.test(token)) continue;
+    const looksLike = /^https?:\/\//i.test(token) || /^www\./i.test(token) || KNOWN_HOST.test(token) || /^[a-z0-9-]+(?:\.[a-z0-9-]+)+\/\S*/i.test(token);
+    if (!looksLike) continue;
+    const u = parseUrl(token);
+    if (u && !out.includes(u.href)) out.push(u.href);
   }
   return out;
 }
 
-/** The key two links share when they open the same page: the website (www or not), the path and the query, http or https alike. */
+/**
+ * The key two links share when they open the same thing: a Drive file by its
+ * id, a Flipkart review by its id, and any other link by its website, path
+ * and query (http or https, www or not).
+ */
 export function linkKey(raw) {
-  const u = raw instanceof URL ? raw : parseUrl(raw);
+  const u = urlOf(raw);
   if (!u) return null;
-  const host = u.hostname.toLowerCase().replace(/\.$/, '').replace(/^www\./, '');
+  const drive = driveFileId(u);
+  if (drive) return `drive:${drive}`;
+  const review = reviewIdFrom(u);
+  if (review) return `review:${review}`;
+  const host = hostOf(u).replace(/^www\./, '');
   const path = u.pathname.replace(/\/+$/, '') || '/';
   const query = [...u.searchParams]
     .sort(([a, x], [b, y]) => (a === b ? (x < y ? -1 : x > y ? 1 : 0) : a < b ? -1 : 1))
     .map(([k, v]) => `${k}=${v}`)
     .join('&');
-  return `${host}${path}${query ? `?${query}` : ''}`;
+  return `url:${host}${path}${query ? `?${query}` : ''}`;
+}
+
+/** True when two links open the same thing. */
+export function sameTarget(a, b) {
+  const x = linkKey(a);
+  return x !== null && x === linkKey(b);
 }
 
 /**
- * A cell as the screen shows it, in pieces: its words as they are, each web
- * address in them as a link, then each link behind the words that is not one
- * of those. -> [{ text } | { link }]
+ * A cell's words and the link behind them, as a row keeps them: every link
+ * (the one behind the words first), and a mismatch when the words are a link
+ * but the link behind them opens something else.
+ *   -> { text, link, links: [..], mismatch: { text, link } | null }
  */
-export function cellParts(text, behind = '') {
-  const parts = [];
-  const shown = [];
-  let words = '';
-  for (const m of String(text ?? '').matchAll(/[^\s,;]+|[\s,;]+/g)) {
-    const { lead, core, trail } = trimmed(m[0]);
-    const link = core ? linkOf(core) : null;
-    if (!link) {
-      words += m[0];
-      continue;
-    }
-    words += lead;
-    if (words) parts.push({ text: words });
-    parts.push({ link });
-    shown.push(linkKey(link));
-    words = trail;
-  }
-  if (words) parts.push({ text: words });
+export function cellLinks(text, behind) {
+  const words = String(text ?? '').trim();
+  const shown = linksIn(words);
   // Excel puts the whole of "link one, link two" behind such words, so the link behind is split the same way.
   const raw = String(behind ?? '').trim();
   const hidden = /^https?:\/\//i.test(raw) ? linksIn(raw.replace(/%20/g, ' ').replace(/%2C/gi, ',')) : [];
-  for (const link of hidden) {
-    if (shown.includes(linkKey(link))) continue;
-    const last = parts.at(-1);
-    if (last && !(last.text && /\s$/.test(last.text))) parts.push({ text: ' ' });
-    parts.push({ link });
-    shown.push(linkKey(link));
+  if (!hidden.length) return { text: words, link: shown[0] ?? '', links: shown, mismatch: null };
+  if (shown.length && !hidden.every((h) => shown.some((s) => sameTarget(s, h)))) {
+    return { text: words, link: hidden[0], links: hidden, mismatch: { text: shown[0], link: hidden[0] } };
   }
-  return parts;
+  const links = [...hidden, ...shown.filter((s) => !hidden.some((h) => sameTarget(s, h)))];
+  return { text: words, link: links[0], links, mismatch: null };
 }

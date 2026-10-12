@@ -1,28 +1,63 @@
 // Flipkart's own storage, only in data/flipkart/ (data/ is kept out of git and
-// never served as a file): the uploaded file (upload.xlsx or upload.csv), what
-// was read from it (rows.json), the campaigns with what was read from their
-// products' Flipkart pages (campaigns.json), and each product's public
-// reviews (reviews/<product ID>.json). Nothing here writes
-// anywhere else in data/. Copied from the Amazon store's way of writing
-// (amazon/store.js): a file is written whole under another name, then
-// renamed, readable only by this computer's user.
+// never served as a file): the uploaded file (upload.xlsx or upload.csv), the
+// rows made from it with the columns found (rows.json), the pictures placed
+// in its cells (pictures/), Flipkart's own settings with the columns chosen
+// last (settings.json), the campaigns with what was read from their products'
+// Flipkart pages (campaigns.json), and each product's public reviews
+// (reviews/<product ID>.json). Nothing here writes anywhere else in data/.
+// Copied from the Amazon store's way of writing (amazon/store.js): a file is
+// written whole under another name, then renamed, readable only by this
+// computer's user.
 
-import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
-import { randomBytes } from 'node:crypto';
+import { mkdir, readFile, writeFile, rename, rm, readdir } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { ANY_PID } from './links.js';
+import { imageType, MAX_PICTURE_BYTES, PICTURE_EXT } from './image-type.js';
 
 /** The largest file taken: the same as for Amazon. */
 export const MAX_SHEET_BYTES = 50 * 1024 * 1024;
+/** A row's cells that hold pictures or links, as on Amazon: the purchase and delivery screenshots, the review link and the review screenshot. */
+export const SHOTS = ['order', 'delivery', 'review', 'reviewShot'];
+/** At most this many links are kept from one cell, as on Amazon. */
+export const MAX_PICTURES_PER_CELL = 5;
 const TEXT_LIMIT = 2000;
 
 const cleanText = (v, limit = TEXT_LIMIT) => String(v ?? '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ').trim().slice(0, limit);
 
-/** A cell as kept: its words, the web link behind them, and whether a picture is in it. */
-function cleanCell(c) {
-  const out = { text: cleanText(c?.text), behind: /^https?:\/\//i.test(String(c?.behind ?? '')) ? String(c.behind).slice(0, TEXT_LIMIT) : '' };
-  if (c?.picture) out.picture = true;
+/** A cell of a row as kept: its words, its links, a mismatch, and how a picture was given. Copied from the Amazon store. */
+function cleanShot(s) {
+  const links = (Array.isArray(s?.links) ? s.links : []).filter((l) => typeof l === 'string' && /^https?:\/\//i.test(l)).slice(0, MAX_PICTURES_PER_CELL).map((l) => l.slice(0, TEXT_LIMIT));
+  const out = { text: cleanText(s?.text), link: typeof s?.link === 'string' ? s.link.slice(0, TEXT_LIMIT) : links[0] ?? '', links, mismatch: null, picture: null };
+  if (s?.mismatch?.text && s?.mismatch?.link) out.mismatch = { text: cleanText(s.mismatch.text), link: cleanText(s.mismatch.link) };
+  if (s?.picture?.how === 'cell' || s?.picture?.how === 'floating') out.picture = s.picture.how;
   return out;
+}
+
+/** A row made from the file (workbook.js sheetRows), as kept, with its own id; its pictures come after. Copied from the Amazon store's way of keeping a row. */
+function keptRow(r) {
+  const row = {
+    id: `r${randomBytes(6).toString('hex')}`,
+    row: Number.isInteger(r.row) ? r.row : null,
+    n: Number.isInteger(r.n) && r.n > 0 ? r.n : null,
+    orderId: { text: cleanText(r.orderId?.text, 200), value: cleanText(r.orderId?.value, 200) },
+    orderDate: { text: cleanText(r.orderDate?.text, 100), value: /^\d{4}-\d{2}-\d{2}$/.test(r.orderDate?.value ?? '') ? r.orderDate.value : null },
+    amount: { text: cleanText(r.amount?.text, 100), value: Number.isFinite(r.amount?.value) ? r.amount.value : null },
+    product: { text: cleanText(r.product?.text, 500) },
+    shots: Object.fromEntries(SHOTS.map((w) => [w, cleanShot(r.shots?.[w])])),
+    prev: null,
+    // The file's other columns, by column number, to be shown as they are.
+    values: {},
+    pictures: Object.fromEntries(SHOTS.map((w) => [w, []])),
+  };
+  for (const [col, v] of Object.entries(r.values && typeof r.values === 'object' ? r.values : {}).slice(0, 200)) {
+    if (!/^[1-9]\d{0,2}$/.test(col) || !v || typeof v !== 'object') continue;
+    const behind = typeof v.behind === 'string' && /^https?:\/\//i.test(v.behind) ? v.behind.slice(0, TEXT_LIMIT) : '';
+    const text = cleanText(v.text, 500);
+    if (text || behind) row.values[col] = { text, behind };
+  }
+  if (r.prev && (r.prev.status || r.prev.type || r.prev.note)) row.prev = { status: cleanText(r.prev.status, 100), type: cleanText(r.prev.type, 200), note: cleanText(r.prev.note, 4000) };
+  return row;
 }
 
 /**
@@ -56,6 +91,8 @@ export function createFlipkartStore(dataDir) {
   const dir = join(dataDir, 'flipkart');
   const rowsFile = join(dir, 'rows.json');
   const campaignsFile = join(dir, 'campaigns.json');
+  const settingsFile = join(dir, 'settings.json');
+  const picturesDir = join(dir, 'pictures');
   let lock = Promise.resolve();
   const locked = (fn) => {
     const turn = lock.then(fn);
@@ -75,6 +112,24 @@ export function createFlipkartStore(dataDir) {
     const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`;
     await writeFile(tmp, data, { mode: 0o600 });
     await rename(tmp, file);
+  }
+
+  /** Flipkart's own settings; {} when there are none yet, or when the file cannot be read (it is then written again whole). */
+  async function settings() {
+    try {
+      const s = await readJson(settingsFile, {});
+      return s && typeof s === 'object' && !Array.isArray(s) ? s : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /** Keeps one picture placed in a cell of the file, as the Amazon store keeps a row's picture. */
+  async function writePicture(id, which, index, data) {
+    const type = imageType(data);
+    const file = `${id}-${which}-${index}.${PICTURE_EXT[type]}`;
+    await writeFile(join(picturesDir, file), data, { mode: 0o600 });
+    return { file, type, size: data.length, sha256: createHash('sha256').update(data).digest('hex'), at: new Date().toISOString() };
   }
 
   async function allCampaigns() {
@@ -128,25 +183,85 @@ export function createFlipkartStore(dataDir) {
         return read;
       });
     },
-    /** The saved file's name and tab, its column names and its rows: { sheet, headers, rows }, or null when no file was uploaded. */
+    /**
+     * The saved file: { sheet: { fileName, kind, tab, headerRow, headers,
+     * lastCol, mapping, file, uploadedAt }, rows }, the rows as made from it;
+     * { old: true } for a file kept before its columns were found (until
+     * 12-10-2026), which must be uploaded again; null when no file was
+     * uploaded.
+     */
     async sheet() {
       const d = await readJson(rowsFile, null);
-      return d?.sheet && Array.isArray(d.headers) && Array.isArray(d.rows) ? d : null;
+      if (!d?.sheet) return null;
+      return d.sheet.mapping && Array.isArray(d.sheet.headers) && Array.isArray(d.rows) ? d : { old: true };
     },
-    /** Keeps the uploaded file and what was read from it, in place of the file before. */
-    saveSheet(info, data, headers, rows) {
+    /**
+     * Keeps the uploaded file and the rows made from it, in place of the file
+     * before and its rows. info: { fileName, kind, tab, headerRow, headers,
+     * lastCol, mapping }; rows: as workbook.js sheetRows made them. A picture
+     * placed in a cell is part of the file, so it is kept at once, as on
+     * Amazon, in pictures/<row's id>-<cell>-0.png (or .jpg, .webp); one that
+     * cannot be kept is said with its row. The pictures of the file before go.
+     */
+    saveSheet(info, data, rows) {
       return locked(async () => {
         await mkdir(dir, { recursive: true, mode: 0o700 });
         const name = `upload.${info.kind === 'csv' ? 'csv' : 'xlsx'}`;
         await writeWhole(join(dir, name), data);
+        const kept = [];
+        for (const r of rows) {
+          const row = keptRow(r);
+          for (const w of SHOTS) {
+            const p = r.shots?.[w]?.picture;
+            if (!p?.data) continue;
+            const problem = !imageType(p.data) ? 'it is not a picture the dashboard can read' : p.data.length > MAX_PICTURE_BYTES ? 'it is larger than 10 megabytes' : null;
+            if (problem) row.pictures[w] = [{ link: null, problem: { kind: 'sheet', site: null, says: problem } }];
+            else {
+              await mkdir(picturesDir, { recursive: true, mode: 0o700 });
+              row.pictures[w] = [{ link: null, ...(await writePicture(row.id, w, 0, p.data)) }];
+            }
+          }
+          kept.push(row);
+        }
         const saved = {
-          sheet: { fileName: cleanText(info.fileName, 200), kind: info.kind === 'csv' ? 'csv' : 'xlsx', tab: info.tab === null ? null : cleanText(info.tab, 200), headerRow: info.headerRow, file: name, uploadedAt: new Date().toISOString() },
-          headers: headers.map((h) => ({ col: h.col, text: cleanText(h.text) })),
-          rows: rows.map((r) => ({ row: r.row, cells: Object.fromEntries(Object.entries(r.cells).map(([col, c]) => [col, cleanCell(c)])) })),
+          sheet: {
+            fileName: cleanText(info.fileName, 200),
+            kind: info.kind === 'csv' ? 'csv' : 'xlsx',
+            tab: info.tab === null ? null : cleanText(info.tab, 200),
+            headerRow: info.headerRow,
+            headers: info.headers.map((h) => ({ col: h.col, text: cleanText(h.text) })),
+            lastCol: info.lastCol,
+            mapping: info.mapping,
+            file: name,
+            uploadedAt: new Date().toISOString(),
+          },
+          rows: kept,
         };
         await writeWhole(rowsFile, JSON.stringify(saved));
         for (const old of ['upload.csv', 'upload.xlsx']) if (old !== name) await rm(join(dir, old), { force: true });
+        // The pictures of the file before.
+        const keep = new Set(kept.flatMap((r) => SHOTS.flatMap((w) => r.pictures[w].map((p) => p.file).filter(Boolean))));
+        let before = [];
+        try {
+          before = await readdir(picturesDir);
+        } catch (err) {
+          if (err.code !== 'ENOENT') throw err;
+        }
+        for (const f of before) if (!keep.has(f)) await rm(join(picturesDir, f), { force: true });
         return saved;
+      });
+    },
+    /** The choice of columns remembered from the last file: { [field]: column name }, or null. */
+    async columnChoice() {
+      const c = (await settings()).columnChoice;
+      return c && typeof c === 'object' && !Array.isArray(c) ? c : null;
+    },
+    /** Remembers a choice of columns for the next file, in Flipkart's own settings (never Amazon's). */
+    setColumnChoice(choice) {
+      return locked(async () => {
+        const s = await settings();
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        await writeWhole(settingsFile, JSON.stringify({ ...s, columnChoice: choice }, null, 2));
       });
     },
   };

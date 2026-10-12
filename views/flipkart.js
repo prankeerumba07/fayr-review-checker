@@ -1,17 +1,24 @@
 // The Flipkart screen. The top bar holds the marketplace tabs (bar() below),
 // with Flipkart chosen and Amazon one press away. The page: the upload area,
 // which looks like the Amazon one ("Choose file", or drop the file anywhere
-// on the page: app.js passes it on), for an .xlsx or a .csv file. Once a file
-// is in, one slim line says its name, the tab read and how many rows it has,
-// with "Replace file", and a table shows every row with every column as it is
-// in the file, numbered from 1. A link shows as "Link" and opens in a new tab;
-// a picture in a cell shows as "Picture in the file". Under the upload area,
-// the Campaigns box, the same as the Amazon one: each campaign's name, live or
-// ended, and brand, and under each of its Flipkart products what was read from
-// Flipkart (its name, its brand, its other colours and sizes, and when), or
-// why it is not used. Nothing is checked yet, and there are no Amazon or
-// Google login lines. The local server reads and keeps the file and the
-// campaigns; this screen only shows them.
+// on the page: app.js passes it on), for an .xlsx or a .csv file. The local
+// server finds what each column holds, as on Amazon; when a needed column
+// cannot be found, the same column chooser as on Amazon shows, and "Use these
+// columns" sends the same file again with the columns chosen. Once a file is
+// in, one slim line says its name, the tab read and how many rows it has,
+// with "Replace file", and under it the same lines as on Amazon: which
+// columns are used for checking, which are only shown, and what the file does
+// not have. Under the upload area, the Campaigns box, the same as the Amazon
+// one: each campaign's name, live or ended, and brand, and under each of its
+// Flipkart products what was read from Flipkart (its name, its brand, its
+// other colours and sizes, and when), or why it is not used. Then the rows,
+// in a table like the Amazon one: every column of the file in its order, with
+// its letter, the rows numbered from 1, each link as a small label saying
+// where it goes ("Google Drive"), a picture in a cell as "Picture in the
+// cell", and Status, Type and Note at the end, empty until rows are checked.
+// Nothing is checked yet: no Check button and no Status cards, and there are
+// no Amazon or Google login lines. The local server reads and keeps the file
+// and the campaigns; this screen only shows them.
 
 const BASE = '/local/flipkart';
 /** How often the screen looks again while a campaign's products are read from Flipkart. */
@@ -21,17 +28,22 @@ const READING_POLL_MS = 2000;
 export const SHEET_ACCEPT = '.xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv';
 
 const arr = (v) => (Array.isArray(v) ? v : []);
+const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 const icon = (h, name, extra = '') => h('span', { class: `icon icon-${name}${extra ? ` ${extra}` : ''}`, 'aria-hidden': 'true' });
 const pill = (h, text, tone) => h('span', { class: `pill pill-${tone}` }, text);
+const rowsWord = (n) => (n === 1 ? '1 row' : `${n} rows`);
 const blankCampaign = () => ({ brand: '', name: '', live: true, products: '' });
+const freshColumns = () => ({ need: null, mapping: null, error: null });
 
 function initial() {
   return {
-    saved: null, // the kept file as the server shows it: { sheet, headers, rows }
+    saved: null, // the kept file as the server shows it: { sheet, rows }; uploadAgain: a file kept before its columns were found
     loaded: false,
     loadError: null,
     loadGen: 0,
-    upload: { file: null, gen: 0, busy: false, error: null, dragging: false, done: false, chooseTab: null },
+    // done: what the last upload made ({ made, tab, unplaced }); chooseTab: the tabs to choose from; tab: the tab chosen, sent again with the columns.
+    upload: { file: null, gen: 0, busy: false, error: null, dragging: false, done: null, chooseTab: null, tab: null },
+    columns: freshColumns(), // shown only when a needed column could not be found
     // list: the campaigns as the server shows them (loaded once the first answer came, loadError when it could not come); reading: products
     // are being read now; editing: null, 'new' or a campaign's key; notice: what was just done (readingNotice: it says products are being
     // read, so it goes when that ends); fold: the box opened or shut by hand (null: open only while there is no campaign).
@@ -61,39 +73,63 @@ async function uploadFile(ctx, file) {
     ctx.update((st) => (st.upload.error = `"${st.upload.file?.name || 'The last file'}" is still being uploaded, so wait for it to finish, then upload "${file.name || 'the new file'}" again.`));
     return;
   }
-  ctx.update((st) => Object.assign(st.upload, { file, gen: st.upload.gen + 1, error: null, done: false, chooseTab: null }));
-  return sendFile(ctx, null);
+  ctx.update((st) => {
+    Object.assign(st.upload, { file, gen: st.upload.gen + 1, error: null, done: null, chooseTab: null, tab: null });
+    st.columns = freshColumns();
+  });
+  return sendFile(ctx);
 }
 
 /**
- * Sends the file being uploaded; the server reads and keeps it at once. When
- * the file has several tabs and none is named "Flipkart", nothing changed:
- * the tabs show, and pressing one sends the same file again with that tab.
+ * Sends the file being uploaded; the server reads it and makes its rows at
+ * once. When the file has several tabs and none is named "Flipkart", nothing
+ * changed: the tabs show, and pressing one sends the same file again with
+ * that tab. When a needed column could not be found, nothing changed either:
+ * the column chooser shows, as on Amazon, and "Use these columns" sends the
+ * same file again with the columns chosen (and the tab chosen, if one was).
  */
-async function sendFile(ctx, tab) {
+async function sendFile(ctx, { tab = null, mapping = null } = {}) {
   const up = ctx.state.upload;
   const file = up.file;
-  if (!file || (tab !== null && up.busy)) return;
-  ctx.update((st) => Object.assign(st.upload, { busy: true, error: null }));
+  if (!file || ((tab !== null || mapping) && up.busy)) return;
+  const sentTab = tab ?? up.tab;
+  ctx.update((st) => {
+    Object.assign(st.upload, { busy: true, error: null, tab: sentTab });
+    if (mapping) st.columns.error = null;
+  });
   try {
     const fd = new FormData();
     fd.append('file', file, file.name || 'file');
-    if (tab !== null) fd.append('tab', tab);
+    if (sentTab !== null) fd.append('tab', sentTab);
+    if (mapping) fd.append('mapping', JSON.stringify(mapping));
     const out = await ctx.local.form(`${BASE}/sheet`, fd);
     if (out?.chooseTab) {
       ctx.update((st) => Object.assign(st.upload, { busy: false, chooseTab: { says: String(out.chooseTab.says ?? ''), tabs: arr(out.chooseTab.tabs).map(String) } }));
       return;
     }
+    if (out?.columns) {
+      ctx.update((st) => {
+        Object.assign(st.upload, { busy: false, chooseTab: null });
+        st.columns = { need: out.columns, mapping: { ...obj(out.columns.mapping) }, error: null };
+      });
+      return;
+    }
     ctx.update((st) => {
-      st.upload = { file: null, gen: st.upload.gen + 1, busy: false, error: null, dragging: false, done: true, chooseTab: null };
+      st.upload = { file: null, gen: st.upload.gen + 1, busy: false, error: null, dragging: false, done: { made: Number(out?.made) || 0, tab: out?.tab ?? null, unplaced: arr(out?.unplaced).map(String) }, chooseTab: null, tab: null };
+      st.columns = freshColumns();
       // Newer than any answer still on its way.
-      Object.assign(st, { saved: out, loaded: true, loadError: null, loadGen: st.loadGen + 1 });
+      Object.assign(st, { saved: { sheet: out?.sheet ?? null, rows: arr(out?.rows) }, loaded: true, loadError: null, loadGen: st.loadGen + 1 });
     });
   } catch (err) {
     ctx.update((st) => {
-      // A tab that cannot be read leaves the tabs showing, to choose another; anything else lets the file go.
-      if (tab !== null) Object.assign(st.upload, { busy: false, error: err.message });
-      else Object.assign(st.upload, { file: null, gen: st.upload.gen + 1, busy: false, error: err.message, chooseTab: null });
+      st.upload.busy = false;
+      // Columns that cannot be used leave the chooser showing, and a tab that cannot be read leaves the tabs showing, to choose again; anything else lets the file go.
+      if (mapping) st.columns.error = err.message;
+      else if (tab !== null) st.upload.error = err.message;
+      else {
+        Object.assign(st.upload, { file: null, gen: st.upload.gen + 1, error: err.message, chooseTab: null, tab: null });
+        st.columns = freshColumns();
+      }
     });
   }
 }
@@ -105,6 +141,14 @@ function dropFile(ctx, file) {
 /** A file held over the page lights up the upload area (app.js says when). */
 function dragging(ctx, on) {
   if (Boolean(ctx.state.upload.dragging) !== Boolean(on)) ctx.update((st) => (st.upload.dragging = Boolean(on)));
+}
+
+/** A column chosen in the column chooser: its number, or null for "Not in this file". */
+function setColumn(ctx, key, raw) {
+  ctx.update((st) => {
+    st.columns.mapping = st.columns.mapping ?? {};
+    st.columns.mapping[key] = raw === '' ? null : Number(raw);
+  });
 }
 
 // ---- the Campaigns box (copied from the Amazon one, views/amazon.js, and changed for Flipkart) ----
@@ -219,6 +263,7 @@ function reset(ctx) {
   ctx.update((st) => {
     st.poll = null;
     st.upload = { ...initial().upload, gen: st.upload.gen + 1 };
+    st.columns = freshColumns();
     st.loadGen += 1;
     st.campaigns.busy = false;
     st.campaigns.gen += 1;
@@ -236,34 +281,107 @@ function marketTabs(ctx) {
   );
 }
 
+function columnLetter(col) {
+  let n = col;
+  let out = '';
+  while (n > 0) {
+    out = String.fromCharCode(65 + ((n - 1) % 26)) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out;
+}
+
+/** The results written in the checked Excel file, and their columns' names. */
+const RESULT_WORDS = { status: 'Status', type: 'Type', note: 'Note' };
+
+function whereResultsGo(sheet, mapping) {
+  const headers = arr(sheet?.headers);
+  const parts = [];
+  for (const [key, word] of Object.entries(RESULT_WORDS)) {
+    const col = mapping?.[key];
+    const name = headers.find((x) => x.col === col)?.text;
+    parts.push(Number.isInteger(col) ? `the ${word} goes in the column headed "${name ?? word}"` : `the ${word} goes in a new column headed "${word}"`);
+  }
+  return `In the checked Excel file, ${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}.${Object.keys(RESULT_WORDS).some((k) => !Number.isInteger(mapping?.[k])) ? ' New columns go after the last one.' : ''}`;
+}
+
+/** The column chooser, as on Amazon: shown only when a needed column of the file could not be found. */
+function columnChooser(ctx) {
+  const { h, words, state } = ctx;
+  const up = state.upload;
+  const c = state.columns;
+  const need = c.need;
+  const m = obj(c.mapping);
+  return h(
+    'div',
+    { class: 'fk-columns', key: 'columns', 'data-id': 'columns' },
+    words.notice(h, 'warn', need.says),
+    h(
+      'div',
+      { class: 'fk-column-grid' },
+      arr(need.fields).map((f) =>
+        h(
+          'div',
+          { class: 'fk-form-field', key: f.key },
+          h('label', { for: `fk-col-${f.key}`, class: 'label' }, f.label, f.required ? h('span', { class: 'fk-req' }, ' (required)') : f.review ? h('span', { class: 'fk-req' }, f.key === 'reviewLink' ? ' (or the review screenshot)' : ' (or the review link)') : h('span', { class: 'fk-opt' }, ' (optional)')),
+          h(
+            'select',
+            { id: `fk-col-${f.key}`, 'data-id': `col-${f.key}`, value: m[f.key] === null || m[f.key] === undefined ? '' : String(m[f.key]), disabled: up.busy, onchange: (e) => setColumn(ctx, f.key, e.target.value) },
+            h('option', { value: '' }, f.required ? 'Choose a column' : ['status', 'type', 'note'].includes(f.key) ? 'A new column after the last one' : 'Not in this file'),
+            arr(need.headers).map((hd) => h('option', { key: `o${hd.col}`, value: String(hd.col) }, `${columnLetter(hd.col)}: ${hd.text}`)),
+          ),
+        ),
+      ),
+    ),
+    h('p', { class: 'muted small', 'data-id': 'results-go' }, need.kind === 'xlsx' ? whereResultsGo(need, m) : 'This file is not an Excel file, so its results can only be downloaded with "The results only", under Download.'),
+    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn btn-primary', disabled: up.busy, onclick: () => sendFile(ctx, { mapping: c.mapping }), 'data-id': 'use-columns' }, icon(h, 'check'), up.busy ? 'Reading…' : 'Use these columns')),
+    words.notice(h, 'error', c.error),
+  );
+}
+
 /**
  * The upload area. With no file in yet: one clear area where the file is
  * chosen. Once a file is in: one slim line with its name, its tab, how many
  * rows it has, and "Replace file". Whatever stops an upload is said right
- * under it, and so are the tabs to choose from.
+ * under it; so are the lines about the file's columns, a picture of the file
+ * that was not used, the tabs to choose from, and the column chooser.
  */
 function uploadCard(ctx) {
   const { h, words, state } = ctx;
   const up = state.upload;
+  const need = state.columns.need;
   const s = state.saved?.sheet ?? null;
   const name = up.file?.name || 'the file';
   // Choosing a file uploads it; the input is made again after each file, so the same file can be chosen again.
   const input = h('input', { key: `fk-file-${up.gen}`, id: 'fk-file', class: 'fk-file-input', type: 'file', accept: SHEET_ACCEPT, 'data-id': 'sheet-file', onchange: (e) => uploadFile(ctx, e.target.files?.[0] ?? null) });
   const asking = Boolean(up.chooseTab && up.file);
-  const cancel = asking && !up.busy
-    ? h('button', { type: 'button', class: 'btn btn-quiet', key: 'cancel', 'data-id': 'cancel-file', onclick: () => ctx.update((st) => Object.assign(st.upload, { file: null, gen: st.upload.gen + 1, error: null, chooseTab: null })) }, 'Cancel')
+  // The file waiting for its columns to be chosen.
+  const waiting = Boolean(need && up.file && !up.busy);
+  // The file waiting for its tab or its columns can be let go.
+  const cancel = (asking || waiting) && !up.busy
+    ? h('button', { type: 'button', class: 'btn btn-quiet', key: 'cancel', 'data-id': 'cancel-file', onclick: () => ctx.update((st) => {
+      Object.assign(st.upload, { file: null, gen: st.upload.gen + 1, error: null, chooseTab: null, tab: null });
+      st.columns = freshColumns();
+    }) }, 'Cancel')
     : null;
   const doing = up.busy ? `Uploading "${name}"…` : up.dragging ? 'Drop the file anywhere on this page to upload it.' : null;
+  // Which of the file's columns are used for checking, which are only shown, and what the file does not have.
+  const about = s && !need && !asking && !up.busy ? arr(s.about) : [];
+  const unplaced = arr(up.done?.unplaced);
   const below = [
     words.notice(h, 'error', up.error),
+    state.saved?.uploadAgain && !s && !up.file ? h('div', { key: 'again', 'data-id': 'upload-again' }, words.notice(h, 'warn', 'Upload the Flipkart file again. It was uploaded before the dashboard could find what each column holds, so its rows are not shown.')) : null,
+    about.length ? h('ul', { class: 'fk-about-file', key: 'about', 'data-id': 'about-file' }, about.map((t, i) => h('li', { key: `a${i}` }, t))) : null,
+    unplaced.length ? h('div', { class: 'notice notice-warn', key: 'unplaced', role: 'status', 'data-id': 'unplaced' }, h('ul', { class: 'fk-missing' }, unplaced.map((x, i) => h('li', { key: `u${i}` }, x)))) : null,
     asking
       ? h(
           'div',
           { class: 'fk-choose-tab', key: 'choose-tab', 'data-id': 'choose-tab' },
           words.notice(h, 'warn', up.chooseTab.says),
-          h('div', { class: 'actions' }, up.chooseTab.tabs.map((t, i) => h('button', { type: 'button', class: 'btn', key: `tab-${i}`, disabled: up.busy, onclick: () => sendFile(ctx, t), 'data-id': `tab-${i}` }, t))),
+          h('div', { class: 'actions' }, up.chooseTab.tabs.map((t, i) => h('button', { type: 'button', class: 'btn', key: `tab-${i}`, disabled: up.busy, onclick: () => sendFile(ctx, { tab: t }), 'data-id': `tab-${i}` }, t))),
         )
       : null,
+    need ? columnChooser(ctx) : null,
   ];
   if (s) {
     const where = s.kind === 'csv' ? ', a CSV file with no tabs' : `, the ${s.tab} tab`;
@@ -278,7 +396,9 @@ function uploadCard(ctx) {
           ? h('p', { class: 'fk-slim-text', key: 'doing', role: 'status', 'data-id': 'upload-doing' }, doing)
           : asking
             ? h('p', { class: 'fk-slim-text', key: 'chosen' }, h('strong', null, name), h('span', { class: 'fk-slim-sub' }, ': choose its tab below.'))
-            : h('p', { class: 'fk-slim-text', key: 'in', 'data-id': 'sheet-line' }, h('strong', null, s.fileName || 'The file'), h('span', { class: 'fk-slim-sub' }, `${where}: ${words.plural(Number(s.rowCount) || 0, 'row')}.`)),
+            : waiting
+              ? h('p', { class: 'fk-slim-text', key: 'chosen' }, h('strong', null, name), h('span', { class: 'fk-slim-sub' }, ': choose the columns below.'))
+              : h('p', { class: 'fk-slim-text', key: 'in', 'data-id': 'sheet-line' }, h('strong', null, s.fileName || 'The file'), h('span', { class: 'fk-slim-sub' }, `${where}: ${rowsWord(Number(s.rowCount) || 0)}.`)),
         up.done && !doing ? h('span', { class: 'pill pill-good', 'data-id': 'upload-done' }, icon(h, 'check'), 'Uploaded') : null,
         h('div', { class: 'fk-slim-actions' }, input, h('label', { for: 'fk-file', class: 'btn', key: 'replace', 'data-id': 'replace-file' }, icon(h, 'refresh'), 'Replace file'), cancel),
       ),
@@ -299,7 +419,9 @@ function uploadCard(ctx) {
           ? [h('p', { class: 'fk-drop-name', key: 'doing', role: 'status', 'data-id': 'upload-doing' }, doing)]
           : asking
             ? [h('p', { class: 'fk-drop-name', key: 'chosen' }, name), h('p', { class: 'fk-drop-sub', key: 'sub' }, 'Choose its tab below.')]
-            : [h('p', { class: 'fk-drop-name', key: 'none' }, 'Upload the Flipkart file: drop it anywhere on this page, or choose it'), h('p', { class: 'fk-drop-sub', key: 'sub' }, 'An .xlsx or .csv file, up to 50 megabytes. The tab named "Flipkart" is read, or the file\'s only tab. Nothing is checked yet.')],
+            : waiting
+              ? [h('p', { class: 'fk-drop-name', key: 'chosen' }, name), h('p', { class: 'fk-drop-sub', key: 'sub' }, 'Choose the columns below.')]
+              : [h('p', { class: 'fk-drop-name', key: 'none' }, 'Upload the Flipkart file: drop it anywhere on this page, or choose it'), h('p', { class: 'fk-drop-sub', key: 'sub' }, 'An .xlsx or .csv file, up to 50 megabytes. The tab named "Flipkart" is read, or the file\'s only tab. Nothing is checked yet.')],
       ),
       h('div', { class: 'fk-drop-actions' }, input, h('label', { for: 'fk-file', class: 'btn btn-primary', 'data-id': 'choose-file' }, icon(h, 'file'), 'Choose file'), cancel),
     ),
@@ -307,40 +429,111 @@ function uploadCard(ctx) {
   );
 }
 
-/** One cell as it is in the file: its words, each link as "Link" opening in a new tab, and "Picture in the file" for a picture. */
-function cellView(ctx, c) {
+// ---- the table of rows (copied from the Amazon one, views/amazon.js, and changed for Flipkart) ----
+
+const EMPTY = 'Empty';
+const emptyCell = (h) => h('span', { class: 'fk-empty-cell' }, EMPTY);
+
+/** One link as a small label saying where it goes; it opens in a new tab, and the mouse resting on it shows the whole link. */
+function linkLabel(ctx, x, i, mark = 'link') {
   const { h, words } = ctx;
-  const parts = arr(c?.parts).map((p, i) => {
-    if (typeof p?.link !== 'string') return String(p?.text ?? '');
-    const url = words.safeUrl(p.link);
-    return url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', key: `l${i}` }, 'Link') : p.link;
-  });
-  if (!c?.picture) return parts;
-  return [parts, parts.length ? ' ' : null, h('span', { class: 'fk-picture', key: 'picture' }, icon(h, 'image'), 'Picture in the file')];
+  const url = words.safeUrl(x?.link);
+  const label = x?.label || 'Link';
+  if (!url) return h('span', { key: `l${i}`, class: 'fk-link-label fk-nolink', title: String(x?.link ?? '') }, icon(h, mark), label);
+  return h('a', { key: `l${i}`, class: 'fk-link-label', href: url, target: '_blank', rel: 'noopener noreferrer', title: url }, icon(h, mark), label);
 }
 
-/** Every row of the kept file with every column as it is in the file, numbered from 1. */
+/** A picture or link cell as it is in the file: where each link goes, the words in it, "Empty", and a warning when its words show another link. */
+function linkCell(ctx, r, which) {
+  const { h } = ctx;
+  const s = obj(r?.shots?.[which]);
+  const labels = arr(s.labels);
+  const mark = which === 'review' ? 'link' : 'image';
+  const parts = [];
+  if (s.how === 'cell' || s.how === 'floating') parts.push(h('span', { key: 'pic', class: 'fk-link-label fk-nolink' }, icon(h, 'image'), s.how === 'cell' ? 'Picture in the cell' : 'Picture over the cell'));
+  labels.forEach((x, i) => parts.push(linkLabel(ctx, x, i, mark)));
+  if (labels.length && s.words) parts.push(h('div', { key: 'w', class: 'fk-cell-words' }, s.words));
+  if (!parts.length && s.text) parts.push(h('span', { key: 't' }, s.text));
+  if (s.mismatch) parts.push(h('div', { key: 'mm', class: 'fk-link-warning', title: 'The link written in this cell is different from the link that opens when you click it. The dashboard checks the link that opens when clicked.' }, icon(h, 'warn'), 'The written link is different'));
+  return h('td', { key: which, class: 'fk-link-cell', 'data-cell': which }, parts.length ? parts : emptyCell(h));
+}
+
+/** Status, Type and Note: empty until rows are checked, and no Flipkart row is checked yet; a Status, Type or Note the file already has shows as it is. */
+function resultCells(ctx, r) {
+  const { h } = ctx;
+  const p = obj(r?.prev);
+  return {
+    status: h('td', { key: 'status', class: 'fk-status-cell', 'data-cell': 'status' }, p.status ? [h('span', { key: 's' }, p.status), h('div', { key: 'f', class: 'fk-cell-words' }, 'From the file')] : emptyCell(h)),
+    type: h('td', { key: 'type', class: 'fk-type-cell', 'data-cell': 'type' }, p.type ? h('span', { class: 'tag' }, p.type) : emptyCell(h)),
+    note: h('td', { key: 'note', class: 'fk-note-cell', 'data-cell': 'note' }, p.note || emptyCell(h)),
+  };
+}
+
+/** A cell of one of the file's other columns (such as the reviewer's name), as it is in the file: its words, and where each link goes. */
+function otherCell(ctx, r, col) {
+  const { h } = ctx;
+  const v = obj(r?.values?.[col]);
+  const labels = arr(v.labels);
+  const parts = labels.map((x, i) => linkLabel(ctx, x, i));
+  if (labels.length && v.text && !/^\S+$/.test(v.text)) parts.push(h('div', { key: 'w', class: 'fk-cell-words' }, v.text));
+  return h('td', { key: `c${col}`, class: 'wrap fk-other-cell' }, parts.length ? parts : v.text || emptyCell(h));
+}
+
+/** A column's name with its letter kept small in front ("A: Order ID" to a screen reader). */
+const columnHead = (h, c) => (c.letter ? [h('span', { class: 'fk-col-letter', key: 'l' }, c.letter), h('span', { class: 'sr-only', key: 's' }, ': '), c.name] : c.name);
+
+/** One row of the table, its cells in the columns' order. */
+function tableRow(ctx, r, columns) {
+  const { h } = ctx;
+  const plain = (key, v, cls = 'nowrap') => h('td', { key, class: cls }, v || emptyCell(h));
+  const results = resultCells(ctx, r);
+  const cell = {
+    orderId: () => plain('orderId', r?.orderId, 'nowrap fk-strong-cell'),
+    orderDate: () => plain('orderDate', r?.orderDate),
+    amount: () => plain('amount', r?.amount),
+    product: () => plain('product', r?.product, 'wrap fk-product-cell'),
+    orderShot: () => linkCell(ctx, r, 'order'),
+    deliveryShot: () => linkCell(ctx, r, 'delivery'),
+    reviewShot: () => linkCell(ctx, r, 'reviewShot'),
+    reviewLink: () => linkCell(ctx, r, 'review'),
+    status: () => results.status,
+    type: () => results.type,
+    note: () => results.note,
+  };
+  // A column only shown (the reviewer's name, or any other), as it is in the file.
+  const cellOf = (c) => (cell[c.key] && c.key !== 'reviewer' ? cell[c.key]() : otherCell(ctx, r, c.col));
+  return h('tr', { key: r?.id ?? `n${r?.n}`, 'data-id': `row-${r?.n}` }, h('td', { class: 'nowrap fk-row-cell' }, String(r?.n ?? '')), columns.map(cellOf));
+}
+
+/** The table of rows, like the Amazon one: every column of the file in its order, numbered from 1, then Status, Type and Note. */
 function rowsCard(ctx) {
-  const { h, words, state } = ctx;
-  const headers = arr(state.saved?.headers);
+  const { h, state } = ctx;
+  const sheet = state.saved?.sheet ?? null;
   const rows = arr(state.saved?.rows);
-  const csv = state.saved?.sheet?.kind === 'csv';
+  // While a new file's columns are chosen, its rows are not made yet, and the old file's rows are not shown.
+  const waiting = state.columns.need ? state.upload.file?.name || 'the new file' : null;
+  let body;
+  if (waiting) body = h('p', { class: 'fk-empty-state', 'data-id': 'rows-waiting' }, icon(h, 'table'), `The rows of "${waiting}" show here once its columns are chosen above. Cancel brings back the rows shown before.`);
+  else if (!rows.length) body = h('p', { class: 'fk-empty-state', 'data-id': 'no-rows' }, icon(h, 'table'), `This ${sheet?.kind === 'csv' ? 'file' : 'tab'} has column names but no rows under them.`);
+  else {
+    const columns = arr(sheet?.columns).map((c) => ({ key: c?.key ?? null, col: c?.col ?? null, letter: c?.letter ?? '', name: c?.name ?? '' }));
+    // The column names stay in view while the rows scroll under them.
+    body = h(
+      'div',
+      { class: 'table-wrap fk-rows-wrap', 'data-id': 'rows-table' },
+      h(
+        'table',
+        { class: 'fk-rows-table' },
+        h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Row'), columns.map((c) => h('th', { scope: 'col', key: c.key ?? `c${c.col}`, 'data-col': c.key ?? 'other' }, columnHead(h, c))))),
+        h('tbody', null, rows.map((r) => tableRow(ctx, r, columns))),
+      ),
+    );
+  }
   return h(
     'section',
     { class: 'card fk-rows-card', key: 'rows', 'data-id': 'rows' },
-    h('div', { class: 'fk-rows-head' }, h('h2', null, 'Rows'), h('span', { class: 'fk-rows-count', 'data-id': 'rows-count' }, words.plural(rows.length, 'row'))),
-    rows.length
-      ? h(
-          'div',
-          { class: 'table-wrap fk-rows-wrap' },
-          h(
-            'table',
-            { class: 'fk-rows-table', 'data-id': 'rows-table' },
-            h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Row'), headers.map((t, i) => h('th', { scope: 'col', key: `h${i}` }, String(t))))),
-            h('tbody', null, rows.map((r) => h('tr', { key: `r${r.n}`, 'data-id': `row-${r.n}` }, h('td', { class: 'fk-row-cell nowrap' }, String(r.n)), arr(r.cells).map((c, i) => h('td', { key: `c${i}` }, cellView(ctx, c)))))),
-          ),
-        )
-      : h('p', { class: 'muted fk-rows-empty', 'data-id': 'no-rows' }, `This ${csv ? 'file' : 'tab'} has column names but no rows under them.`),
+    h('div', { class: 'fk-rows-head' }, h('h2', null, 'Rows'), rows.length && !waiting ? h('span', { class: 'fk-rows-count', 'data-id': 'rows-count' }, rowsWord(rows.length)) : null),
+    body,
   );
 }
 
@@ -475,7 +668,7 @@ function campaignsCard(ctx) {
 function renderScreen(ctx) {
   const { h, words, state } = ctx;
   if (!state.loaded) return h('p', { class: 'muted', key: 'opening', role: 'status', 'data-id': 'opening' }, 'Opening the Flipkart rows…');
-  return [uploadCard(ctx), words.notice(h, 'error', state.loadError), campaignsCard(ctx), state.saved?.sheet ? rowsCard(ctx) : null];
+  return [uploadCard(ctx), words.notice(h, 'error', state.loadError), campaignsCard(ctx), state.saved?.sheet || state.columns.need ? rowsCard(ctx) : null];
 }
 
 export default {

@@ -1,7 +1,8 @@
 /* The Flipkart screen, in the shared look (styles.css). Its own look is
    copied from the Amazon screen's (views/amazon.css) under Flipkart's own
    names (fk-), so nothing here can change the Amazon screen: the marketplace
-   tabs, the upload area, the Campaigns box and the table of rows. */
+   tabs, the upload area with the lines about the file and the column
+   chooser, the Campaigns box and the table of rows. */
 
 /* ---- the top bar: marketplace tabs ---- */
 
@@ -32,6 +33,17 @@
 .fk-slim-actions { margin-left: auto; }
 /* The tabs to choose from, when the file has no tab named "Flipkart". */
 .fk-choose-tab { margin-top: 12px; }
+/* Under the upload line: which columns are used for checking, which are only shown, and what the file does not have. */
+.fk-about-file { margin: 8px 0 0; padding: 0 0 0 20px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.fk-about-file li + li { margin-top: 2px; }
+/* A picture of the file that was not used. */
+.fk-missing { margin: 4px 0; padding-left: 16px; }
+.fk-missing li { margin: 2px 0; }
+/* The column chooser, when a needed column cannot be found. */
+.fk-columns { margin-top: 12px; }
+.fk-column-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: 8px 16px; margin: 8px 0; }
+.fk-req { color: var(--bad); font-weight: 500; }
+.fk-opt { color: var(--muted); font-weight: 400; }
 
 /* ---- the table of rows ---- */
 
@@ -39,16 +51,33 @@
 .fk-rows-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .fk-rows-head h2 { margin: 0; }
 .fk-rows-count { font-size: 12px; color: var(--muted); padding: 0 8px; line-height: 20px; border-radius: 999px; background: var(--surface-2); }
-.fk-rows-empty { margin: 16px; }
+.fk-rows-card > .fk-empty-state { margin: 16px; }
 /* The column names stay in view while the rows scroll under them. */
 .fk-rows-wrap { max-height: calc(100vh - 132px); overflow: auto; margin: 0; border: 0; border-radius: 0 0 var(--radius) var(--radius); }
 .fk-rows-table thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-2); color: var(--text); border-bottom: 0; box-shadow: inset 0 -1px 0 var(--line-strong); }
 /* A column is as wide as its longest word, so a word is never split inside the table. */
 .fk-rows-table td, .fk-rows-table th { overflow-wrap: break-word; }
-/* A cell's words as they are in the file, its line breaks too. */
-.fk-rows-table td { background: var(--surface); white-space: pre-line; }
+.fk-rows-table td { background: var(--surface); }
+.fk-col-letter { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; margin-right: 6px; border-radius: 5px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 400; line-height: 1; }
 .fk-row-cell { color: var(--muted); }
-.fk-picture { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.fk-strong-cell { font-variant-numeric: tabular-nums; }
+.fk-product-cell { min-width: 11rem; max-width: 18rem; }
+.fk-status-cell { min-width: 14rem; }
+.fk-type-cell { min-width: 8rem; }
+.fk-type-cell .tag { white-space: nowrap; }
+/* Notes wrap neatly in a column of fixed width. */
+.fk-note-cell { width: 340px; min-width: 340px; max-width: 340px; white-space: pre-line; }
+.fk-cell-words { margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.fk-link-cell { min-width: 8rem; }
+.fk-other-cell { min-width: 7rem; max-width: 16rem; }
+.fk-link-label { display: inline-flex; align-items: center; gap: 4px; margin: 0 4px 4px 0; padding: 0 8px 0 6px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); font-size: 12px; line-height: 22px; text-decoration: none; white-space: nowrap; transition: background-color .12s, border-color .12s; }
+.fk-link-label[href]:hover { background: var(--yellow-soft); border-color: #e9cf86; color: var(--text); }
+.fk-link-label .icon { width: 12px; height: 12px; color: var(--muted); }
+.fk-nolink { color: var(--muted); }
+.fk-link-warning { display: flex; align-items: center; gap: 4px; margin-top: 2px; color: var(--warn); font-size: 12px; }
+.fk-link-warning .icon { width: 12px; height: 12px; }
+.fk-empty-cell { color: #b09a84; font-size: 12px; }
+.fk-empty-state { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0; padding: 24px; color: var(--muted); background: var(--surface-2); border-radius: var(--radius-sm); }
 
 /* ---- the Campaigns box, which folds shut smoothly ---- */
 
