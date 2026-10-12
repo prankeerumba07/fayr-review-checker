@@ -283,8 +283,13 @@ test('nothing is downloaded and no link is opened: the file is read and shown on
   assert.ok(watched >= 1, "the watch saw this test's own connection to this computer");
   assert.deepEqual(outside, [], 'no connection to any website');
   assert.deepEqual(fetched, [], 'nothing fetched');
-  // And no Flipkart file has a way to reach a website: no web, browser or program tools, and no fetch.
+  // And no Flipkart file has a way to reach a website: no web, browser or program tools, and no fetch. The one
+  // exception is the Live Flipkart Browser (flipkart/browser.js), which reads campaigns' products: it alone may
+  // use the browser tool, and it has none of the others.
   for (const f of readdirSync(join(ROOT, 'flipkart'))) {
-    assert.doesNotMatch(readFileSync(join(ROOT, 'flipkart', f), 'utf8'), /from 'node:(?:https?|http2|net|tls|dgram|child_process)'|playwright|\bfetch\(|XMLHttpRequest|WebSocket/, f);
+    const src = readFileSync(join(ROOT, 'flipkart', f), 'utf8');
+    const browserTool = "import { chromium } from 'playwright-core';";
+    if (f === 'browser.js') assert.ok(src.includes(browserTool), 'the Live Flipkart Browser uses the browser tool');
+    assert.doesNotMatch(f === 'browser.js' ? src.replace(browserTool, '') : src, /from 'node:(?:https?|http2|net|tls|dgram|child_process)'|playwright|\bfetch\(|XMLHttpRequest|WebSocket|request\.fetch/, f);
   }
 });

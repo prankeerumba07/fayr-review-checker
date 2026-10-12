@@ -1,0 +1,131 @@
+// Flipkart campaigns: a Campaign ID (required), a name (optional), live or
+// ended, and the Flipkart products users may buy for it, typed as Flipkart
+// links or Flipkart product IDs (the pid), one per line. Each product is read
+// once from its Flipkart page in the Live Flipkart Browser (one page at a
+// time, at least 3 seconds apart): its name, its brand when shown, its
+// product ID, its item ID, its stars, how many ratings and reviews it has,
+// and the link to all its reviews. A robot check, a block or an error stops
+// the reading ("Flipkart prevented this check"), and is never got around.
+// Copied from the Amazon campaigns (amazon/campaigns.js) and changed for
+// Flipkart. Nothing here checks a row yet.
+
+import { randomBytes } from 'node:crypto';
+import { parseUrl, isFlipkart, pidFrom, itemIdFrom, pageForPid, pageForLink, PID } from './links.js';
+import { whatPageIs, productOnPage } from './page-read.js';
+
+/** The dashboard's own key for a campaign, in its address; staff never type it. */
+export const CAMPAIGN_KEY = /^f[0-9a-f]{12}$/;
+export const MAX_CAMPAIGN_PRODUCTS = 30;
+export const newCampaignKey = () => `f${randomBytes(6).toString('hex')}`;
+
+/** The words this dashboard never shows, as the rules test bans them (kept as base64 so this file does not hold them). */
+const HIDDEN = ['cmVmdW5k', 'Y2FzaGJhY2s=', 'cmV3YXJk'].map((b) => Buffer.from(b, 'base64').toString('utf8'));
+const HIDDEN_RE = new RegExp(`[\\p{L}\\p{N}]*(?:${HIDDEN.join('|')})[\\p{L}\\p{N}]*`, 'giu');
+
+/** Words from a Flipkart page or typed by staff, on one line, with any word this dashboard must not show replaced by "…". Copied from amazon/notes.js. */
+export function clean(text) {
+  return String(text ?? '').replace(/\s+/g, ' ').trim().replace(HIDDEN_RE, '…');
+}
+
+/** Why a product was not read, when Flipkart showed a robot check, a block or an error: never got around. */
+export const PREVENTED_SAYS = {
+  captcha: 'Flipkart prevented this check: it showed a robot check, which this dashboard never answers. This product was not read; press "Read the products again" later.',
+  blocked: 'Flipkart prevented this check: it refused the page. This product was not read; wait a while, then press "Read the products again".',
+  error: 'Flipkart prevented this check: it showed an error. This product was not read; press "Read the products again" later.',
+};
+
+/** When a product was typed as its product ID alone and no product page opened from it. */
+export const ADD_LINK_SAYS = "No Flipkart product page opened from this product ID. Add this product's link instead.";
+
+/** A product ID typed alone: 16 letters and digits, with both in it ("FCPHEW7AM9C7RU24"). */
+function pidOfLine(line) {
+  const t = line.toUpperCase();
+  return PID.test(t) && /\d/.test(t) && /[A-Z]/.test(t) ? t : null;
+}
+
+/**
+ * The products as staff typed them, one per line: a Flipkart product ID
+ * (opened as Flipkart's page for that ID) or a Flipkart link (a product page's
+ * link opened as the product page alone, any other Flipkart link as it is).
+ * -> { products: [{ given, url, pid, itemId, byId }], problems: [sentence] }.
+ * A line that is neither, or a link to another website, is a problem; the
+ * same product typed twice counts once.
+ */
+export function productLines(text) {
+  const products = [];
+  const problems = [];
+  const lines = String(text ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  for (const [i, line] of lines.entries()) {
+    const at = `Line ${i + 1} of the products`;
+    let item = null;
+    const pid = pidOfLine(line);
+    if (pid) {
+      item = { given: pid, url: pageForPid(pid), pid, itemId: null, byId: true };
+    } else {
+      // A link starts with http:// or https://, or is a Flipkart link without them ("www.flipkart.com/...").
+      const u = /^https?:\/\//i.test(line) || /^(?:www\.|dl\.)?flipkart\.com\//i.test(line) ? parseUrl(line) : null;
+      if (!u) problems.push(`${at}, "${clean(line).slice(0, 60)}", is not a Flipkart link or a Flipkart product ID.`);
+      else if (!isFlipkart(u)) problems.push(`${at} is a link to ${u.hostname}, not to Flipkart, so it cannot be used.`);
+      else item = { given: line.slice(0, 2000), url: pageForLink(u), pid: pidFrom(u), itemId: itemIdFrom(u), byId: false };
+    }
+    if (!item) continue;
+    if (products.some((p) => p.given === item.given || (p.pid && p.pid === item.pid))) continue;
+    products.push(item);
+  }
+  if (products.length > MAX_CAMPAIGN_PRODUCTS) problems.push(`A campaign can have at most ${MAX_CAMPAIGN_PRODUCTS} products.`);
+  return { products, problems };
+}
+
+/** A product that was read from its Flipkart page. */
+export const wasRead = (p) => Boolean(p?.read?.name && !p.problem);
+
+/** A product still to be read: never read, or its last reading was stopped or could not open the page. */
+export const needsReading = (p) => !p?.read && !p?.problem?.final;
+
+/**
+ * Reads one product's page in the Live Flipkart Browser. browser — begin(),
+ * open(url, { onWait }). -> { product, stop } where product is the product as
+ * it is now, and stop says why nothing more is read now: 'captcha', 'blocked'
+ * or 'error' when Flipkart showed one of those ("Flipkart prevented this
+ * check"), 'closed' when the window could not be opened or was closed, or
+ * 'network' when the page could not be opened at all (no point opening the
+ * next one then); else null.
+ */
+export async function readProduct(browser, product, { onWait, now = () => new Date() } = {}) {
+  const at = now().toISOString();
+  const not = (says, extra = {}) => ({ product: { ...product, read: null, problem: { says, at, ...extra } }, stop: null });
+  const halt = (says, stop) => ({ product: { ...product, read: null, problem: { says, at, retry: true } }, stop });
+  try {
+    await browser.begin();
+  } catch {
+    return halt('The Live Flipkart Browser could not be opened on this computer, so this product was not read and the reading stopped.', 'closed');
+  }
+  const res = await browser.open(product.url, { onWait });
+  if (res?.error === 'elsewhere') return not(`The link leads to ${res.host}, not to Flipkart, so this product was not read.`, { final: true });
+  if (!res?.ok) return halt(`The Live Flipkart Browser could not open the page, so this product was not read and the reading stopped. ${res?.message ?? ''}`.trim(), res?.error === 'closed' ? 'closed' : 'network');
+  // Another website's page is never taken for something Flipkart showed.
+  const u = parseUrl(res.url);
+  if (!u || !isFlipkart(u)) return not(`The link leads to ${u ? u.hostname : 'another website'}, not to Flipkart, so this product was not read.`, { final: true });
+  const page = whatPageIs(res.facts, res.status);
+  if (page.kind === 'captcha' || page.kind === 'blocked' || page.kind === 'error') {
+    return { product: { ...product, read: null, problem: { says: PREVENTED_SAYS[page.kind], at, retry: true, stop: page.kind } }, stop: page.kind };
+  }
+  const p = productOnPage(res.facts);
+  const isProduct = page.kind === 'page' && Boolean(p.name) && Boolean(p.pid || p.itemId);
+  // A product ID alone: only a product page with that very ID will do.
+  if (product.byId && (!isProduct || p.pid !== product.pid)) return not(ADD_LINK_SAYS, { final: true });
+  if (page.kind === 'not-found') return not('Flipkart says this product page does not exist, so this product was not read.', { final: true });
+  if (!isProduct) return not('This link does not open a product page on Flipkart, so this product was not read.', { final: true });
+  const read = {
+    at,
+    name: clean(p.name).slice(0, 500),
+    brand: p.brand ? clean(p.brand).slice(0, 80) || null : null,
+    pid: p.pid,
+    itemId: p.itemId,
+    rating: p.rating,
+    ratings: p.ratings,
+    reviews: p.reviews,
+    allReviews: p.allReviews,
+  };
+  return { product: { ...product, pid: product.pid ?? p.pid, itemId: product.itemId ?? p.itemId, read, problem: null }, stop: null };
+}

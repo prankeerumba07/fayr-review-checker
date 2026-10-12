@@ -1,10 +1,20 @@
-// The links in a cell of the Flipkart file, for the screen. Copied from the
-// Amazon reader's way of finding links in words (amazon/links.js) and changed
-// so a cell's words stay as they are: each web address written in them
-// becomes a link, and a link behind the words follows them when it is not one
-// of those. Only addresses that start with http://, https:// or www. count,
-// since every column is shown and "1.5L/2L" or "Rs.349/-" is no link. Nothing
-// here opens a link.
+// Links. The links in a cell of the Flipkart file, for the screen: copied from
+// the Amazon reader's way of finding links in words (amazon/links.js) and
+// changed so a cell's words stay as they are: each web address written in
+// them becomes a link, and a link behind the words follows them when it is
+// not one of those. Only addresses that start with http://, https:// or www.
+// count, since every column is shown and "1.5L/2L" or "Rs.349/-" is no link.
+// And Flipkart's own links, for the campaigns: which websites are Flipkart's,
+// the product ID (pid) and the item ID in a link, and the page opened for a
+// product. Nothing here opens a link.
+
+export const FLIPKART_ORIGIN = 'https://www.flipkart.com';
+/** A Flipkart product ID (pid) typed alone: 16 capital letters and digits, for example FCPHEW7AM9C7RU24. */
+export const PID = /^[A-Z0-9]{16}$/;
+/** A product ID found in a link or on a page: most are 16 letters and digits, but some are not (a book's is its 13-digit ISBN). */
+export const ANY_PID = /^[A-Z0-9]{10,20}$/;
+/** A Flipkart item ID: "itm" and then letters and digits, for example itm50a9094e8e73a. */
+export const ITEM_ID = /^itm[0-9a-z]{6,20}$/;
 
 /** A pasted link as a URL, or null. A link without a scheme is read as https. */
 export function parseUrl(raw) {
@@ -17,6 +27,61 @@ export function parseUrl(raw) {
   } catch {
     return null;
   }
+}
+
+const urlOf = (raw) => (raw instanceof URL ? raw : parseUrl(raw));
+
+/** True for a link to Flipkart's own website: flipkart.com, www.flipkart.com, dl.flipkart.com and the like. */
+export function isFlipkart(raw) {
+  const host = urlOf(raw)?.hostname.toLowerCase().replace(/\.$/, '') ?? '';
+  return host === 'flipkart.com' || host.endsWith('.flipkart.com');
+}
+
+/** True for an address the Live Flipkart Browser may load: Flipkart's website, and flixcart.com, where Flipkart keeps its pictures and page code. */
+export function isFlipkartSite(raw) {
+  const host = urlOf(raw)?.hostname.toLowerCase().replace(/\.$/, '') ?? '';
+  return isFlipkart(raw) || host === 'flixcart.com' || host.endsWith('.flixcart.com');
+}
+
+/** The product ID in a Flipkart link (its "pid"), in capitals, or null. */
+export function pidFrom(raw) {
+  const u = urlOf(raw);
+  if (!u || !isFlipkart(u)) return null;
+  const pid = String(u.searchParams.get('pid') ?? '').trim().toUpperCase();
+  return ANY_PID.test(pid) ? pid : null;
+}
+
+/** The item ID in a Flipkart link (the part of its path starting with "itm"), or null. */
+export function itemIdFrom(raw) {
+  const u = urlOf(raw);
+  if (!u || !isFlipkart(u)) return null;
+  const m = u.pathname.match(/\/(?:p|product-reviews)\/(itm[0-9a-z]+)(?:\/|$)/i);
+  return m && ITEM_ID.test(m[1].toLowerCase()) ? m[1].toLowerCase() : null;
+}
+
+/**
+ * The page opened for a product typed as its product ID alone: Flipkart's
+ * product page found by the ID. Flipkart may not open a page from it; the
+ * screen then asks for the product's link.
+ */
+export function pageForPid(pid) {
+  return `${FLIPKART_ORIGIN}/product/p/itme?pid=${encodeURIComponent(pid)}`;
+}
+
+/**
+ * The page opened for a Flipkart link: a product page's link (or its reviews'
+ * link) as the product page alone, https://www.flipkart.com/<name>/p/<item
+ * ID>?pid=<product ID>, without what else the link carries; any other
+ * Flipkart link as it is, to see where it leads.
+ */
+export function pageForLink(raw) {
+  const u = urlOf(raw);
+  if (!u || !isFlipkart(u)) return null;
+  const path = u.pathname.replace(/^\/dl(?=\/)/i, '');
+  const m = path.match(/^\/([^/]+)\/(?:p|product-reviews)\/(itm[0-9a-z]+)\/?$/i);
+  const pid = pidFrom(u);
+  if (m && pid && ITEM_ID.test(m[2].toLowerCase())) return `${FLIPKART_ORIGIN}/${m[1]}/p/${m[2].toLowerCase()}?pid=${pid}`;
+  return u.href;
 }
 
 /** A piece of words without the brackets, quotes and full stop around it: { lead, core, trail }. */

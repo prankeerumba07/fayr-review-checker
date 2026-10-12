@@ -261,7 +261,7 @@ export async function startDashboard({ port = PORT, dataDir = join(ROOT, 'data')
       // Both lines in the file mean Chrome was closed in time to save the login; only the first means it was not.
       if (live.isOpen()) loginLines('The dashboard is stopping, so the Live Amazon Browser is being closed.');
       const wasOpen = live.isOpen();
-      await Promise.allSettled([live.close(), images.close()]);
+      await Promise.allSettled([live.close(), images.close(), flipkart.close()]);
       if (wasOpen) loginLines('The Live Amazon Browser was closed.');
       await loginLines.done();
       await emailLines.done();

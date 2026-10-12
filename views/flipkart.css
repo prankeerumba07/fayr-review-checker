@@ -1,7 +1,7 @@
 /* The Flipkart screen, in the shared look (styles.css). Its own look is
    copied from the Amazon screen's (views/amazon.css) under Flipkart's own
    names (fk-), so nothing here can change the Amazon screen: the marketplace
-   tabs, the upload area and the table of rows. */
+   tabs, the upload area, the Campaigns box and the table of rows. */
 
 /* ---- the top bar: marketplace tabs ---- */
 
@@ -49,3 +49,40 @@
 .fk-rows-table td { background: var(--surface); white-space: pre-line; }
 .fk-row-cell { color: var(--muted); }
 .fk-picture { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+/* ---- the Campaigns box, which folds shut smoothly ---- */
+
+.fk-fold { padding: 0; }
+.fk-fold > summary { list-style: none; cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 12px 16px; border-radius: var(--radius); transition: background-color .15s; }
+.fk-fold > summary::-webkit-details-marker { display: none; }
+.fk-fold > summary:hover { background: var(--hover); }
+.fk-fold[open] > summary { border-radius: var(--radius) var(--radius) 0 0; }
+.fk-fold-head h2 { margin: 0; }
+.fk-fold-icon { width: 18px; height: 18px; color: #c08f2a; }
+.fk-fold-sum { color: var(--muted); font-size: 12px; }
+.fk-fold-chevron { margin-left: auto; color: var(--muted); transition: transform .2s ease; }
+.fk-fold[open] .fk-fold-chevron { transform: rotate(180deg); }
+.fk-fold::details-content { block-size: 0; overflow-y: clip; opacity: 0; transition: block-size .22s ease, opacity .22s ease, content-visibility .22s allow-discrete; }
+.fk-fold[open]::details-content { block-size: auto; opacity: 1; }
+.fk-fold-body { padding: 4px 16px 16px; border-top: 1px solid var(--line); }
+.fk-fold-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 12px 0; }
+
+.fk-campaigns { display: grid; }
+.fk-campaign { padding: 12px 0; border-top: 1px solid var(--line); }
+.fk-campaign:first-child { border-top: 0; padding-top: 4px; }
+.fk-campaign .card-head { margin-bottom: 0; }
+.fk-campaign h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+.fk-campaign .notice { margin: 8px 0 0; }
+.fk-campaign-ended h3 { color: var(--muted); }
+.fk-campaign-name { color: var(--muted); font-size: 12px; font-weight: 400; }
+.fk-campaign-products { list-style: none; display: grid; gap: 8px; margin: 8px 0 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); }
+.fk-campaign-products .fk-typed { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.fk-campaign-form { margin: 0 0 12px; padding: 12px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.fk-campaign-form textarea { min-height: 5em; resize: vertical; }
+
+.fk-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 8px 16px; margin: 8px 0; }
+.fk-form-field { min-width: 0; }
+.fk-form-field.fk-wide { grid-column: 1 / -1; margin-top: 8px; }
+.fk-note { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+.fk-req { color: var(--bad); font-weight: 500; }
+.fk-opt { color: var(--muted); font-weight: 400; }

@@ -1,9 +1,10 @@
 // Flipkart's own storage, only in data/flipkart/ (data/ is kept out of git and
-// never served as a file): the uploaded file (upload.xlsx or upload.csv) and
-// what was read from it (rows.json). Nothing here writes anywhere else in
-// data/. Copied from the Amazon store's way of writing (amazon/store.js): a
-// file is written whole under another name, then renamed, readable only by
-// this computer's user.
+// never served as a file): the uploaded file (upload.xlsx or upload.csv), what
+// was read from it (rows.json), and the campaigns with what was read from
+// their products' Flipkart pages (campaigns.json). Nothing here writes
+// anywhere else in data/. Copied from the Amazon store's way of writing
+// (amazon/store.js): a file is written whole under another name, then
+// renamed, readable only by this computer's user.
 
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
@@ -22,9 +23,23 @@ function cleanCell(c) {
   return out;
 }
 
+/**
+ * Puts a campaign, new or changed, in the list of campaigns (in place) as it
+ * is kept: its typed words cleaned and cut to length, and when it was made
+ * and last changed. Answers it as kept.
+ */
+export function putCampaign(list, campaign, at = new Date().toISOString()) {
+  const i = list.findIndex((c) => c.key === campaign.key);
+  const kept = { ...campaign, campaignId: cleanText(campaign.campaignId, 60), name: cleanText(campaign.name, 80), live: Boolean(campaign.live), createdAt: i >= 0 ? list[i].createdAt : at, updatedAt: at };
+  if (i >= 0) list[i] = kept;
+  else list.push(kept);
+  return kept;
+}
+
 export function createFlipkartStore(dataDir) {
   const dir = join(dataDir, 'flipkart');
   const rowsFile = join(dir, 'rows.json');
+  const campaignsFile = join(dir, 'campaigns.json');
   let lock = Promise.resolve();
   const locked = (fn) => {
     const turn = lock.then(fn);
@@ -46,8 +61,44 @@ export function createFlipkartStore(dataDir) {
     await rename(tmp, file);
   }
 
+  async function allCampaigns() {
+    const d = await readJson(campaignsFile, null);
+    return Array.isArray(d?.campaigns) ? d.campaigns : [];
+  }
+  /**
+   * Changes the campaigns as they are saved now, one change at a time: fn
+   * changes the list in place and answers what to give back, or null or false
+   * when there was nothing to change (nothing is written then). When fn
+   * throws, nothing is written.
+   */
+  const changeCampaigns = (fn) =>
+    locked(async () => {
+      const list = await allCampaigns();
+      const out = fn(list);
+      if (out === null || out === false) return out;
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await writeWhole(campaignsFile, JSON.stringify({ campaigns: list }, null, 2));
+      return out;
+    });
+
   return {
     dir,
+    /** Every campaign, in the order they were added. */
+    campaigns: allCampaigns,
+    async campaign(key) {
+      return (await allCampaigns()).find((c) => c.key === key) ?? null;
+    },
+    changeCampaigns,
+    /** What was read for one product of a campaign; null when the campaign or the product is gone. */
+    setCampaignProduct(key, given, product) {
+      return changeCampaigns((list) => {
+        const c = list.find((x) => x.key === key);
+        const j = (c?.products ?? []).findIndex((p) => p.given === given);
+        if (j < 0) return null;
+        c.products[j] = product;
+        return product;
+      });
+    },
     /** The saved file's name and tab, its column names and its rows: { sheet, headers, rows }, or null when no file was uploaded. */
     async sheet() {
       const d = await readJson(rowsFile, null);

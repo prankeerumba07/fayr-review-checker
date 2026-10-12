@@ -46,6 +46,7 @@ function fakeLocal({ saved = NONE, answer = () => SAVED } = {}) {
     api: async (method, path) => {
       calls.push({ method, path });
       if (method === 'GET' && path === '/local/flipkart/sheet') return structuredClone(saved);
+      if (method === 'GET' && path === '/local/flipkart/campaigns') return { campaigns: [], reading: false };
       throw new ApiError(404, 'Not found.');
     },
     form: async (path, fd) => {
@@ -111,7 +112,7 @@ test('before a file is in: the tabs, and an upload area like the Amazon one for 
   assert.deepEqual([byId(tree, 'choose-file').tag, byId(tree, 'choose-file').attrs.for, textOf(byId(tree, 'choose-file'))], ['label', 'fk-file', 'Choose file']);
   assert.equal(byId(tree, 'rows'), null, 'no table before a file is in');
   assert.doesNotMatch(textOf(tree), /log ?in|Google|account/i, 'no Amazon or Google login lines');
-  assert.deepEqual(s.local.calls.map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/sheet'], 'it asks only for the kept file');
+  assert.deepEqual(s.local.calls.map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/sheet', 'GET /local/flipkart/campaigns'], 'it asks only for the kept file and the campaigns');
 });
 
 test('choosing a file uploads it at once: its name, its tab and how many rows in one slim line, with "Replace file", and every row with every column, numbered from 1', async () => {
@@ -150,7 +151,7 @@ test('a link shows as "Link" and opens in a new tab; a link that is not a web li
   assert.deepEqual(picture.map(textOf), ['Picture in the file']);
   assert.deepEqual(findAll(picture[0], (n) => /\bicon\b/.test(n.attrs?.class ?? '')).map((n) => n.attrs.class), ['icon icon-image']);
   assert.equal(findAll(table, (n) => n.tag === 'img').length, 0, 'no picture is shown or fetched');
-  assert.deepEqual(s.local.calls.map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/sheet'], 'a link is only opened when it is pressed');
+  assert.deepEqual(s.local.calls.map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/sheet', 'GET /local/flipkart/campaigns'], 'a link is only opened when it is pressed');
 });
 
 test('a file dropped anywhere on the page is uploaded at once; held over the page, the upload area lights up', async () => {
