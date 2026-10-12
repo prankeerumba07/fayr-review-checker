@@ -4,7 +4,9 @@
 // page. What the facts mean is decided here in Node: what kind of page it is
 // (whatPageIs) and the product it shows (productOnPage). Copied from the way
 // the Amazon pages are read (amazon/page-read.js) and changed for Flipkart,
-// whose product pages say most of what is read in their JSON-LD.
+// whose product pages say most of what is read in their JSON-LD. And what a
+// Google page in the Flipkart Google Browser says about the Google login
+// (readGoogleLine and googleAccountFrom), copied from amazon/page-read.js.
 
 import { parseUrl, isFlipkart, pidFrom, itemIdFrom, FLIPKART_ORIGIN, ANY_PID } from './links.js';
 
@@ -189,4 +191,61 @@ export function productOnPage(facts) {
     reviews,
     allReviews: name ? allReviewsLink(f, pid, itemId, Boolean(ratings || reviews)) : null,
   };
+}
+
+// ---- Google's pages, in the Flipkart Google Browser (copied from amazon/page-read.js) ----
+
+/* eslint-disable no-var */
+/**
+ * Who a Google page says is logged in, read INSIDE the page: only the account
+ * button at the top of Google's pages ("Google Account: NAME (EMAIL)"),
+ * whether a "Sign in" link or a login form is there, and whether the page is
+ * Google refusing a login in this window or a robot check. Never what anyone
+ * types.
+ */
+export function readGoogleLine() {
+  var squash = function (s) {
+    return (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
+  };
+  var account = document.querySelector('a[href*="accounts.google.com/SignOutOptions"], a[aria-label^="Google Account"], a[aria-label^="Google account"]');
+  var signIn = document.querySelector('a[href*="accounts.google.com/ServiceLogin"], a[href*="accounts.google.com/signin"], a[href*="accounts.google.com/AccountChooser"]');
+  var text = squash(document.body ? String(document.body.innerText || '').slice(0, 4000) : '');
+  return {
+    url: location.href,
+    title: squash(document.title),
+    account: account ? squash(account.getAttribute('aria-label') || account.getAttribute('title') || '') || null : null,
+    signIn: Boolean(signIn),
+    loginForm: Boolean(document.querySelector('#identifierId, input[type="email"], input[type="password"], input[name="identifier"], input[name="Passwd"]')),
+    refused: /may not be secure|couldn.t sign you in|this browser or app/i.test(text),
+    robot: /unusual traffic|not a robot|verify (?:that )?you.re (?:not a robot|human)|type the characters/i.test(text),
+  };
+}
+/* eslint-enable no-var */
+
+/**
+ * Who is logged in to Google, from a Google page's line (readGoogleLine):
+ * { signedIn: true, name, email }, { signedIn: false, loginPage }, { refused:
+ * true } when Google refuses a login in this window, { robot: true } for a
+ * robot check, or null when the page says nothing about it (another site, or
+ * no account button and no "Sign in" link). The name is the account button's,
+ * or the email when it shows no name.
+ */
+export function googleAccountFrom(line) {
+  let u;
+  try {
+    u = new URL(String(line?.url ?? ''));
+  } catch {
+    return null;
+  }
+  if (!/(^|\.)google\.(com|co\.in)$/i.test(u.hostname)) return null;
+  if (line.robot || /^\/sorry\//.test(u.pathname)) return { robot: true };
+  if (line.refused) return { refused: true };
+  const m = String(line.account ?? '').trim().match(/^google account:?\s*(.*?)\s*(?:\(([^()]*)\))?\s*$/i);
+  if (m && (m[1].trim() || (m[2] ?? '').trim())) {
+    const email = (m[2] ?? '').trim() || null;
+    return { signedIn: true, name: m[1].trim() || email, email };
+  }
+  if (u.hostname === 'accounts.google.com' || line.loginForm) return { signedIn: false, loginPage: true };
+  if (line.signIn) return { signedIn: false, loginPage: false };
+  return null;
 }

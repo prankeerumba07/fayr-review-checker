@@ -1,5 +1,9 @@
 // The Flipkart screen. The top bar holds the marketplace tabs (bar() below),
-// with Flipkart chosen and Amazon one press away. The page: the upload area,
+// with Flipkart chosen and Amazon one press away, and the Google login, the
+// same as on the Amazon screen (the same states, words, buttons and soft box
+// under the bar), with the Flipkart Google Browser in place of the Live Amazon
+// Browser: the screenshots on Google Drive are downloaded through that login.
+// There is no Amazon login and no Flipkart login here. The page: the upload area,
 // which looks like the Amazon one ("Choose file", or drop the file anywhere
 // on the page: app.js passes it on), for an .xlsx or a .csv file. The local
 // server finds what each column holds, as on Amazon; when a needed column
@@ -16,13 +20,37 @@
 // its letter, the rows numbered from 1, each link as a small label saying
 // where it goes ("Google Drive"), a picture in a cell as "Picture in the
 // cell", and Status, Type and Note at the end, empty until rows are checked.
-// Nothing is checked yet: no Check button and no Status cards, and there are
-// no Amazon or Google login lines. The local server reads and keeps the file
-// and the campaigns; this screen only shows them.
+// Nothing is checked yet: no Check button and no Status cards. The local
+// server reads and keeps the file and the campaigns, and runs the Google
+// login; this screen only shows them.
 
 const BASE = '/local/flipkart';
-/** How often the screen looks again while a campaign's products are read from Flipkart. */
+/** How often the screen looks again while a campaign's products are read from Flipkart, and how often the top bar asks the server about the Google login. */
 const READING_POLL_MS = 2000;
+export const LOGIN_POLL_MS = READING_POLL_MS;
+
+/**
+ * The Google login's words in the top bar, one state at a time: the Amazon
+ * screen's (views/amazon.js), with the Flipkart Google Browser in place of
+ * the Live Amazon Browser. The screenshots on Google Drive are downloaded
+ * through this login.
+ */
+export const GOOGLE_WORDS = {
+  checking: 'Checking the Google login…',
+  in: (name) => (name ? `Logged in to Google as ${name}` : 'Logged in to Google'),
+  out: 'Not logged in to Google',
+  outButton: 'Log in to Google',
+  outHow: "Google's login page opens in the Flipkart Google Browser window, for you to log in there by hand. The screenshots on Google Drive are downloaded through that login.",
+  waiting: 'Log in to Google in the Flipkart Google Browser window. This tool never types, stores or reads a password; Chrome keeps the login, so it stays after a restart.',
+  waitingChrome: 'Log in to Google in the normal Chrome window that just opened (it uses the same saved profile, so the login is kept), then press "I have logged in".',
+  waitingShort: 'Waiting for you to log in to Google',
+  doneButton: 'I have logged in',
+  problemShort: 'The Google login could not be checked',
+  problemButton: 'Check the Google login again',
+  chromeButton: 'Log in to Google in a normal Chrome window',
+  chromeHow: "For when Google will not let you log in inside the Flipkart Google Browser window: the dashboard closes that window, opens a normal Chrome window with the same saved profile on Google's login page, and you log in there.",
+  chromeOffer: 'If Google will not let you log in there, use a normal Chrome window instead:',
+};
 
 /** The kinds of file the file chooser offers: Excel files (.xlsx) and CSV files. */
 export const SHEET_ACCEPT = '.xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv';
@@ -48,6 +76,8 @@ function initial() {
     // are being read now; editing: null, 'new' or a campaign's key; notice: what was just done (readingNotice: it says products are being
     // read, so it goes when that ends); fold: the box opened or shut by hand (null: open only while there is no campaign).
     campaigns: { list: [], loaded: false, loadError: null, reading: false, gen: 0, editing: null, values: blankCampaign(), busy: false, error: null, notice: null, readingNotice: false, fold: null },
+    // The Google login, as the server says it (data.google); error: a button's; lost: the server could not be asked; seq: newer answers win.
+    account: { data: null, error: null, lost: null, busy: false, seq: 0 },
     poll: null,
   };
 }
@@ -246,14 +276,50 @@ async function campaignAction(ctx, key, action) {
   }
 }
 
+// ---- the Google login in the top bar (copied from the Amazon screen, views/amazon.js, and changed for Flipkart) ----
+
+async function loadAccount(ctx) {
+  const n = ++ctx.state.account.seq;
+  try {
+    const data = await ctx.local.api('GET', `${BASE}/account`);
+    if (n !== ctx.state.account.seq) return;
+    ctx.update((st) => {
+      // A button's message goes once the login moves on.
+      if (st.account.data?.google?.state !== data?.google?.state) st.account.error = null;
+      Object.assign(st.account, { data, lost: null });
+    });
+  } catch (err) {
+    if (n !== ctx.state.account.seq) return;
+    ctx.update((st) => Object.assign(st.account, { lost: err.message }));
+  }
+}
+
+/** One of the Google login's buttons ('google/…'): the server does it, and the top bar follows it. */
+async function startLogin(ctx, what) {
+  if (ctx.state.account.busy) return;
+  ctx.update((st) => Object.assign(st.account, { busy: true, error: null }));
+  try {
+    const data = await ctx.local.api('POST', `${BASE}/${what}`, {});
+    // An answer to an earlier question must not draw over this one.
+    ctx.state.account.seq++;
+    ctx.update((st) => Object.assign(st.account, { busy: false, data }));
+  } catch (err) {
+    ctx.update((st) => Object.assign(st.account, { busy: false, error: err.message }));
+  }
+}
+
 function enter(ctx) {
-  // The box looks again every 2 seconds, only while products are being read.
+  // Every 2 seconds the top bar asks about the Google login, and the Campaigns box looks again while products are being read.
   if (!ctx.state.poll && typeof ctx.every === 'function') {
-    const stop = ctx.every(READING_POLL_MS, () => pollCampaigns(ctx));
+    const stop = ctx.every(READING_POLL_MS, () => {
+      pollCampaigns(ctx);
+      loadAccount(ctx);
+    });
     ctx.update((st) => (st.poll = stop));
   }
   const sheet = loadSaved(ctx);
   loadCampaigns(ctx);
+  loadAccount(ctx);
   return sheet;
 }
 
@@ -267,6 +333,8 @@ function reset(ctx) {
     st.loadGen += 1;
     st.campaigns.busy = false;
     st.campaigns.gen += 1;
+    st.account.busy = false;
+    st.account.seq += 1;
   });
 }
 
@@ -279,6 +347,46 @@ function marketTabs(ctx) {
     h('button', { type: 'button', role: 'tab', class: 'fk-market-tab', 'aria-selected': 'false', onclick: () => ctx.go('amazon'), 'data-id': 'market-amazon' }, icon(h, 'bag'), 'Amazon'),
     h('button', { type: 'button', role: 'tab', class: 'fk-market-tab', 'aria-selected': 'true', 'data-id': 'market-flipkart' }, icon(h, 'bag'), 'Flipkart'),
   );
+}
+
+/**
+ * The Google login in the top bar, the same as on the Amazon screen: one
+ * state at a time, its button when one is needed, and what to do in a soft
+ * box under the bar. The screenshots on Google Drive are downloaded through
+ * this login. When Google will not let anyone log in inside the Flipkart
+ * Google Browser window, a normal Chrome window on the same saved profile is
+ * offered. A button's refusal, or a server that cannot be asked, is said
+ * under the bar too, as the Amazon login line says it.
+ */
+function googleBar(ctx) {
+  const { h, words, state } = ctx;
+  const a = state.account;
+  const d = obj(obj(a.data).google);
+  const kind = ['in', 'out', 'waiting', 'problem'].includes(d.state) ? d.state : 'checking';
+  const button = (label, what, title = null, cls = 'btn btn-primary btn-small') => h('button', { type: 'button', class: cls, title, disabled: a.busy, onclick: () => startLogin(ctx, what), 'data-id': what.replace('/', '-') }, icon(h, 'login'), label);
+  const [mark, text] = { in: ['pass', GOOGLE_WORDS.in(d.name)], out: ['user', GOOGLE_WORDS.out], waiting: ['spinner', GOOGLE_WORDS.waitingShort], problem: ['warn', GOOGLE_WORDS.problemShort], checking: ['spinner', GOOGLE_WORDS.checking] }[kind];
+  const help = kind === 'waiting' ? (d.chrome ? GOOGLE_WORDS.waitingChrome : GOOGLE_WORDS.waiting) : kind === 'problem' ? d.says : null;
+  const chrome = () => button(GOOGLE_WORDS.chromeButton, 'google/log-in-in-chrome', GOOGLE_WORDS.chromeHow, 'btn btn-quiet btn-small');
+  // While Google's login page shows in the window, the normal Chrome window is offered under the bar, for when Google will not allow the login there.
+  const offer = kind === 'waiting' && !d.chrome ? h('p', { class: 'fk-bar-offer' }, GOOGLE_WORDS.chromeOffer, ' ', chrome()) : null;
+  const problem = a.error ?? a.lost;
+  return [
+    h(
+      'div',
+      // While checking, the line has the plain look (the Amazon screen's checking class has no look of its own either).
+      { class: kind === 'checking' ? 'fk-account' : `fk-account fk-account-${kind}`, key: 'google-account', 'data-id': 'google-account' },
+      h('p', { class: 'fk-account-line', role: kind === 'in' ? null : 'status', 'data-id': 'google-line' }, icon(h, mark, mark === 'spinner' ? 'icon-spin' : ''), text),
+      kind === 'out' ? button(GOOGLE_WORDS.outButton, 'google/log-in', GOOGLE_WORDS.outHow) : null,
+      kind === 'problem' ? [button(GOOGLE_WORDS.problemButton, 'google/check-login'), chrome()] : null,
+      kind === 'waiting' && d.chrome ? button(GOOGLE_WORDS.doneButton, 'google/logged-in') : null,
+    ),
+    help || problem ? h('div', { class: 'fk-bar-help', key: 'google-help', 'data-id': 'google-help' }, help ? words.notice(h, kind === 'problem' ? 'warn' : 'info', help) : null, offer, words.notice(h, 'error', problem)) : null,
+  ];
+}
+
+/** What the top bar shows for this screen, after the dashboard's name: the marketplace tabs and the Google login line, then what to do under the bar. */
+function renderBar(ctx) {
+  return [marketTabs(ctx), ...googleBar(ctx)];
 }
 
 function columnLetter(col) {
@@ -677,7 +785,7 @@ export default {
   enter,
   reset,
   render: renderScreen,
-  bar: marketTabs,
+  bar: renderBar,
   dropFile,
   dragging,
 };

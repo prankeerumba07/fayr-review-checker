@@ -1,7 +1,7 @@
 /* The Flipkart screen, in the shared look (styles.css). Its own look is
    copied from the Amazon screen's (views/amazon.css) under Flipkart's own
    names (fk-), so nothing here can change the Amazon screen: the marketplace
-   tabs, the upload area with the lines about the file and the column
+   tabs and the Google login in the top bar, the upload area with the lines about the file and the column
    chooser, the Campaigns box and the table of rows. */
 
 /* ---- the top bar: marketplace tabs ---- */
@@ -10,6 +10,19 @@
 .fk-market-tab { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; font: inherit; font-size: 13px; font-weight: 500; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--muted); cursor: pointer; transition: background-color .15s, color .15s; }
 .fk-market-tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(74, 52, 28, .08); cursor: default; }
 .fk-market-tab[aria-selected="true"] .icon { color: #c99a1e; }
+
+/* ---- the top bar: the Google login, one state at a time, and what to do under the bar ---- */
+
+.fk-account { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.fk-account-line { display: inline-flex; align-items: center; gap: 6px; margin: 0; height: 30px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--quiet-line); background: var(--quiet-bg); color: var(--quiet); font-size: 12px; font-weight: 500; }
+.fk-account-line .icon { width: 14px; height: 14px; }
+.fk-account-in .fk-account-line { background: var(--good-bg); border-color: var(--good-line); color: var(--good); }
+.fk-account-out .fk-account-line { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn); }
+.fk-account-waiting .fk-account-line { background: var(--info-bg); border-color: var(--info-line); color: var(--info); }
+.fk-account-problem .fk-account-line { background: var(--bad-bg); border-color: var(--bad-line); color: var(--bad); }
+.fk-bar-help { flex-basis: 100%; }
+.fk-bar-help .notice { margin: 0; }
+.fk-bar-offer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 0; font-size: 12px; color: var(--muted); }
 
 /* ---- the upload area: a large area until a file is in, then one slim line ---- */
 
