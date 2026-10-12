@@ -17,12 +17,12 @@ A Flipkart checker is being added to this dashboard. The Amazon checker works an
    - The count before any Flipkart work (2026-10-09): 392 tests in 25 test files, all passing.
    - Only the Amazon tests: `node --test --test-concurrency=1 $(ls test/*.test.mjs | grep -v '^test/flipkart')`
 7. Every change gets one line in `CHANGELOG.md`: the date, a tag, and what changed in plain words. The tag is `[AMAZON]` for a change only to Amazon, `[FLIPKART]` for a change only to Flipkart, or `[SHARED]` for a change that is neither only Amazon nor only Flipkart.
+8. Keep each step quick: read only the code the step needs, start no separate reviewer helpers or review workflows unless I ask, and run every test and the syntax check once at the end, and again only after a fix.
 
 ## Good to know before changing anything
 
 - `test/rules.test.mjs` reads every file in this folder except `data/`, `node_modules/` and `.git/`, Flipkart files and these notes included. Three words are banned in every file name and file (they are written in base64 in that test; "Fayr", the name in the top bar, was taken off that list on 2026-10-12); only `exceljs` and `playwright-core` may be used; tests may hold no redirects. Breaking any of these changes the Amazon count.
 - `test/lib.test.mjs` also checks every `views/*.js`, so `views/flipkart.js` too: no `innerHTML` and no `console`.
-- The Flipkart "Coming soon" tab is drawn inside the Amazon screen (`marketTabs()` in `views/amazon.js`), and an Amazon test (`test/amazon-view.test.mjs`, "the marketplace tabs") requires it to stay switched off. Making that tab work means changing an Amazon file and an Amazon test, so ask the user first.
 
 ## Save point
 
