@@ -31,30 +31,30 @@ after(async () => {
 const AT = '2026-10-12T05:00:00.000Z';
 const now = () => new Date(AT);
 const product = (line) => ({ ...productLines(line).products[0], read: null, problem: null });
-const READ = { at: AT, name: PRODUCT.name, brand: PRODUCT.brand, pid: PRODUCT.pid, itemId: PRODUCT.itemId, rating: PRODUCT.rating, ratings: PRODUCT.ratings, reviews: PRODUCT.reviews, allReviews: PRODUCT.allReviews };
+const READ = { at: AT, name: PRODUCT.name, brand: PRODUCT.brand, variants: PRODUCT.variants, pid: PRODUCT.pid, itemId: PRODUCT.itemId, rating: PRODUCT.rating, ratings: PRODUCT.ratings, reviews: PRODUCT.reviews, allReviews: PRODUCT.allReviews };
 
-test('the saved product page, read in the Live Flipkart Browser: its name, brand, product ID, item ID, stars, ratings and reviews, and the link to all its reviews', { timeout: 120_000 }, async () => {
+test('the saved product page, read in the Live Flipkart Browser: its name, brand, other sizes, product ID, item ID, stars, ratings and reviews, and the link to all its reviews', { timeout: 120_000 }, async () => {
   await live.begin();
   const res = await live.open(URLS.product);
   assert.deepEqual([res.ok, res.status, res.url], [true, 200, URLS.product]);
   assert.deepEqual(whatPageIs(res.facts, res.status), { kind: 'page', why: null }, 'a product page, not a robot check, though its reviews say many things');
-  assert.deepEqual(productOnPage(res.facts), { name: PRODUCT.name, brand: 'Renee', pid: 'FCPHEW7AM9C7RU24', itemId: 'itm50a9094e8e73a', rating: 4.2, ratings: 1355, reviews: 47, allReviews: PRODUCT.allReviews });
+  assert.deepEqual(productOnPage(res.facts), { name: PRODUCT.name, brand: 'Renee', pid: 'FCPHEW7AM9C7RU24', itemId: 'itm50a9094e8e73a', variants: [{ pid: 'FCPHZGXXGCHZH83U', label: '20 ml' }], rating: 4.2, ratings: 1355, reviews: 47, allReviews: PRODUCT.allReviews }, 'its other size, 20 ml; never its own, 50 ml');
   const link = product(URLS.product);
-  assert.deepEqual(await readProduct(live, link, { now }), { product: { ...link, read: READ, problem: null }, stop: null }, 'and as a campaign keeps it');
+  assert.deepEqual(await readProduct(live, link, 'Renee', { now }), { product: { ...link, read: READ, problem: null }, stop: null }, 'and as a campaign of its brand keeps it');
 });
 
 test('a product ID alone: Flipkart\'s page for that ID is read; when no product page opens from it, "Add this product\'s link instead"', { timeout: 120_000 }, async () => {
   const byId = product('FCPHEW7AM9C7RU24');
   assert.equal(byId.url, URLS.byId);
-  const read = await readProduct(live, byId, { now });
+  const read = await readProduct(live, byId, 'Renee', { now });
   assert.deepEqual(read.product.read, READ, 'the item ID comes from the page');
   const missing = product('FCPHTESTMISS0001');
-  assert.deepEqual((await readProduct(live, missing, { now })).product.problem, { says: ADD_LINK_SAYS, at: AT, final: true });
+  assert.deepEqual((await readProduct(live, missing, 'Renee', { now })).product.problem, { says: ADD_LINK_SAYS, at: AT, final: true });
 });
 
 test('a robot check, a block and an error: "Flipkart prevented this check", and the product is not read', { timeout: 120_000 }, async () => {
   for (const [kind, url] of [['captcha', URLS.robot], ['blocked', URLS.blocked], ['error', URLS.error]]) {
-    const out = await readProduct(live, product(url), { now });
+    const out = await readProduct(live, product(url), 'Renee', { now });
     assert.deepEqual([out.stop, out.product.read, out.product.problem], [kind, null, { says: PREVENTED_SAYS[kind], at: AT, retry: true, stop: kind }], kind);
   }
 });
@@ -62,8 +62,8 @@ test('a robot check, a block and an error: "Flipkart prevented this check", and 
 test('a page that is not a product is said in plain words; and every page is opened signed out, even after a login made by hand in the window', { timeout: 120_000 }, async () => {
   // A login left in the window by hand (a cookie) is gone before the next page opens.
   await live.context.addCookies([{ name: 'test-login', value: 'made-up', domain: '.flipkart.com', path: '/', expires: Math.floor(Date.now() / 1000) + 3600 }]);
-  const out = await readProduct(live, product(URLS.search), { now });
-  assert.deepEqual([out.stop, out.product.problem], [null, { says: 'This link does not open a product page on Flipkart, so this product was not read.', at: AT, final: true }]);
+  const out = await readProduct(live, product(URLS.search), 'Renee', { now });
+  assert.deepEqual([out.stop, out.product.problem], [null, { says: 'This link does not open a product page on Flipkart, so this product is not used.', at: AT, final: true }]);
   assert.deepEqual(await live.context.cookies('https://www.flipkart.com/'), [], 'signed out');
 });
 

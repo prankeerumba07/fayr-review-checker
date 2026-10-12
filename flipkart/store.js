@@ -30,10 +30,24 @@ function cleanCell(c) {
  */
 export function putCampaign(list, campaign, at = new Date().toISOString()) {
   const i = list.findIndex((c) => c.key === campaign.key);
-  const kept = { ...campaign, campaignId: cleanText(campaign.campaignId, 60), name: cleanText(campaign.name, 80), live: Boolean(campaign.live), createdAt: i >= 0 ? list[i].createdAt : at, updatedAt: at };
+  const kept = { ...campaign, brand: cleanText(campaign.brand, 60), name: cleanText(campaign.name, 80), live: Boolean(campaign.live), createdAt: i >= 0 ? list[i].createdAt : at, updatedAt: at };
   if (i >= 0) list[i] = kept;
   else list.push(kept);
   return kept;
+}
+
+/**
+ * A campaign as it is kept now. One saved before campaigns had a brand (with
+ * a Campaign ID, until 12-10-2026) is kept: its Campaign ID becomes its name
+ * and its brand is left empty, so it is not used until its brand is added;
+ * a product read then, before the other colours and sizes were read, is read
+ * again.
+ */
+function upToDate(c) {
+  if (!c || typeof c !== 'object' || !Object.hasOwn(c, 'campaignId')) return c;
+  const { campaignId, name: _before, ...rest } = c;
+  const products = (Array.isArray(c.products) ? c.products : []).map((p) => (p?.read && !Array.isArray(p.read.variants) ? { ...p, read: null, problem: null } : p));
+  return { ...rest, brand: '', name: cleanText(campaignId, 80), products };
 }
 
 export function createFlipkartStore(dataDir) {
@@ -63,7 +77,7 @@ export function createFlipkartStore(dataDir) {
 
   async function allCampaigns() {
     const d = await readJson(campaignsFile, null);
-    return Array.isArray(d?.campaigns) ? d.campaigns : [];
+    return Array.isArray(d?.campaigns) ? d.campaigns.map(upToDate) : [];
   }
   /**
    * Changes the campaigns as they are saved now, one change at a time: fn

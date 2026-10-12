@@ -1,17 +1,20 @@
 // Flipkart's campaign routes, over HTTP, through serve.mjs, with a pretend
 // Live Flipkart Browser that opens no window and no website: adding a
-// campaign and its products read one at a time after it is saved (a product
-// link, a product ID alone), a robot check, a block or an error stopping the
-// reading ("Flipkart prevented this check"), a page that is not a product,
-// changing, ending and deleting a campaign, the form's checks, waiting while
-// products are read, and the same safety as the other Flipkart routes. Kept
-// only in data/flipkart/campaigns.json. Made-up campaigns and products only.
+// campaign (a brand, a name, live or ended, and products, as on Amazon) and
+// its products read one at a time after it is saved (a product link, a
+// product ID alone), each used only when its brand is the campaign's; a robot
+// check, a block or an error stopping the reading ("Flipkart prevented this
+// check"); a page that is not a product; changing, ending and deleting a
+// campaign; a campaign saved with a Campaign ID before campaigns had a brand;
+// the form's checks; waiting while products are read; and the same safety as
+// the other Flipkart routes. Kept only in data/flipkart/campaigns.json.
+// Made-up campaigns and products only.
 // Run: node test/flipkart-campaign-routes.test.mjs
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request } from 'node:http';
-import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -36,17 +39,18 @@ const auth = (req) => sessions.verify(bearerOf(req));
 const TOKEN = sessions.get().token;
 
 const GLOW = 'https://www.flipkart.com/test-glow-face-mask/p/itmtestglow0001?pid=FCPTESTGLOW00001';
+const GLOW_PID = 'FCPTESTGLOW00001';
 const CLAY_PID = 'FCPTESTCLAY00001';
 const CLAY_BY_ID = 'https://www.flipkart.com/product/p/itme?pid=FCPTESTCLAY00001';
 const JAR = 'https://www.flipkart.com/test-jar/p/itmtestjar00001?pid=FCPTESTJAR000001';
 const SEARCH = 'https://www.flipkart.com/search?q=face%20mask';
 const MISSING_PID = 'FCPTESTMISS00001';
 
-/** The made-up products the pretend Flipkart shows, by product ID. */
+/** The made-up products the pretend Flipkart shows, by product ID, with the other colours and sizes each page lists. */
 const MADE_UP = {
-  FCPTESTGLOW00001: { name: 'Test Glow Face Mask', brand: 'Test Glow', slug: 'test-glow-face-mask', itemId: 'itmtestglow0001', rating: 4.1, ratings: 120, reviews: 12 },
-  FCPTESTCLAY00001: { name: 'Test Clay Face Mask', brand: null, slug: 'test-clay-face-mask', itemId: 'itmtestclay0001', rating: 3.9, ratings: 8, reviews: 0 },
-  FCPTESTJAR000001: { name: 'Test Jar', brand: 'Test Home', slug: 'test-jar', itemId: 'itmtestjar00001', rating: null, ratings: null, reviews: null },
+  FCPTESTGLOW00001: { name: 'Test Glow Face Mask', brand: 'Test Glow', slug: 'test-glow-face-mask', itemId: 'itmtestglow0001', rating: 4.1, ratings: 120, reviews: 12, variants: [{ pid: 'FCPTESTGLOW00002', label: '100 ml' }, { pid: 'FCPTESTGLOW00003', label: null }] },
+  FCPTESTCLAY00001: { name: 'Test Clay Face Mask', brand: null, slug: 'test-clay-face-mask', itemId: 'itmtestclay0001', rating: 3.9, ratings: 8, reviews: 0, variants: [] },
+  FCPTESTJAR000001: { name: 'Test Jar', brand: 'Test Home', slug: 'test-jar', itemId: 'itmtestjar00001', rating: null, ratings: null, reviews: null, variants: [] },
 };
 const page = (url, facts = {}, status = 200) => ({ ok: true, status, url, facts: { url, title: 'Flipkart', text: '', canonical: null, product: null, reviewLinks: [], robotFrame: false, robotForm: false, ...facts } });
 /** What the pretend Live Flipkart Browser reads at an address: a made-up product page, Flipkart's "page not found", or a search page. */
@@ -61,9 +65,12 @@ function pageOf(url) {
     canonical: `https://www.flipkart.com/${p.slug}/p/${p.itemId}`,
     product: { name: p.name, brand: p.brand, sku: pid, rating: p.rating, ratings: p.ratings, reviews: p.reviews },
     reviewLinks: p.ratings || p.reviews ? [`https://www.flipkart.com/${p.slug}/product-reviews/${p.itemId}?pid=${pid}&lid&marketplace=FLIPKART`] : [],
+    variants: p.variants,
   });
 }
 const allReviews = (pid) => `https://www.flipkart.com/${MADE_UP[pid].slug}/product-reviews/${MADE_UP[pid].itemId}?pid=${pid}&marketplace=FLIPKART`;
+/** One product as the screen is shown it. */
+const shown = (given, state, extra = {}) => ({ given, state, name: null, brand: null, variants: [], variantCount: 0, at: AT, says: null, prevented: false, ...extra });
 
 /** A pretend Live Flipkart Browser: every address it is asked to open, a page that shows a robot check, a block or an error (stops), and a wait the next page holds for (hold). */
 function fakeBrowser() {
@@ -161,9 +168,9 @@ function filesIn(dir) {
   return out.sort();
 }
 
-test('adding a campaign: its Campaign ID, name, live or ended and products are kept only in data/flipkart/campaigns.json, and each product is read from its Flipkart page, one at a time', async () => {
+test("adding a campaign: its brand, name, live or ended and products are kept only in data/flipkart/campaigns.json; each product is read from its Flipkart page, one at a time, and used only when its brand is the campaign's; the other details read are kept, not shown", async () => {
   const { dir, at, browser } = await fresh();
-  const added = await add(at, { campaignId: 'FK-TEST-1', name: 'Test Glow', live: true, products: `${GLOW}\n${CLAY_PID}` });
+  const added = await add(at, { brand: 'Test Glow', name: 'Test Glow Clean', live: true, products: `${GLOW}\n${CLAY_PID}` });
   assert.equal(added.status, 201, added.text);
   assert.equal(added.json.reading, true, 'its products are being read');
   assert.deepEqual(added.json.campaign.products.map((p) => [p.given, p.state]), [[GLOW, 'waiting'], [CLAY_PID, 'waiting']]);
@@ -171,13 +178,13 @@ test('adding a campaign: its Campaign ID, name, live or ended and products are k
   const [c] = done.campaigns;
   assert.deepEqual({ ...c, key: CAMPAIGN_KEY.test(c.key), updatedAt: typeof c.updatedAt }, {
     key: true,
-    campaignId: 'FK-TEST-1',
-    name: 'Test Glow',
+    brand: 'Test Glow',
+    name: 'Test Glow Clean',
     live: true,
     updatedAt: 'string',
     products: [
-      { given: GLOW, state: 'read', name: 'Test Glow Face Mask', brand: 'Test Glow', pid: 'FCPTESTGLOW00001', itemId: 'itmtestglow0001', rating: 4.1, ratings: 120, reviews: 12, allReviews: allReviews('FCPTESTGLOW00001'), at: AT, says: null, prevented: false },
-      { given: CLAY_PID, state: 'read', name: 'Test Clay Face Mask', brand: null, pid: CLAY_PID, itemId: 'itmtestclay0001', rating: 3.9, ratings: 8, reviews: 0, allReviews: allReviews(CLAY_PID), at: AT, says: null, prevented: false },
+      shown(GLOW, 'used', { name: 'Test Glow Face Mask', brand: 'Test Glow', variants: ['100 ml'], variantCount: 2 }),
+      shown(CLAY_PID, 'not used', { name: 'Test Clay Face Mask', says: 'The product\'s page shows no brand, and its name "Test Clay Face Mask" does not include "Test Glow", so this product is not used.' }),
     ],
   });
   assert.deepEqual(browser.opened, [GLOW, CLAY_BY_ID], "one page for each product; the product ID alone opened as Flipkart's page for it");
@@ -185,8 +192,10 @@ test('adding a campaign: its Campaign ID, name, live or ended and products are k
   assert.equal(statSync(join(dir, 'flipkart')).mode & 0o777, 0o700);
   assert.equal(statSync(join(dir, 'flipkart', 'campaigns.json')).mode & 0o777, 0o600);
   const kept = JSON.parse(readFileSync(join(dir, 'flipkart', 'campaigns.json'), 'utf8')).campaigns[0];
-  assert.deepEqual(Object.keys(kept).sort(), ['campaignId', 'createdAt', 'key', 'live', 'name', 'products', 'updatedAt']);
-  assert.deepEqual({ ...kept.products[1], read: Object.keys(kept.products[1].read) }, { given: CLAY_PID, url: CLAY_BY_ID, pid: CLAY_PID, itemId: 'itmtestclay0001', byId: true, read: ['at', 'name', 'brand', 'pid', 'itemId', 'rating', 'ratings', 'reviews', 'allReviews'], problem: null });
+  assert.deepEqual(Object.keys(kept).sort(), ['brand', 'createdAt', 'key', 'live', 'name', 'products', 'updatedAt']);
+  // Every detail read is kept for the later steps: the product ID, the item ID, the stars, the counts and the link to all reviews too.
+  assert.deepEqual(kept.products[0].read, { at: AT, name: 'Test Glow Face Mask', brand: 'Test Glow', variants: [{ pid: 'FCPTESTGLOW00002', label: '100 ml' }, { pid: 'FCPTESTGLOW00003', label: null }], pid: GLOW_PID, itemId: 'itmtestglow0001', rating: 4.1, ratings: 120, reviews: 12, allReviews: allReviews(GLOW_PID) });
+  assert.deepEqual({ ...kept.products[1], read: Object.keys(kept.products[1].read).sort() }, { given: CLAY_PID, url: CLAY_BY_ID, pid: CLAY_PID, itemId: 'itmtestclay0001', byId: true, read: ['allReviews', 'at', 'brand', 'itemId', 'name', 'pid', 'rating', 'ratings', 'reviews', 'variants'], problem: { says: c.products[1].says, at: AT } });
   // The dashboard started again on the same data folder: the same campaigns, with no page opened.
   const again = await fresh(fakeBrowser(), dir);
   assert.deepEqual((await campaigns(again.at)).json, done);
@@ -195,16 +204,15 @@ test('adding a campaign: its Campaign ID, name, live or ended and products are k
 
 test('a product ID alone that opens no product page: "Add this product\'s link instead"; a page that is not a product is said plainly; the others are still read', async () => {
   const { at, browser } = await fresh();
-  assert.equal((await add(at, { campaignId: 'FK-TEST-2', products: `${MISSING_PID}\n${SEARCH}\n${JAR}` })).status, 201);
+  assert.equal((await add(at, { brand: 'Test Home', name: 'Test Home Jars', products: `${MISSING_PID}\n${SEARCH}\n${JAR}` })).status, 201);
   const done = await readingDone(at);
   assert.deepEqual(done.campaigns[0].products.map((p) => [p.given, p.state, p.says]), [
-    [MISSING_PID, 'not read', ADD_LINK_SAYS],
-    [SEARCH, 'not read', 'This link does not open a product page on Flipkart, so this product was not read.'],
-    [JAR, 'read', null],
+    [MISSING_PID, 'not used', ADD_LINK_SAYS],
+    [SEARCH, 'not used', 'This link does not open a product page on Flipkart, so this product is not used.'],
+    [JAR, 'used', null],
   ]);
-  assert.deepEqual(done.campaigns[0].products[2], { given: JAR, state: 'read', name: 'Test Jar', brand: 'Test Home', pid: 'FCPTESTJAR000001', itemId: 'itmtestjar00001', rating: null, ratings: null, reviews: null, allReviews: null, at: AT, says: null, prevented: false }, 'no stars, ratings or reviews yet');
+  assert.deepEqual(done.campaigns[0].products[2], shown(JAR, 'used', { name: 'Test Jar', brand: 'Test Home' }), 'no other colours or sizes listed');
   assert.deepEqual(browser.opened, [`https://www.flipkart.com/product/p/itme?pid=${MISSING_PID}`, SEARCH, JAR]);
-  assert.equal(done.campaigns[0].name, '', 'the name may be left out');
 });
 
 test('a robot check, a block or an error stops the reading: "Flipkart prevented this check", the product is not read, the ones after it are not read yet, and "Read the products again" reads them; a page that cannot be opened at all stops it too', async () => {
@@ -213,64 +221,99 @@ test('a robot check, a block or an error stops the reading: "Flipkart prevented 
     const browser = fakeBrowser();
     browser.stops.set(CLAY_BY_ID, kind);
     const { at } = await fresh(browser);
-    assert.equal((await add(at, { campaignId: `FK-STOP-${kind}`, products: [GLOW, CLAY_PID, JAR].join('\n') })).status, 201);
+    assert.equal((await add(at, { brand: 'Test', name: `Test stop ${kind}`, products: [GLOW, CLAY_PID, JAR].join('\n') })).status, 201);
     const done = await readingDone(at);
     const [c] = done.campaigns;
-    assert.deepEqual(c.products.map((p) => [p.state, p.says, p.prevented]), [['read', null, false], ['stopped', SAYS[kind], kind !== 'network'], ['waiting', null, false]], kind);
+    assert.deepEqual(c.products.map((p) => [p.state, p.says, p.prevented]), [['used', null, false], ['stopped', SAYS[kind], kind !== 'network'], ['waiting', null, false]], kind);
     assert.deepEqual(browser.opened, [GLOW, CLAY_BY_ID], `${kind}: no other page is opened`);
-    // Flipkart shows the page again later: "Read the products again" reads only the products not read.
+    // Flipkart shows the page again later: "Read the products again" reads only the products not used.
     browser.stops.clear();
     const again = await call(at, 'POST', `/local/flipkart/campaigns/${c.key}/read`, { json: {} });
     assert.deepEqual([again.status, again.json.reading], [200, true], kind);
-    assert.deepEqual((await readingDone(at)).campaigns[0].products.map((p) => p.state), ['read', 'read', 'read'], kind);
+    assert.deepEqual((await readingDone(at)).campaigns[0].products.map((p) => p.state), ['used', 'used', 'used'], kind);
     assert.deepEqual(browser.opened, [GLOW, CLAY_BY_ID, CLAY_BY_ID, JAR], kind);
   }
 });
 
-test('changing a campaign keeps what was read for a product typed before and reads only the new one; ending and deleting it', async () => {
+test('changing a campaign keeps what was read for a product typed before and reads only the new one, and a changed brand is checked again with no page opened; a campaign saved with a Campaign ID before campaigns had a brand is kept, named by its Campaign ID, with no brand until Change adds it; ending and deleting', async () => {
   const { dir, at, browser } = await fresh();
-  const added = await add(at, { campaignId: 'FK-TEST-4', name: 'Test Glow', live: true, products: GLOW });
+  const added = await add(at, { brand: 'Test', name: 'Test Glow', live: true, products: GLOW });
   const key = added.json.campaign.key;
   await readingDone(at);
-  const changed = await call(at, 'POST', `/local/flipkart/campaigns/${key}`, { json: { campaignId: 'FK-TEST-4', name: 'Test Glow and Jar', live: true, products: `${GLOW}\n${JAR}` } });
+  const changed = await call(at, 'POST', `/local/flipkart/campaigns/${key}`, { json: { brand: 'Test', name: 'Test Glow and Jar', live: true, products: `${GLOW}\n${JAR}` } });
   assert.equal(changed.status, 200, changed.text);
   assert.deepEqual([changed.json.campaign.key, changed.json.campaign.name], [key, 'Test Glow and Jar']);
-  assert.deepEqual(changed.json.campaign.products.map((p) => [p.given, p.state]), [[GLOW, 'read'], [JAR, 'waiting']]);
+  assert.deepEqual(changed.json.campaign.products.map((p) => [p.given, p.state]), [[GLOW, 'used'], [JAR, 'waiting']]);
   await readingDone(at);
   assert.deepEqual(browser.opened, [GLOW, JAR], 'only the new product is read');
+  const rebranded = await call(at, 'POST', `/local/flipkart/campaigns/${key}`, { json: { brand: 'Test Glow', name: 'Test Glow and Jar', live: true, products: `${GLOW}\n${JAR}` } });
+  assert.deepEqual(rebranded.json.campaign.products.map((p) => [p.state, p.says]), [['used', null], ['not used', 'Flipkart says this product\'s brand is "Test Home", not "Test Glow", so this product is not used.']]);
+  assert.deepEqual([rebranded.json.reading, browser.opened], [false, [GLOW, JAR]], 'no page is opened again');
   const ended = await call(at, 'POST', `/local/flipkart/campaigns/${key}/end`, { json: {} });
-  assert.deepEqual([ended.status, ended.json.campaigns[0].live, ended.json.campaigns[0].products.map((p) => p.state)], [200, false, ['read', 'read']]);
+  assert.deepEqual([ended.status, ended.json.campaigns[0].live, ended.json.campaigns[0].products.map((p) => p.state)], [200, false, ['used', 'not used']]);
   const deleted = await call(at, 'POST', `/local/flipkart/campaigns/${key}/delete`, { json: {} });
   assert.deepEqual([deleted.status, deleted.json], [200, { campaigns: [], reading: false }]);
   assert.deepEqual(JSON.parse(readFileSync(join(dir, 'flipkart', 'campaigns.json'), 'utf8')), { campaigns: [] });
   for (const path of [`/local/flipkart/campaigns/${key}`, `/local/flipkart/campaigns/${key}/end`]) {
-    const gone = await call(at, 'POST', path, { json: { campaignId: 'FK-TEST-4', products: GLOW } });
+    const gone = await call(at, 'POST', path, { json: { brand: 'Test', name: 'Test Glow', products: GLOW } });
     assert.deepEqual([gone.status, gone.json.message], [404, 'This campaign is no longer saved. Reload the page.'], path);
   }
+  // Saved with a Campaign ID, before campaigns had a brand: kept, its Campaign ID as its name and its brand empty (it is not used
+  // until Change adds one); a product read then, before the other colours and sizes were read, is read again.
+  const old = tempDir();
+  const OLD_KEY = 'f0000000000d4';
+  mkdirSync(join(old, 'flipkart'), { recursive: true });
+  writeFileSync(join(old, 'flipkart', 'campaigns.json'), JSON.stringify({
+    campaigns: [{
+      key: OLD_KEY,
+      campaignId: 'FK-OLD-1',
+      name: 'Test Old',
+      live: true,
+      createdAt: AT,
+      updatedAt: AT,
+      products: [
+        { given: GLOW, url: GLOW, pid: GLOW_PID, itemId: 'itmtestglow0001', byId: false, read: { at: AT, name: 'Test Glow Face Mask', brand: 'Test Glow', pid: GLOW_PID, itemId: 'itmtestglow0001', rating: 4.1, ratings: 120, reviews: 12, allReviews: allReviews(GLOW_PID) }, problem: null },
+        { given: MISSING_PID, url: `https://www.flipkart.com/product/p/itme?pid=${MISSING_PID}`, pid: MISSING_PID, itemId: null, byId: true, read: null, problem: { says: ADD_LINK_SAYS, at: AT, final: true } },
+      ],
+    }],
+  }));
+  const was = await fresh(fakeBrowser(), old);
+  const [kept] = (await campaigns(was.at)).json.campaigns;
+  assert.deepEqual([kept.key, kept.brand, kept.name, kept.live, kept.products.map((p) => [p.state, p.says])], [OLD_KEY, '', 'FK-OLD-1', true, [['waiting', null], ['not used', ADD_LINK_SAYS]]]);
+  assert.deepEqual(was.browser.opened, [], 'no page is opened by itself');
+  const branded = await call(was.at, 'POST', `/local/flipkart/campaigns/${OLD_KEY}`, { json: { brand: 'Test Glow', name: 'FK-OLD-1', live: true, products: `${GLOW}\n${MISSING_PID}` } });
+  assert.equal(branded.status, 200, branded.text);
+  const ready = (await readingDone(was.at)).campaigns[0];
+  assert.deepEqual([ready.brand, ready.name, ready.products.map((p) => [p.state, p.variants])], ['Test Glow', 'FK-OLD-1', [['used', ['100 ml']], ['not used', []]]]);
+  assert.deepEqual(was.browser.opened, [GLOW], 'only the product read before the other colours and sizes were read');
+  assert.equal(Object.hasOwn(JSON.parse(readFileSync(join(old, 'flipkart', 'campaigns.json'), 'utf8')).campaigns[0], 'campaignId'), false, 'kept the new way');
 });
 
-test("the form is checked in plain words: the Campaign ID is needed and must be the campaign's own, the name is not too long, and the products are Flipkart links or product IDs", async () => {
+test("the form is checked in plain words, as on Amazon: the brand and the campaign's name are needed and not too long, and the products are Flipkart links or product IDs; there is no Campaign ID", async () => {
   const { dir, at } = await fresh();
   const say = async (json) => {
     const r = await add(at, json);
     return [r.status, r.json.message];
   };
-  assert.deepEqual(await say({ campaignId: '  ', products: GLOW }), [400, 'Write the Campaign ID.']);
-  assert.deepEqual(await say({ campaignId: 'X'.repeat(61), products: GLOW }), [400, 'The Campaign ID is too long: at most 60 letters.']);
-  assert.deepEqual(await say({ campaignId: 'FK-TEST-5', name: 'N'.repeat(81), products: GLOW }), [400, "The campaign's name is too long: at most 80 letters."]);
-  assert.deepEqual(await say({ campaignId: 'FK-TEST-5', products: '  \n ' }), [400, 'Write at least one product: a Flipkart link or a Flipkart product ID on each line.']);
-  assert.deepEqual(await say({ campaignId: 'FK-TEST-5', products: 'Test Glow Face Mask\nhttps://www.amazon.in/dp/B0TESTKIT9' }), [400, 'Line 1 of the products, "Test Glow Face Mask", is not a Flipkart link or a Flipkart product ID. Line 2 of the products is a link to www.amazon.in, not to Flipkart, so it cannot be used.']);
-  const notJson = await call(at, 'POST', '/local/flipkart/campaigns', { body: Buffer.from('campaignId=FK-TEST-5'), type: 'text/plain' });
+  assert.deepEqual(await say({ brand: '  ', name: 'Test Glow', products: GLOW }), [400, 'Write the brand, for example Koparo.']);
+  assert.deepEqual(await say({ campaignId: 'FK-TEST-5', name: 'Test Glow', products: GLOW }), [400, 'Write the brand, for example Koparo.'], 'a Campaign ID is no brand');
+  assert.deepEqual(await say({ brand: 'B'.repeat(61), name: 'Test Glow', products: GLOW }), [400, 'The brand is too long: at most 60 letters.']);
+  assert.deepEqual(await say({ brand: 'Test Glow', name: ' ', products: GLOW }), [400, "Write the campaign's name, for example Koparo Clean."]);
+  assert.deepEqual(await say({ brand: 'Test Glow', name: 'N'.repeat(81), products: GLOW }), [400, "The campaign's name is too long: at most 80 letters."]);
+  assert.deepEqual(await say({ brand: 'Test Glow', name: 'Test Glow', products: '  \n ' }), [400, 'Write at least one product: a Flipkart link or a Flipkart product ID on each line.']);
+  assert.deepEqual(await say({ brand: 'Test Glow', name: 'Test Glow', products: 'Test Glow Face Mask\nhttps://www.amazon.in/dp/B0TESTKIT9' }), [400, 'Line 1 of the products, "Test Glow Face Mask", is not a Flipkart link or a Flipkart product ID. Line 2 of the products is a link to www.amazon.in, not to Flipkart, so it cannot be used.']);
+  const notJson = await call(at, 'POST', '/local/flipkart/campaigns', { body: Buffer.from('brand=Test'), type: 'text/plain' });
   assert.deepEqual([notJson.status, notJson.json.message], [415, 'The request could not be read. Reload the page, then try again.']);
   const broken = await call(at, 'POST', '/local/flipkart/campaigns', { body: Buffer.from('{'), type: 'application/json' });
   assert.deepEqual([broken.status, broken.json.message], [400, 'The request could not be read. Reload the page, then try again.']);
-  const big = await add(at, { campaignId: 'FK-TEST-5', products: 'x'.repeat(70 * 1024) });
+  const big = await add(at, { brand: 'Test Glow', name: 'Test Glow', products: 'x'.repeat(70 * 1024) });
   assert.deepEqual([big.status, big.json?.message], [413, 'That is too large to send here.']);
   assert.deepEqual(filesIn(dir), [], 'nothing was kept');
-  assert.equal((await add(at, { campaignId: 'FK-TEST-5', products: GLOW })).status, 201);
+  assert.equal((await add(at, { brand: 'Test Glow', name: 'Test Glow', products: GLOW })).status, 201);
   await readingDone(at);
-  assert.deepEqual(await say({ campaignId: ' fk-test-5 ', products: JAR }), [400, 'A campaign with the Campaign ID "fk-test-5" is already saved. Change that campaign, or write another Campaign ID.'], 'whatever its capitals');
-  assert.equal((await campaigns(at)).json.campaigns.length, 1);
+  assert.equal((await add(at, { brand: 'Test Glow', name: 'Test Glow', products: GLOW })).status, 201, 'two campaigns may have the same name, as on Amazon');
+  await readingDone(at);
+  assert.equal((await campaigns(at)).json.campaigns.length, 2);
 });
 
 test('while products are read, Save, End, Delete and "Read the products again" wait, in plain words, and nothing changes', async () => {
@@ -278,10 +321,10 @@ test('while products are read, Save, End, Delete and "Read the products again" w
   let release = null;
   browser.hold = new Promise((resolve) => (release = resolve));
   const { at } = await fresh(browser);
-  const added = await add(at, { campaignId: 'FK-TEST-6', products: GLOW });
+  const added = await add(at, { brand: 'Test', name: 'Test 6', products: GLOW });
   const key = added.json.campaign.key;
   const wait = (button) => `The products of a campaign are being read from Flipkart. Wait for it to finish, then press ${button}.`;
-  const saved = await add(at, { campaignId: 'FK-TEST-7', products: JAR });
+  const saved = await add(at, { brand: 'Test', name: 'Test 7', products: JAR });
   assert.deepEqual([saved.status, saved.json.message], [409, wait('Save')]);
   for (const [action, button] of [['end', '"End campaign"'], ['delete', 'Delete'], ['read', '"Read the products again"']]) {
     const r = await call(at, 'POST', `/local/flipkart/campaigns/${key}/${action}`, { json: {} });
@@ -292,7 +335,7 @@ test('while products are read, Save, End, Delete and "Read the products again" w
   assert.deepEqual([during.reading, during.campaigns[0].products[0].state], [true, 'reading']);
   release();
   const done = await readingDone(at);
-  assert.deepEqual([done.campaigns.length, done.campaigns[0].live, done.campaigns[0].products[0].state], [1, true, 'read']);
+  assert.deepEqual([done.campaigns.length, done.campaigns[0].live, done.campaigns[0].products[0].state], [1, true, 'used']);
 });
 
 test('the dashboard stopping while products are read: the Live Flipkart Browser is closed and no other product is read', async () => {
@@ -300,14 +343,14 @@ test('the dashboard stopping while products are read: the Live Flipkart Browser 
   let release = null;
   browser.hold = new Promise((resolve) => (release = resolve));
   const { at, routes } = await fresh(browser);
-  assert.equal((await add(at, { campaignId: 'FK-TEST-11', products: [GLOW, JAR].join('\n') })).status, 201);
+  assert.equal((await add(at, { brand: 'Test', name: 'Test 11', products: [GLOW, JAR].join('\n') })).status, 201);
   while (!browser.opened.length) await new Promise((resolve) => setTimeout(resolve, 5));
   await routes.close();
   assert.equal(browser.closed, 1, 'closed properly');
   release();
   const done = await readingDone(at);
   assert.deepEqual(browser.opened, [GLOW], 'no other page is opened');
-  assert.deepEqual(done.campaigns[0].products.map((p) => p.state), ['read', 'waiting'], 'the rest stay not read yet');
+  assert.deepEqual(done.campaigns[0].products.map((p) => p.state), ['used', 'waiting'], 'the rest stay not read yet');
 });
 
 test('two campaigns saved at the same moment: one is kept and read, the other waits, in plain words', async () => {
@@ -315,19 +358,19 @@ test('two campaigns saved at the same moment: one is kept and read, the other wa
   let release = null;
   browser.hold = new Promise((resolve) => (release = resolve));
   const { at } = await fresh(browser);
-  const both = await Promise.all([add(at, { campaignId: 'FK-TEST-9', products: GLOW }), add(at, { campaignId: 'FK-TEST-10', products: JAR })]);
+  const both = await Promise.all([add(at, { brand: 'Test', name: 'Test 9', products: GLOW }), add(at, { brand: 'Test', name: 'Test 10', products: JAR })]);
   assert.deepEqual(both.map((r) => r.status).sort(), [201, 409]);
   assert.equal(both.find((r) => r.status === 409).json.message, 'The products of a campaign are being read from Flipkart. Wait for it to finish, then press Save.');
   release();
   const done = await readingDone(at);
   assert.equal(done.campaigns.length, 1);
-  assert.deepEqual(done.campaigns[0].products.map((p) => p.state), ['read'], 'the one kept is read');
+  assert.deepEqual(done.campaigns[0].products.map((p) => p.state), ['used'], 'the one kept is read');
 });
 
 test('the campaign routes have the same safety: the session token, this page only, only GET, HEAD and POST; a refused request keeps nothing', async () => {
   const { dir, at } = await fresh();
   const KEY = 'f000000000001';
-  for (const [method, path, opts] of [['GET', '/local/flipkart/campaigns', {}], ['POST', '/local/flipkart/campaigns', { json: { campaignId: 'FK-TEST-8', products: GLOW } }], ['POST', `/local/flipkart/campaigns/${KEY}/end`, { json: {} }]]) {
+  for (const [method, path, opts] of [['GET', '/local/flipkart/campaigns', {}], ['POST', '/local/flipkart/campaigns', { json: { brand: 'Test', name: 'Test 8', products: GLOW } }], ['POST', `/local/flipkart/campaigns/${KEY}/end`, { json: {} }]]) {
     assert.equal((await call(at, method, path, { ...opts, token: null })).status, 401, `${method} ${path} with no token`);
     assert.equal((await call(at, method, path, { ...opts, token: 'not.a.token' })).status, 401, `${method} ${path} with a wrong token`);
     assert.equal((await call(at, method, path, { ...opts, site: 'cross-site' })).status, 403, `${method} ${path} from another website`);
@@ -367,7 +410,7 @@ test('the Live Flipkart Browser opens only when a product is read, never when th
   });
   const at = server.address().port;
   assert.deepEqual((await campaigns(at)).json, { campaigns: [], reading: false });
-  assert.equal((await add(at, { campaignId: '', products: GLOW })).status, 400);
+  assert.equal((await add(at, { brand: '', name: '', products: GLOW })).status, 400);
   assert.equal(readdirSync(dir).includes('flipkart'), false, 'no profile');
   await routes.close();
   assert.equal(made, 0, 'no window was made, not even to close it');

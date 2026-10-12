@@ -1,13 +1,17 @@
-// Flipkart campaigns: a Campaign ID (required), a name (optional), live or
-// ended, and the Flipkart products users may buy for it, typed as Flipkart
-// links or Flipkart product IDs (the pid), one per line. Each product is read
-// once from its Flipkart page in the Live Flipkart Browser (one page at a
-// time, at least 3 seconds apart): its name, its brand when shown, its
-// product ID, its item ID, its stars, how many ratings and reviews it has,
-// and the link to all its reviews. A robot check, a block or an error stops
-// the reading ("Flipkart prevented this check"), and is never got around.
-// Copied from the Amazon campaigns (amazon/campaigns.js) and changed for
-// Flipkart. Nothing here checks a row yet.
+// Flipkart campaigns: a brand, a name, live or ended, and the Flipkart products
+// users may buy for it, typed as Flipkart links or Flipkart product IDs (the
+// pid, Flipkart's version of Amazon's ASIN), one per line. Each product is
+// read once from its Flipkart page in the Live Flipkart Browser (one page at a
+// time, at least 3 seconds apart): its name, its brand and the other colours
+// and sizes it lists, and, kept for later steps though not shown, its product
+// ID, its item ID, its stars, how many ratings and reviews it has, and the
+// link to all its reviews. A product is used only when its page is a real
+// product page whose brand (or, when no brand is shown, its name) includes
+// the campaign's brand. A campaign saved before campaigns had a brand has
+// none, and is not used until its brand is added. A robot check, a block or
+// an error stops the reading ("Flipkart prevented this check"), and is never
+// got around. Copied from the Amazon campaigns (amazon/campaigns.js) and
+// changed for Flipkart. Nothing here checks a row yet.
 
 import { randomBytes } from 'node:crypto';
 import { parseUrl, isFlipkart, pidFrom, itemIdFrom, pageForPid, pageForLink, PID } from './links.js';
@@ -36,6 +40,74 @@ export const PREVENTED_SAYS = {
 
 /** When a product was typed as its product ID alone and no product page opened from it. */
 export const ADD_LINK_SAYS = "No Flipkart product page opened from this product ID. Add this product's link instead.";
+
+/** The start of a product's name, up to its first "|" or comma ("Test Glow Face Mask"). Copied from amazon/campaigns.js. */
+export function shortName(name) {
+  const t = String(name ?? '').replace(/\s+/g, ' ').trim();
+  const cut = t.split(/[|,]/)[0].trim();
+  return cut || t;
+}
+
+// Copied from amazon/text.js: words to compare, with capitals, punctuation and invisible marks aside; and how many letters two words differ by.
+function normalizeText(s) {
+  return String(s ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[​-‍⁠﻿­]/g, '')
+    .replace(/[^\p{L}\p{M}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function editDistance(a, b, max = Infinity) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = cur[0];
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < best) best = cur[j];
+    }
+    if (best > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+// The brand rule, copied from amazon/campaigns.js.
+
+/** A name's words for finding a brand in it: capitals, punctuation and accents aside ("Männlich" is mannlich). */
+const brandWords = (t) => normalizeText(String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '')).split(' ').filter(Boolean);
+
+/** The same brand word, or one of six letters or more that differs by one letter ("Manlich" for "Mannlich"). */
+export function sameBrandWord(a, b) {
+  if (a === b) return true;
+  return [...a].length >= 6 && [...b].length >= 6 && editDistance(a, b, 1) <= 1;
+}
+
+/**
+ * True when a brand is in a name, whatever its capitals, spaces, punctuation
+ * or accents: its words one after another ("Test Brand"), or the same letters
+ * written together or apart ("TestBrand", "Test brand"). A brand word of six
+ * letters or more may differ by one letter, as Flipkart may spell it.
+ */
+export function brandIn(name, brand) {
+  const b = brandWords(brand);
+  if (!b.length) return false;
+  const n = brandWords(name);
+  const together = b.join('');
+  for (let i = 0; i < n.length; i++) {
+    if (b.every((w, j) => n[i + j] && sameBrandWord(n[i + j], w))) return true;
+    let joined = '';
+    for (let j = i; j < n.length && joined.length <= together.length + 1; j++) {
+      joined += n[j];
+      if (sameBrandWord(joined, together)) return true;
+    }
+  }
+  return false;
+}
 
 /** A product ID typed alone: 16 letters and digits, with both in it ("FCPHEW7AM9C7RU24"). */
 function pidOfLine(line) {
@@ -76,22 +148,48 @@ export function productLines(text) {
   return { products, problems };
 }
 
-/** A product that was read from its Flipkart page. */
-export const wasRead = (p) => Boolean(p?.read?.name && !p.problem);
+/**
+ * Whether a product read from Flipkart belongs to a campaign's brand: its
+ * brand must include the campaign's brand, or, when the page shows no brand,
+ * its name must. -> null when it does, else the sentence saying why it is not
+ * used. A campaign with no brand (saved before campaigns had one) checks
+ * none: the campaign itself is not used until its brand is added.
+ */
+export function brandProblem(read, brand) {
+  if (!read?.name) return 'This link does not open a product page on Flipkart, so this product is not used.';
+  if (!brandWords(brand).length) return null;
+  if (read.brand) return brandIn(read.brand, brand) ? null : `Flipkart says this product's brand is "${clean(read.brand)}", not "${clean(brand)}", so this product is not used.`;
+  return brandIn(read.name, brand) ? null : `The product's page shows no brand, and its name "${clean(shortName(read.name))}" does not include "${clean(brand)}", so this product is not used.`;
+}
+
+/** A product that is used: read from Flipkart, and confirmed. */
+export const usable = (p) => Boolean(p?.read?.name && !p.problem);
+
+/** Every product of a campaign confirmed again for its brand, from what was read (a changed brand needs no page opened). */
+export function confirmProducts(campaign) {
+  return {
+    ...campaign,
+    products: (campaign.products ?? []).map((p) => {
+      if (!p.read || p.problem?.retry) return p;
+      const says = brandProblem(p.read, campaign.brand);
+      return { ...p, problem: says ? { says, at: p.problem?.at ?? p.read.at } : null };
+    }),
+  };
+}
 
 /** A product still to be read: never read, or its last reading was stopped or could not open the page. */
 export const needsReading = (p) => !p?.read && !p?.problem?.final;
 
 /**
- * Reads one product's page in the Live Flipkart Browser. browser — begin(),
- * open(url, { onWait }). -> { product, stop } where product is the product as
- * it is now, and stop says why nothing more is read now: 'captcha', 'blocked'
- * or 'error' when Flipkart showed one of those ("Flipkart prevented this
- * check"), 'closed' when the window could not be opened or was closed, or
- * 'network' when the page could not be opened at all (no point opening the
- * next one then); else null.
+ * Reads one product's page in the Live Flipkart Browser and confirms it for
+ * the campaign's brand. browser — begin(), open(url, { onWait }). -> {
+ * product, stop } where product is the product as it is now, and stop says
+ * why nothing more is read now: 'captcha', 'blocked' or 'error' when Flipkart
+ * showed one of those ("Flipkart prevented this check"), 'closed' when the
+ * window could not be opened or was closed, or 'network' when the page could
+ * not be opened at all (no point opening the next one then); else null.
  */
-export async function readProduct(browser, product, { onWait, now = () => new Date() } = {}) {
+export async function readProduct(browser, product, brand, { onWait, now = () => new Date() } = {}) {
   const at = now().toISOString();
   const not = (says, extra = {}) => ({ product: { ...product, read: null, problem: { says, at, ...extra } }, stop: null });
   const halt = (says, stop) => ({ product: { ...product, read: null, problem: { says, at, retry: true } }, stop });
@@ -101,11 +199,11 @@ export async function readProduct(browser, product, { onWait, now = () => new Da
     return halt('The Live Flipkart Browser could not be opened on this computer, so this product was not read and the reading stopped.', 'closed');
   }
   const res = await browser.open(product.url, { onWait });
-  if (res?.error === 'elsewhere') return not(`The link leads to ${res.host}, not to Flipkart, so this product was not read.`, { final: true });
+  if (res?.error === 'elsewhere') return not(`The link leads to ${res.host}, not to Flipkart, so this product is not used.`, { final: true });
   if (!res?.ok) return halt(`The Live Flipkart Browser could not open the page, so this product was not read and the reading stopped. ${res?.message ?? ''}`.trim(), res?.error === 'closed' ? 'closed' : 'network');
   // Another website's page is never taken for something Flipkart showed.
   const u = parseUrl(res.url);
-  if (!u || !isFlipkart(u)) return not(`The link leads to ${u ? u.hostname : 'another website'}, not to Flipkart, so this product was not read.`, { final: true });
+  if (!u || !isFlipkart(u)) return not(`The link leads to ${u ? u.hostname : 'another website'}, not to Flipkart, so this product is not used.`, { final: true });
   const page = whatPageIs(res.facts, res.status);
   if (page.kind === 'captcha' || page.kind === 'blocked' || page.kind === 'error') {
     return { product: { ...product, read: null, problem: { says: PREVENTED_SAYS[page.kind], at, retry: true, stop: page.kind } }, stop: page.kind };
@@ -114,12 +212,14 @@ export async function readProduct(browser, product, { onWait, now = () => new Da
   const isProduct = page.kind === 'page' && Boolean(p.name) && Boolean(p.pid || p.itemId);
   // A product ID alone: only a product page with that very ID will do.
   if (product.byId && (!isProduct || p.pid !== product.pid)) return not(ADD_LINK_SAYS, { final: true });
-  if (page.kind === 'not-found') return not('Flipkart says this product page does not exist, so this product was not read.', { final: true });
-  if (!isProduct) return not('This link does not open a product page on Flipkart, so this product was not read.', { final: true });
+  if (page.kind === 'not-found') return not('Flipkart says this product page does not exist, so this product is not used.', { final: true });
+  if (!isProduct) return not('This link does not open a product page on Flipkart, so this product is not used.', { final: true });
   const read = {
     at,
     name: clean(p.name).slice(0, 500),
     brand: p.brand ? clean(p.brand).slice(0, 80) || null : null,
+    // The other colours and sizes: each one's product ID, and its name when the page gives one ("20 ml").
+    variants: p.variants.slice(0, 60).map((v) => ({ pid: v.pid, label: v.label ? clean(v.label).slice(0, 80) || null : null })),
     pid: p.pid,
     itemId: p.itemId,
     rating: p.rating,
@@ -127,5 +227,6 @@ export async function readProduct(browser, product, { onWait, now = () => new Da
     reviews: p.reviews,
     allReviews: p.allReviews,
   };
-  return { product: { ...product, pid: product.pid ?? p.pid, itemId: product.itemId ?? p.itemId, read, problem: null }, stop: null };
+  const says = brandProblem(read, brand);
+  return { product: { ...product, pid: product.pid ?? p.pid, itemId: product.itemId ?? p.itemId, read, problem: says ? { says, at } : null }, stop: null };
 }

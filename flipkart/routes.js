@@ -14,7 +14,7 @@
 import { openWorkbook, SheetError } from './workbook.js';
 import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES } from './store.js';
 import { cellParts } from './links.js';
-import { CAMPAIGN_KEY, newCampaignKey, productLines, wasRead, needsReading, readProduct, clean } from './campaigns.js';
+import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct } from './campaigns.js';
 import { FlipkartBrowser } from './browser.js';
 
 const TOO_BIG = `The file is larger than ${MAX_SHEET_BYTES / (1024 * 1024)} megabytes, so save a smaller copy (only the Flipkart tab, for example), then upload that.`;
@@ -162,26 +162,27 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
 
   // ---- campaigns (copied from the Amazon campaigns, amazon/routes.js, and changed for Flipkart) ----
 
-  /** A campaign as the screen sees it: what staff typed, and under each product what was read from Flipkart and when, or why it was not read. */
+  /**
+   * A campaign as the screen sees it: what staff typed, and under each product
+   * what was read from Flipkart, or why it is not used, as on Amazon; and
+   * whether Flipkart prevented the reading. The other details read (product
+   * ID, item ID, stars, counts, the link to all reviews) are kept, not shown.
+   */
   function campaignView(c) {
     const reading = job?.reading ?? null;
     return {
       key: c.key,
-      campaignId: c.campaignId,
+      brand: c.brand,
       name: c.name,
       live: Boolean(c.live),
       updatedAt: c.updatedAt ?? null,
       products: (c.products ?? []).map((p) => ({
         given: p.given,
-        state: reading?.key === c.key && reading.given === p.given ? 'reading' : wasRead(p) ? 'read' : p.problem ? (p.problem.retry ? 'stopped' : 'not read') : 'waiting',
+        state: reading?.key === c.key && reading.given === p.given ? 'reading' : usable(p) ? 'used' : p.problem ? (p.problem.retry ? 'stopped' : 'not used') : 'waiting',
         name: p.read?.name ?? null,
         brand: p.read?.brand ?? null,
-        pid: p.read?.pid ?? null,
-        itemId: p.read?.itemId ?? null,
-        rating: p.read?.rating ?? null,
-        ratings: p.read?.ratings ?? null,
-        reviews: p.read?.reviews ?? null,
-        allReviews: p.read?.allReviews ?? null,
+        variants: (p.read?.variants ?? []).map((v) => v.label).filter(Boolean),
+        variantCount: (p.read?.variants ?? []).length,
         at: p.problem?.at ?? p.read?.at ?? null,
         says: p.problem?.says ?? null,
         prevented: Boolean(p.problem?.stop),
@@ -202,16 +203,14 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   /** Why a campaign cannot be changed just now, naming the button to press later; null when it can. */
   const campaignBusy = (button) => (job ? `${READING_NOW} Wait for it to finish, then press ${button}.` : null);
 
-  /** A campaign from the screen's form: its Campaign ID, its name, live or ended, and its products, one per line. A product typed before keeps what was read for it. */
-  function campaignFrom(body, old, list) {
+  /** A campaign from the screen's form: its brand, its name, live or ended, and its products, one per line. A product typed before keeps what was read for it. */
+  function campaignFrom(body, old) {
     const words = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
-    const campaignId = words(body?.campaignId);
+    const brand = words(body?.brand);
     const name = words(body?.name);
-    if (!/[\p{L}\p{N}]/u.test(campaignId)) throw new HttpError(400, 'Write the Campaign ID.');
-    if (campaignId.length > 60) throw new HttpError(400, 'The Campaign ID is too long: at most 60 letters.');
-    if (list.some((c) => c.key !== old?.key && String(c.campaignId).toLowerCase() === campaignId.toLowerCase())) {
-      throw new HttpError(400, `A campaign with the Campaign ID "${clean(campaignId)}" is already saved. Change that campaign, or write another Campaign ID.`);
-    }
+    if (!/[\p{L}\p{N}]/u.test(brand)) throw new HttpError(400, 'Write the brand, for example Koparo.');
+    if (brand.length > 60) throw new HttpError(400, 'The brand is too long: at most 60 letters.');
+    if (!/[\p{L}\p{N}]/u.test(name)) throw new HttpError(400, "Write the campaign's name, for example Koparo Clean.");
     if (name.length > 80) throw new HttpError(400, "The campaign's name is too long: at most 80 letters.");
     const { products, problems } = productLines(body?.products);
     if (problems.length) throw new HttpError(400, problems.join(' '));
@@ -220,7 +219,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       const was = (old?.products ?? []).find((x) => x.given === p.given);
       return was ? { ...was, url: p.url } : { ...p, read: null, problem: null };
     });
-    return { key: old?.key ?? newCampaignKey(), campaignId, name, live: body?.live !== false, products: kept };
+    return confirmProducts({ key: old?.key ?? newCampaignKey(), brand, name, live: body?.live !== false, products: kept });
   }
 
   /**
@@ -235,7 +234,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       for (const p of (c?.products ?? []).filter(needsReading)) {
         if (closing) return null;
         mine.reading = { key, given: p.given };
-        const out = await readProduct(liveBrowser(), p, { now });
+        const out = await readProduct(liveBrowser(), p, c.brand, { now });
         await store.setCampaignProduct(key, p.given, out.product);
         if (out.stop) return out.stop;
       }
@@ -274,7 +273,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         if (key && !old) throw new HttpError(404, GONE);
         const busyNow = campaignBusy('Save');
         if (busyNow) throw new HttpError(409, busyNow);
-        const saved = putCampaign(list, campaignFrom(body, old, list));
+        const saved = putCampaign(list, campaignFrom(body, old));
         if (saved.products.some(needsReading)) mine = claim();
         return saved;
       });
@@ -299,8 +298,8 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         if (action === 'delete') list.splice(list.indexOf(c), 1);
         else if (action === 'end') putCampaign(list, { ...c, live: false });
         else {
-          // Every product that was not read is read again.
-          putCampaign(list, { ...c, products: (c.products ?? []).map((p) => (wasRead(p) ? p : { given: p.given, url: p.url, pid: p.pid ?? null, itemId: p.itemId ?? null, byId: Boolean(p.byId), read: null, problem: null })) });
+          // Every product that is not used is read again, as on Amazon.
+          putCampaign(list, { ...c, products: (c.products ?? []).map((p) => (usable(p) ? p : { given: p.given, url: p.url, pid: p.pid ?? null, itemId: p.itemId ?? null, byId: Boolean(p.byId), read: null, problem: null })) });
           mine = claim();
         }
         return true;

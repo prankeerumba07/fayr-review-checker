@@ -18,6 +18,7 @@ A Flipkart checker is being added to this dashboard. The Amazon checker works an
    - Only the Amazon tests: `node --test --test-concurrency=1 $(ls test/*.test.mjs | grep -v '^test/flipkart')`
 7. Every change gets one line in `CHANGELOG.md`: the date, a tag, and what changed in plain words. The tag is `[AMAZON]` for a change only to Amazon, `[FLIPKART]` for a change only to Flipkart, or `[SHARED]` for a change that is neither only Amazon nor only Flipkart.
 8. Keep each step quick: read only the code the step needs, start no separate reviewer helpers or review workflows unless I ask, and run every test and the syntax check once at the end, and again only after a fix.
+9. The Flipkart screen must look and work like the Amazon screen. Only the way Flipkart is read may differ.
 
 ## Good to know before changing anything
 

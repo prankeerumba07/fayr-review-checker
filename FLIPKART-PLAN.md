@@ -1,5 +1,7 @@
 When this plan and a step's prompt differ, the step's prompt wins.
 
+12-10-2026: The Campaigns box has no Campaign ID. It is the same as the Amazon box: Brand, Campaign name, Live or ended, Products.
+
 I have uploaded the Flipkart reviews Excel file, and the dashboard is showing the information correctly.
 
 The table is showing the row number, reviewer name, order ID, order amount, product name, order screenshot, delivery screenshot, review screenshot, and review link.

@@ -6,12 +6,12 @@
 // with "Replace file", and a table shows every row with every column as it is
 // in the file, numbered from 1. A link shows as "Link" and opens in a new tab;
 // a picture in a cell shows as "Picture in the file". Under the upload area,
-// the Campaigns box, which looks like the Amazon one: each campaign's
-// Campaign ID, name, live or ended, and under each of its Flipkart products
-// what was read from Flipkart and when, or why it could not be read. Nothing
-// is checked yet, and there are no Amazon or Google login lines. The local
-// server reads and keeps the file and the campaigns; this screen only shows
-// them.
+// the Campaigns box, the same as the Amazon one: each campaign's name, live or
+// ended, and brand, and under each of its Flipkart products what was read from
+// Flipkart (its name, its brand, its other colours and sizes, and when), or
+// why it is not used. Nothing is checked yet, and there are no Amazon or
+// Google login lines. The local server reads and keeps the file and the
+// campaigns; this screen only shows them.
 
 const BASE = '/local/flipkart';
 /** How often the screen looks again while a campaign's products are read from Flipkart. */
@@ -23,7 +23,7 @@ export const SHEET_ACCEPT = '.xlsx,.csv,application/vnd.openxmlformats-officedoc
 const arr = (v) => (Array.isArray(v) ? v : []);
 const icon = (h, name, extra = '') => h('span', { class: `icon icon-${name}${extra ? ` ${extra}` : ''}`, 'aria-hidden': 'true' });
 const pill = (h, text, tone) => h('span', { class: `pill pill-${tone}` }, text);
-const blankCampaign = () => ({ campaignId: '', name: '', live: true, products: '' });
+const blankCampaign = () => ({ brand: '', name: '', live: true, products: '' });
 
 function initial() {
   return {
@@ -143,7 +143,7 @@ function pollCampaigns(ctx) {
 function editCampaign(ctx, key) {
   const c = key ? arr(ctx.state.campaigns.list).find((x) => x?.key === key) : null;
   ctx.update((st) => {
-    Object.assign(st.campaigns, { editing: c ? c.key : 'new', values: c ? { campaignId: c.campaignId ?? '', name: c.name ?? '', live: c.live !== false, products: arr(c.products).map((p) => p.given).join('\n') } : blankCampaign(), error: null, notice: null });
+    Object.assign(st.campaigns, { editing: c ? c.key : 'new', values: c ? { brand: c.brand ?? '', name: c.name ?? '', live: c.live !== false, products: arr(c.products).map((p) => p.given).join('\n') } : blankCampaign(), error: null, notice: null });
   });
 }
 
@@ -182,7 +182,7 @@ async function campaignAction(ctx, key, action) {
   const c = ctx.state.campaigns;
   const x = arr(c.list).find((y) => y?.key === key);
   if (!x || c.busy) return;
-  if (action === 'delete' && !ctx.confirm(`Delete the campaign "${x.campaignId}"? This cannot be undone.`)) return;
+  if (action === 'delete' && !ctx.confirm(`Delete the campaign "${x.name}"? This cannot be undone.`)) return;
   ctx.update((st) => Object.assign(st.campaigns, { busy: true, error: null, notice: null }));
   try {
     const out = await ctx.local.api('POST', `${BASE}/campaigns/${encodeURIComponent(key)}/${action}`, {});
@@ -192,7 +192,7 @@ async function campaignAction(ctx, key, action) {
         reading: Boolean(out?.reading),
         gen: st.campaigns.gen + 1,
         busy: false,
-        notice: { end: `The campaign "${x.campaignId}" has ended.`, delete: `The campaign "${x.campaignId}" was deleted.`, read: `The products of "${x.campaignId}" are being read from Flipkart again.` }[action],
+        notice: { end: `The campaign "${x.name}" has ended. It is no longer used.`, delete: `The campaign "${x.name}" was deleted.`, read: `The products of "${x.name}" are being read from Flipkart again.` }[action],
         readingNotice: action === 'read',
       });
       if (action === 'delete' && st.campaigns.editing === key) Object.assign(st.campaigns, { editing: null, values: blankCampaign() });
@@ -344,37 +344,22 @@ function rowsCard(ctx) {
   );
 }
 
-/** A number as Flipkart shows it in India: 1,355, or 1,23,456. */
-const count = (n, one) => `${Number(n).toLocaleString('en-IN')} ${n === 1 ? one : `${one}s`}`;
-
-/** What was read from a product's Flipkart page: its name, brand, product ID, item ID, stars and counts, the link to all its reviews, and when. */
-function readSaid(ctx, x, p, i) {
+/** Under one product of a campaign: what was read from Flipkart and when, or why it is not used. Copied from the Amazon screen. */
+function productSaid(ctx, p) {
   const { h, words } = ctx;
-  const has = (v) => v !== null && v !== undefined;
-  const counts = [has(p.ratings) ? count(p.ratings, 'rating') : null, has(p.reviews) ? count(p.reviews, 'review') : null].filter(Boolean).join(' and ');
-  const score = !p.rating && !p.ratings && !p.reviews ? ' No ratings or reviews shown.' : has(p.rating) ? ` ${p.rating} stars${counts ? ` from ${counts}` : ''}.` : ` ${counts}.`;
-  const link = words.safeUrl(p.allReviews);
-  return [
-    h('strong', { key: 'name' }, p.name),
-    ` Brand: ${p.brand || 'not shown'}. Product ID: ${p.pid || 'not shown'}. Item ID: ${p.itemId || 'not shown'}.`,
-    score,
-    link ? [' ', h('a', { href: link, target: '_blank', rel: 'noopener noreferrer', key: 'all', 'data-id': `all-reviews-${x.key}-${i}` }, 'All reviews')] : ' No link to all reviews.',
-    ` Read on ${words.ist(p.at)}.`,
-  ];
-}
-
-/** Under one product of a campaign: what was read from Flipkart and when, or why it could not be read. */
-function productSaid(ctx, x, p, i) {
-  const { h, words } = ctx;
+  const read = p.name ? [h('strong', { key: 'name' }, p.name), ` Brand: ${p.brand || 'not shown'}.`] : [];
+  const labels = arr(p.variants);
+  const more = Math.max(0, (Number(p.variantCount) || 0) - labels.length);
+  const variants = labels.length ? ` Other colours and sizes: ${labels.join(', ')}${more ? `, and ${more} more` : ''}.` : more ? ` ${more === 1 ? '1 other colour or size' : `${more} other colours and sizes`} listed.` : ' No other colours or sizes listed.';
   if (p.state === 'reading') return [h('span', { class: 'muted', key: 's' }, 'Reading from Flipkart now…')];
   if (p.state === 'waiting') return [h('span', { class: 'muted', key: 's' }, 'Not read from Flipkart yet.')];
-  if (p.state === 'read') return readSaid(ctx, x, p, i);
-  return [h('span', { class: 'tone-bad', key: 's' }, p.says ?? 'This product was not read.'), p.at ? ` Tried on ${words.ist(p.at)}.` : null];
+  if (p.state === 'used') return [...read, variants, ` Read on ${words.ist(p.at)}.`];
+  return [...read, h('span', { class: 'tone-bad', key: 's' }, ` ${p.says ?? 'This product is not used.'}`)];
 }
 
 function campaignBlock(ctx, x, locked) {
   const { h, words } = ctx;
-  const again = arr(x.products).some((p) => p?.state === 'stopped' || p?.state === 'not read' || p?.state === 'waiting');
+  const again = arr(x.products).some((p) => p?.state === 'stopped' || p?.state === 'not used' || p?.state === 'waiting');
   const prevented = arr(x.products).some((p) => p?.prevented);
   const button = (id, mark, text, onclick, cls = 'btn btn-small') => h('button', { type: 'button', class: cls, disabled: locked, onclick, 'data-id': `${id}-${x.key}` }, icon(h, mark), text);
   return h(
@@ -383,7 +368,7 @@ function campaignBlock(ctx, x, locked) {
     h(
       'div',
       { class: 'card-head' },
-      h('h3', null, `${x.campaignId} `, pill(h, x.live ? 'Live' : 'Ended', x.live ? 'good' : 'quiet'), x.name ? h('span', { class: 'fk-campaign-name' }, ` Name: ${x.name}`) : null),
+      h('h3', null, `${x.name} `, pill(h, x.live ? 'Live' : 'Ended', x.live ? 'good' : 'quiet'), x.brand ? h('span', { class: 'fk-campaign-brand' }, ` Brand: ${x.brand}`) : null),
       h(
         'div',
         { class: 'actions' },
@@ -393,8 +378,10 @@ function campaignBlock(ctx, x, locked) {
         button('delete', 'trash', 'Delete', () => campaignAction(ctx, x.key, 'delete'), 'btn btn-small btn-danger'),
       ),
     ),
+    // A campaign saved before campaigns had a brand: it is not used until its brand is added.
+    x.brand ? null : words.notice(h, 'warn', 'Add the brand: press Change.'),
     prevented ? words.notice(h, 'warn', 'Flipkart prevented this check, so the reading stopped. The products not read yet were left as they are; press "Read the products again" when you are ready.') : null,
-    h('ul', { class: 'fk-campaign-products' }, arr(x.products).map((p, i) => h('li', { key: `p${i}`, 'data-id': `product-${x.key}-${i}` }, h('div', { class: 'fk-typed' }, p.given), h('div', { class: 'small' }, productSaid(ctx, x, p, i))))),
+    h('ul', { class: 'fk-campaign-products' }, arr(x.products).map((p, i) => h('li', { key: `p${i}`, 'data-id': `product-${x.key}-${i}` }, h('div', { class: 'fk-typed' }, p.given), h('div', { class: 'small' }, productSaid(ctx, p))))),
   );
 }
 
@@ -402,13 +389,8 @@ function campaignForm(ctx) {
   const { h, state } = ctx;
   const c = state.campaigns;
   const v = c.values;
-  const text = (key, id, label, need, placeholder) =>
-    h(
-      'div',
-      { class: 'fk-form-field', key },
-      h('label', { class: 'label', for: `fk-campaign-${id}` }, label, h('span', { class: need ? 'fk-req' : 'fk-opt' }, need ? ' (required)' : ' (optional)')),
-      h('input', { id: `fk-campaign-${id}`, type: 'text', autocomplete: 'off', placeholder, value: v[key], disabled: c.busy, 'data-id': `campaign-${id}`, oninput: (e) => (v[key] = e.target.value) }),
-    );
+  const text = (key, label, placeholder) =>
+    h('div', { class: 'fk-form-field', key }, h('label', { class: 'label', for: `fk-campaign-${key}` }, label), h('input', { id: `fk-campaign-${key}`, type: 'text', autocomplete: 'off', placeholder, value: v[key], disabled: c.busy, 'data-id': `campaign-${key}`, oninput: (e) => (v[key] = e.target.value) }));
   return h(
     'div',
     { class: 'fk-campaign-form', 'data-id': 'campaign-form' },
@@ -416,8 +398,8 @@ function campaignForm(ctx) {
     h(
       'div',
       { class: 'fk-form-grid' },
-      text('campaignId', 'id', 'Campaign ID', true, 'For example: FK-101'),
-      text('name', 'name', 'Campaign name', false, 'For example: Summer Glow'),
+      text('brand', 'Brand', 'For example: Koparo'),
+      text('name', 'Campaign name', 'For example: Koparo Clean'),
       h(
         'div',
         { class: 'fk-form-field', key: 'live' },
@@ -429,8 +411,8 @@ function campaignForm(ctx) {
       'div',
       { class: 'fk-form-field fk-wide' },
       h('label', { class: 'label', for: 'fk-campaign-products' }, 'Products'),
-      h('textarea', { id: 'fk-campaign-products', rows: '4', spellcheck: 'false', placeholder: 'One Flipkart link or product ID on each line', value: v.products, disabled: c.busy, 'data-id': 'campaign-products', oninput: (e) => (v.products = e.target.value) }),
-      h('p', { class: 'fk-note' }, 'A Flipkart link, or a Flipkart product ID (the 16 letters and digits after "pid=" in a Flipkart link, for example FCPHEW7AM9C7RU24), one on each line. Users may buy any one of them.'),
+      h('textarea', { id: 'fk-campaign-products', rows: '4', spellcheck: 'false', placeholder: 'One Flipkart link or Flipkart product ID on each line', value: v.products, disabled: c.busy, 'data-id': 'campaign-products', oninput: (e) => (v.products = e.target.value) }),
+      h('p', { class: 'fk-note' }, 'A Flipkart link, or a Flipkart product ID (the 16 letters and digits Flipkart gives each product, after "pid=" in a link), one on each line. Users may buy any one of them.'),
     ),
     h(
       'div',
@@ -461,7 +443,7 @@ function campaignsCard(ctx) {
       ? h('div', { class: 'fk-campaigns' }, list.map((x) => campaignBlock(ctx, x, c.busy || reading)))
       : c.editing
         ? null
-        : h('p', { class: 'muted', 'data-id': 'no-campaigns' }, 'No campaigns yet.');
+        : h('p', { class: 'muted', 'data-id': 'no-campaigns' }, 'No campaigns yet. Rows are checked by the product name in the sheet until a campaign has their brand.');
   return h(
     'details',
     {
@@ -481,7 +463,7 @@ function campaignsCard(ctx) {
       h(
         'div',
         { class: 'fk-fold-tools' },
-        h('p', { class: 'card-sub' }, 'The Flipkart products users may buy for a campaign, each read once from its Flipkart page in the Live Flipkart Browser. Nothing is checked with them yet.'),
+        h('p', { class: 'card-sub' }, 'The Flipkart products users may buy for a brand. A row uses every live campaign whose brand is in its product name, the file\'s name or the tab\'s name; a campaign marked Ended is never used.'),
         c.editing ? null : h('button', { type: 'button', class: 'btn btn-primary', disabled: c.busy || !c.loaded, onclick: () => editCampaign(ctx, null), 'data-id': 'add-campaign' }, icon(h, 'plus'), 'Add a campaign'),
       ),
       c.editing ? campaignForm(ctx) : null,

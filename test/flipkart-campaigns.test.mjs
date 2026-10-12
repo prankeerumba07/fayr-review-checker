@@ -1,14 +1,16 @@
 // Flipkart campaigns without a browser or a server: the products typed one per
 // line (a Flipkart link, or a Flipkart product ID alone), Flipkart's own
-// links, what kind of page Flipkart showed, the product a page shows, and one
-// product read through a pretend browser: read, a product ID alone, a robot
-// check, a block, an error, a page that is not a product, and a page that
-// could not be opened. Made-up products only.
+// links, what kind of page Flipkart showed, the product a page shows with its
+// other colours and sizes, and one product read through a pretend browser:
+// read and used only when its brand is the campaign's (the rule and the words
+// of the Amazon campaigns), a product ID alone, a robot check, a block, an
+// error, a page that is not a product, and a page that could not be opened.
+// Made-up products only.
 // Run: node test/flipkart-campaigns.test.mjs
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { productLines, readProduct, needsReading, wasRead, clean, PREVENTED_SAYS, ADD_LINK_SAYS, MAX_CAMPAIGN_PRODUCTS, CAMPAIGN_KEY, newCampaignKey } from '../flipkart/campaigns.js';
+import { productLines, readProduct, needsReading, usable, brandIn, brandProblem, confirmProducts, clean, PREVENTED_SAYS, ADD_LINK_SAYS, MAX_CAMPAIGN_PRODUCTS, CAMPAIGN_KEY, newCampaignKey } from '../flipkart/campaigns.js';
 import { isFlipkart, isFlipkartSite, pidFrom, itemIdFrom, pageForPid, pageForLink } from '../flipkart/links.js';
 import { whatPageIs, productOnPage } from '../flipkart/page-read.js';
 
@@ -31,6 +33,8 @@ const productPage = (url, product = {}, extra = {}) => ({
     canonical: 'https://www.flipkart.com/test-glow-face-mask/p/itmtestglow0001',
     product: { name: 'Test Glow Face Mask', brand: 'Test Glow', sku: GLOW_PID, rating: 4.1, ratings: 120, reviews: 12, ...product },
     reviewLinks: ['https://www.flipkart.com/test-glow-face-mask/product-reviews/itmtestglow0001?pid=FCPTESTGLOW00001&aid=test-aspect&an=Brightness', 'https://www.flipkart.com/test-glow-face-mask/product-reviews/itmtestglow0001?pid=FCPTESTGLOW00001&lid&marketplace=FLIPKART'],
+    // Its size chooser: the other size, and its own.
+    variants: [{ pid: 'FCPTESTGLOW00002', label: '100 ml' }, { pid: GLOW_PID, label: '50 ml' }],
     robotFrame: false,
     robotForm: false,
     ...extra,
@@ -38,7 +42,7 @@ const productPage = (url, product = {}, extra = {}) => ({
 });
 /** Any other made-up page. */
 const page = (url, facts = {}, status = 200) => ({ ok: true, status, url, facts: { url, title: 'Flipkart', text: '', canonical: null, product: null, reviewLinks: [], robotFrame: false, robotForm: false, ...facts } });
-const READ_GLOW = { at: AT, name: 'Test Glow Face Mask', brand: 'Test Glow', pid: GLOW_PID, itemId: 'itmtestglow0001', rating: 4.1, ratings: 120, reviews: 12, allReviews: GLOW_REVIEWS };
+const READ_GLOW = { at: AT, name: 'Test Glow Face Mask', brand: 'Test Glow', variants: [{ pid: 'FCPTESTGLOW00002', label: '100 ml' }], pid: GLOW_PID, itemId: 'itmtestglow0001', rating: 4.1, ratings: 120, reviews: 12, allReviews: GLOW_REVIEWS };
 
 function fakeBrowser(answer) {
   const b = {
@@ -112,10 +116,12 @@ test('what kind of page Flipkart showed: a robot check, a block, an error and a 
   assert.deepEqual(whatPageIs({ title: 'Flipkart', text: 'Are you a human?' }, 200), { kind: 'captcha', why: 'Flipkart showed a robot check.' });
 });
 
-test("the product a page shows: the JSON-LD's name, brand, IDs, stars and counts; the counts in its words when the JSON-LD leaves them out; and the link to all its reviews", () => {
-  assert.deepEqual(productOnPage(productPage(GLOW).facts), { name: 'Test Glow Face Mask', brand: 'Test Glow', pid: GLOW_PID, itemId: 'itmtestglow0001', rating: 4.1, ratings: 120, reviews: 12, allReviews: GLOW_REVIEWS }, "the reviews of one thing (Brightness) are not all its reviews");
+test("the product a page shows: the JSON-LD's name, brand, IDs, stars and counts; the counts in its words when the JSON-LD leaves them out; its other colours and sizes; and the link to all its reviews", () => {
+  assert.deepEqual(productOnPage(productPage(GLOW).facts), { name: 'Test Glow Face Mask', brand: 'Test Glow', pid: GLOW_PID, itemId: 'itmtestglow0001', variants: [{ pid: 'FCPTESTGLOW00002', label: '100 ml' }], rating: 4.1, ratings: 120, reviews: 12, allReviews: GLOW_REVIEWS }, "the reviews of one thing (Brightness) are not all its reviews");
   const noLd = { url: GLOW, title: 'Test Glow Face Mask - Price in India, Buy Test Glow Face Mask Online In India | Flipkart.com', text: 'Test Glow Face Mask\n4.1\n1,234 Ratings & 56 Reviews', canonical: 'https://www.flipkart.com/test-glow-face-mask/p/itmtestglow0001', product: null, reviewLinks: [] };
-  assert.deepEqual(productOnPage(noLd), { name: 'Test Glow Face Mask', brand: null, pid: GLOW_PID, itemId: 'itmtestglow0001', rating: null, ratings: 1234, reviews: 56, allReviews: GLOW_REVIEWS }, 'the name from the title, the counts from its words, the link made from its address');
+  assert.deepEqual(productOnPage(noLd), { name: 'Test Glow Face Mask', brand: null, pid: GLOW_PID, itemId: 'itmtestglow0001', variants: [], rating: null, ratings: 1234, reviews: 56, allReviews: GLOW_REVIEWS }, 'the name from the title, the counts from its words, the link made from its address');
+  const chooser = [{ pid: 'FCPTESTGLOW00002', label: '100 ml' }, { pid: GLOW_PID, label: '50 ml' }, { pid: 'fcptestglow00003', label: '  ' }, { pid: 'FCPTESTGLOW00003', label: '200 ml' }, { pid: 'FCPTESTGLOW00002', label: 'Pack of 2' }, { pid: 'SHORT', label: 'Pack of 3' }];
+  assert.deepEqual(productOnPage(productPage(GLOW, {}, { variants: chooser }).facts).variants, [{ pid: 'FCPTESTGLOW00002', label: '100 ml' }, { pid: 'FCPTESTGLOW00003', label: '200 ml' }], 'each once, never the product itself, and a name the page gives later is taken');
   assert.equal(productOnPage({ ...noLd, text: 'Test Glow Face Mask\nbased on 1,234 ratings by Verified Buyers' }).ratings, 1234);
   assert.equal(productOnPage({ ...noLd, text: 'Be the first to review this product' }).allReviews, null, 'no ratings and no reviews: no link');
   assert.equal(productOnPage({ ...noLd, url: 'https://www.flipkart.com/search?q=face%20mask', canonical: null }).name, null, 'not a product page: no name');
@@ -123,28 +129,40 @@ test("the product a page shows: the JSON-LD's name, brand, IDs, stars and counts
   assert.equal(productOnPage(productPage(GLOW, { rating: 7 }).facts).rating, null, 'stars are 0 to 5');
 });
 
-test('one product read through the Live Flipkart Browser: what was read, and when', async () => {
+test("one product read through the Live Flipkart Browser: what was read, and when; it is used only when its brand is the campaign's, by the rule and in the words of the Amazon campaigns", async () => {
   const b = fakeBrowser((url) => productPage(url));
   const glow = product(GLOW);
-  const out = await readProduct(b, glow, { now });
+  const out = await readProduct(b, glow, 'Test Glow', { now });
   assert.deepEqual(out, { product: { ...glow, read: READ_GLOW, problem: null }, stop: null });
   assert.deepEqual([b.begun, b.opened], [1, [GLOW]]);
-  assert.deepEqual([wasRead(out.product), needsReading(out.product), needsReading(glow)], [true, false, true]);
+  assert.deepEqual([usable(out.product), needsReading(out.product), needsReading(glow)], [true, false, true]);
+  // The brand rule: written together or apart, in any capitals; a brand word of six letters or more may differ by one letter.
+  assert.deepEqual([brandIn('Test Glow', 'testglow'), brandIn('Mannlich Face Wash', 'Manlich'), brandIn('Test Glow', 'Test Clay'), brandIn('Test Glow', '')], [true, true, false, false]);
+  const other = await readProduct(fakeBrowser((url) => productPage(url)), glow, 'Koparo', { now });
+  assert.deepEqual(other.product.problem, { says: 'Flipkart says this product\'s brand is "Test Glow", not "Koparo", so this product is not used.', at: AT });
+  assert.deepEqual([other.product.read, usable(other.product), needsReading(other.product)], [READ_GLOW, false, false], 'what was read is kept, and not read again by itself');
+  const noBrand = (brand) => readProduct(fakeBrowser((url) => productPage(url, { brand: null })), glow, brand, { now });
+  assert.equal((await noBrand('Koparo')).product.problem.says, 'The product\'s page shows no brand, and its name "Test Glow Face Mask" does not include "Koparo", so this product is not used.');
+  assert.equal((await noBrand('test glow')).product.problem, null, 'no brand shown: its name has the brand');
+  // A changed brand needs no page opened; a campaign with no brand (saved before campaigns had one) checks none.
+  assert.equal(confirmProducts({ brand: 'Koparo', products: [out.product] }).products[0].problem.says, other.product.problem.says);
+  assert.equal(confirmProducts({ brand: 'Test Glow', products: [other.product] }).products[0].problem, null);
+  assert.equal(brandProblem(READ_GLOW, ''), null);
 });
 
 test('a product ID alone: read when Flipkart\'s page for it shows that product; "Add this product\'s link instead" when no product page opens, or another product\'s does', async () => {
   const byId = product(GLOW_PID);
-  const ok = await readProduct(fakeBrowser((url) => productPage(url)), byId, { now });
+  const ok = await readProduct(fakeBrowser((url) => productPage(url)), byId, 'Test Glow', { now });
   assert.deepEqual(ok.product.read, READ_GLOW, 'the item ID comes from the page');
   assert.deepEqual(ok.product.itemId, 'itmtestglow0001');
   const opened = [];
-  const notFound = await readProduct(fakeBrowser((url) => (opened.push(url), page(url, { title: 'Flipkart.com', text: 'Unfortunately the page you are looking for has been moved or deleted' }, 404))), byId, { now });
+  const notFound = await readProduct(fakeBrowser((url) => (opened.push(url), page(url, { title: 'Flipkart.com', text: 'Unfortunately the page you are looking for has been moved or deleted' }, 404))), byId, 'Test Glow', { now });
   assert.deepEqual(opened, ['https://www.flipkart.com/product/p/itme?pid=FCPTESTGLOW00001']);
   assert.deepEqual(notFound, { product: { ...byId, read: null, problem: { says: ADD_LINK_SAYS, at: AT, final: true } }, stop: null });
   assert.equal(ADD_LINK_SAYS, "No Flipkart product page opened from this product ID. Add this product's link instead.");
-  const another = await readProduct(fakeBrowser(() => productPage(CLAY, { name: 'Test Clay Face Mask', sku: 'FCPTESTCLAY00001' }, { canonical: null, reviewLinks: [] })), byId, { now });
+  const another = await readProduct(fakeBrowser(() => productPage(CLAY, { name: 'Test Clay Face Mask', sku: 'FCPTESTCLAY00001' }, { canonical: null, reviewLinks: [] })), byId, 'Test Glow', { now });
   assert.equal(another.product.problem.says, ADD_LINK_SAYS, "another product's page");
-  const search = await readProduct(fakeBrowser((url) => page(url, { title: 'Face Mask - Buy Products Online at Best Price in India - All Categories | Flipkart.com' })), byId, { now });
+  const search = await readProduct(fakeBrowser((url) => page(url, { title: 'Face Mask - Buy Products Online at Best Price in India - All Categories | Flipkart.com' })), byId, 'Test Glow', { now });
   assert.equal(search.product.problem.says, ADD_LINK_SAYS, 'a page that is not a product');
   assert.equal(needsReading(search.product), false, 'not tried again by itself');
 });
@@ -157,7 +175,7 @@ test('a robot check, a block or an error: "Flipkart prevented this check", the p
     error: (url) => page(url, { title: 'Flipkart', text: 'Something went wrong!' }, 500),
   };
   for (const [kind, answer] of Object.entries(pages)) {
-    const out = await readProduct(fakeBrowser(answer), glow, { now });
+    const out = await readProduct(fakeBrowser(answer), glow, 'Test Glow', { now });
     assert.deepEqual(out, { product: { ...glow, read: null, problem: { says: PREVENTED_SAYS[kind], at: AT, retry: true, stop: kind } }, stop: kind }, kind);
     assert.match(out.product.problem.says, /^Flipkart prevented this check: /, kind);
     assert.equal(needsReading(out.product), true, `${kind}: read again later`);
@@ -174,19 +192,19 @@ test('a page that is not a product, a missing page, a link that leads away from 
   const said = async (answer, begin) => {
     const b = fakeBrowser(answer);
     if (begin) b.begin = begin;
-    return (await readProduct(b, glow, { now })).product.problem;
+    return (await readProduct(b, glow, 'Test Glow', { now })).product.problem;
   };
-  assert.deepEqual(await said((url) => page(url, { title: 'Face Mask - Buy Products Online at Best Price in India - All Categories | Flipkart.com' })), { says: 'This link does not open a product page on Flipkart, so this product was not read.', at: AT, final: true });
-  assert.deepEqual(await said((url) => page(url, { text: 'Unfortunately the page you are looking for has been moved or deleted' }, 404)), { says: 'Flipkart says this product page does not exist, so this product was not read.', at: AT, final: true });
-  assert.deepEqual(await said(() => ({ ok: false, error: 'elsewhere', host: 'www.example.com', message: 'The page went to www.example.com instead of Flipkart.' })), { says: 'The link leads to www.example.com, not to Flipkart, so this product was not read.', at: AT, final: true });
-  assert.deepEqual(await said(() => productPage('https://www.example.com/test')), { says: 'The link leads to www.example.com, not to Flipkart, so this product was not read.', at: AT, final: true });
+  assert.deepEqual(await said((url) => page(url, { title: 'Face Mask - Buy Products Online at Best Price in India - All Categories | Flipkart.com' })), { says: 'This link does not open a product page on Flipkart, so this product is not used.', at: AT, final: true });
+  assert.deepEqual(await said((url) => page(url, { text: 'Unfortunately the page you are looking for has been moved or deleted' }, 404)), { says: 'Flipkart says this product page does not exist, so this product is not used.', at: AT, final: true });
+  assert.deepEqual(await said(() => ({ ok: false, error: 'elsewhere', host: 'www.example.com', message: 'The page went to www.example.com instead of Flipkart.' })), { says: 'The link leads to www.example.com, not to Flipkart, so this product is not used.', at: AT, final: true });
+  assert.deepEqual(await said(() => productPage('https://www.example.com/test')), { says: 'The link leads to www.example.com, not to Flipkart, so this product is not used.', at: AT, final: true });
   assert.deepEqual(await said(() => ({ ok: false, error: 'network', message: 'The page could not be opened.' })), { says: 'The Live Flipkart Browser could not open the page, so this product was not read and the reading stopped. The page could not be opened.', at: AT, retry: true });
   assert.deepEqual(await said(() => productPage(GLOW), async () => { throw new Error('no Chrome'); }), { says: 'The Live Flipkart Browser could not be opened on this computer, so this product was not read and the reading stopped.', at: AT, retry: true });
   // Which of these stop the reading: nothing more is opened after them.
   const stopOf = async (answer, begin) => {
     const b = fakeBrowser(answer);
     if (begin) b.begin = begin;
-    return (await readProduct(b, glow, { now })).stop;
+    return (await readProduct(b, glow, 'Test Glow', { now })).stop;
   };
   assert.deepEqual(
     [
@@ -206,6 +224,6 @@ test('a page that is not a product, a missing page, a link that leads away from 
 test("a word this dashboard never shows is hidden, in a product's name as in anything typed", async () => {
   const hidden = Buffer.from('Y2FzaGJhY2s=', 'base64').toString('utf8');
   assert.equal(clean(`  Test   ${hidden}Glow  Mask `), 'Test … Mask', 'the whole word goes, and spaces are made single');
-  const out = await readProduct(fakeBrowser((url) => productPage(url, { name: `Test Glow Mask with ${hidden} offer` })), product(GLOW), { now });
+  const out = await readProduct(fakeBrowser((url) => productPage(url, { name: `Test Glow Mask with ${hidden} offer` })), product(GLOW), 'Test Glow', { now });
   assert.equal(out.product.read.name, 'Test Glow Mask with … offer');
 });

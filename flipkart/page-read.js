@@ -30,6 +30,27 @@ export function readFlipkartPage() {
   const agg = p && p.aggregateRating && typeof p.aggregateRating === 'object' ? p.aggregateRating : null;
   const brand = p ? (typeof p.brand === 'string' ? p.brand : p.brand && typeof p.brand === 'object' ? p.brand.name : null) : null;
   const frames = [...document.querySelectorAll('iframe')].map((f) => f.getAttribute('src') || '').filter(Boolean);
+  // The other colours and sizes: the links of each chooser under words like "Selected Quantity:" or "Selected Color:", each to a
+  // product page and its product ID, with its name ("20 ml"). The chooser is the nearest box around those words (at most 6 boxes
+  // out) that holds links to product pages.
+  const variants = [];
+  const LINKS = 'a[href*="/p/itm"]';
+  const walk = document.body ? document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT) : null;
+  for (let n = walk ? walk.nextNode() : null; n; n = walk.nextNode()) {
+    if (!/^Selected\s+[^:]{1,40}:/i.test(squash(n.nodeValue))) continue;
+    let box = n.parentElement;
+    for (let up = 0; box && !box.querySelector(LINKS); up++) box = up < 6 ? box.parentElement : null;
+    for (const a of box ? box.querySelectorAll(LINKS) : []) {
+      let pid = null;
+      try {
+        pid = new URL(a.href).searchParams.get('pid');
+      } catch {
+        pid = null;
+      }
+      const label = squash(a.getAttribute('title')) || squash(a.innerText || a.textContent);
+      if (pid && variants.length < 100) variants.push({ pid: pid.slice(0, 40), label: label && label.length <= 80 ? label : null });
+    }
+  }
   return {
     url: location.href,
     title: squash(document.title).slice(0, 400),
@@ -37,6 +58,7 @@ export function readFlipkartPage() {
     canonical: document.querySelector('link[rel="canonical"]')?.href ?? null,
     product: p ? { name: squash(p.name).slice(0, 600) || null, brand: squash(brand).slice(0, 120) || null, sku: squash(p.sku).slice(0, 40) || null, rating: num(agg?.ratingValue), ratings: num(agg?.ratingCount), reviews: num(agg?.reviewCount) } : null,
     reviewLinks: [...document.querySelectorAll('a[href*="/product-reviews/"]')].map((a) => a.href).slice(0, 40),
+    variants,
     robotFrame: frames.some((s) => /captcha|challenges\.cloudflare|arkoselabs/i.test(s)),
     robotForm: Boolean(document.querySelector('input[name*="captcha" i], .g-recaptcha, .h-captcha')),
   };
@@ -126,10 +148,12 @@ export function allReviewsLink(f, pid, itemId, hasReviews) {
 }
 
 /**
- * A product page as a campaign keeps it: { name, brand, pid, itemId, rating,
- * ratings, reviews, allReviews }. name is null on a page that is not a
- * product's; brand is null when the page shows none; a count Flipkart does
- * not give is null.
+ * A product page as a campaign keeps it: { name, brand, pid, itemId,
+ * variants: [{ pid, label }], rating, ratings, reviews, allReviews }, the
+ * variants being the other colours and sizes it lists, each once, never the
+ * product itself (label null when the page gives no name). name is null on a
+ * page that is not a product's; brand is null when the page shows none; a
+ * count Flipkart does not give is null.
  */
 export function productOnPage(facts) {
   const f = facts ?? {};
@@ -144,11 +168,21 @@ export function productOnPage(facts) {
   const based = text.match(/based on\s+([\d,]+)\s+ratings?/i);
   const ratings = count(p.ratings) ?? (both ? digits(both[1]) : based ? digits(based[1]) : null);
   const reviews = count(p.reviews) ?? (both ? digits(both[2]) : null);
+  const variants = [];
+  for (const v of Array.isArray(f.variants) ? f.variants : []) {
+    const id = String(v?.pid ?? '').toUpperCase();
+    const label = typeof v?.label === 'string' && v.label.trim() ? v.label.trim() : null;
+    if (!ANY_PID.test(id) || id === pid) continue;
+    const seen = variants.find((x) => x.pid === id);
+    if (seen) seen.label ??= label;
+    else variants.push({ pid: id, label });
+  }
   return {
     name: name || null,
     brand: p.brand || null,
     pid,
     itemId,
+    variants,
     rating: stars(p.rating),
     ratings,
     reviews,

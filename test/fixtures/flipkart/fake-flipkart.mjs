@@ -15,12 +15,13 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const html = (name) => readFileSync(join(HERE, name), 'utf8');
 
-/** What the saved product page says about its product. */
+/** What the saved product page says about its product, and its other size ("Selected Quantity: 50 ml", or 20 ml). */
 export const PRODUCT = {
   name: 'Renee Pink Therapy Collagen Night Wrapping Face Mask, Hydrates, Repairs Improves Skin',
   brand: 'Renee',
   pid: 'FCPHEW7AM9C7RU24',
   itemId: 'itm50a9094e8e73a',
+  variants: [{ pid: 'FCPHZGXXGCHZH83U', label: '20 ml' }],
   rating: 4.2,
   ratings: 1355,
   reviews: 47,
