@@ -1644,16 +1644,26 @@ test('emails to users: the rows view carries every email and the test address; "
     assert.equal(byRow((await rowsNow(l.opts)).rows, one.row).emails.length, 2, 'not recorded');
     answer = () => ({ ok: true, at: '2026-10-08T09:05:00.000Z' });
     // Every try so far is in the log file: the time, the row, what happened and the reason; never the email's words or address.
+    const first = ['Sending 1 email: every one to the test email address.', 'Row 1, Order ID is not matching: sent.', 'Done: 1 sent, 0 maybe sent, 0 not sent, 0 not tried.'];
+    const later = [
+      'Row 1, Order ID is not matching: maybe sent. Send was pressed, but Gmail did not say the email was sent, so it may or may not have gone. Look in your Sent emails before sending it again.',
+      'Done: 0 sent, 1 maybe sent, 0 not sent, 0 not tried.',
+      'Row 1, Order ID is not matching: not sent. Gmail did not say the email was sent, so it may not have been sent. Check your Sent emails before sending it again.',
+      `Sending stopped at Row 1: ${EMAIL_PAUSE_SAYS['google-signin']} 0 sent, 0 maybe sent, 0 not sent, 2 not tried.`,
+      'Sending 2 emails: every one to the test email address.',
+    ];
+    // The dashboard may answer before the last lines are written in the file, so it is read again until every line checked here is in it, for up to 2 seconds; the checks below then say what is missing.
+    const happened = () => readFileSync(join(l.dir, 'email-log.txt'), 'utf8').trim().split('\n').map((x) => x.slice(20));
+    await until(() => {
+      const now = happened();
+      return [...first, ...later].every((x) => now.includes(x));
+    }, 'the lines checked in email-log.txt', 2000).catch(() => {});
     const logText = readFileSync(join(l.dir, 'email-log.txt'), 'utf8');
     const logLines = logText.trim().split('\n');
     assert.ok(logLines.every((x) => /^\d{2}-\d{2}-\d{4} \d{2}:\d{2}:\d{2} /.test(x)), logText);
     const whatHappened = logLines.map((x) => x.slice(20));
-    assert.deepEqual(whatHappened.slice(0, 3), ['Sending 1 email: every one to the test email address.', 'Row 1, Order ID is not matching: sent.', 'Done: 1 sent, 0 maybe sent, 0 not sent, 0 not tried.']);
-    assert.ok(whatHappened.includes('Row 1, Order ID is not matching: maybe sent. Send was pressed, but Gmail did not say the email was sent, so it may or may not have gone. Look in your Sent emails before sending it again.'), logText);
-    assert.ok(whatHappened.includes('Done: 0 sent, 1 maybe sent, 0 not sent, 0 not tried.'), logText);
-    assert.ok(whatHappened.includes('Row 1, Order ID is not matching: not sent. Gmail did not say the email was sent, so it may not have been sent. Check your Sent emails before sending it again.'), logText);
-    assert.ok(whatHappened.includes(`Sending stopped at Row 1: ${EMAIL_PAUSE_SAYS['google-signin']} 0 sent, 0 maybe sent, 0 not sent, 2 not tried.`), logText);
-    assert.ok(whatHappened.includes('Sending 2 emails: every one to the test email address.'), logText);
+    assert.deepEqual(whatHappened.slice(0, 3), first);
+    for (const line of later) assert.ok(whatHappened.includes(line), logText);
     assert.doesNotMatch(logText, /My subject|My words|example\.test|@/, "never the email's words or address");
     // No Google login: nothing is sent.
     googleNow.state = 'out';
