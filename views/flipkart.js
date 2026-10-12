@@ -360,7 +360,6 @@ function productSaid(ctx, p) {
 function campaignBlock(ctx, x, locked) {
   const { h, words } = ctx;
   const again = arr(x.products).some((p) => p?.state === 'stopped' || p?.state === 'not used' || p?.state === 'waiting');
-  const prevented = arr(x.products).some((p) => p?.prevented);
   const button = (id, mark, text, onclick, cls = 'btn btn-small') => h('button', { type: 'button', class: cls, disabled: locked, onclick, 'data-id': `${id}-${x.key}` }, icon(h, mark), text);
   return h(
     'div',
@@ -380,7 +379,6 @@ function campaignBlock(ctx, x, locked) {
     ),
     // A campaign saved before campaigns had a brand: it is not used until its brand is added.
     x.brand ? null : words.notice(h, 'warn', 'Add the brand: press Change.'),
-    prevented ? words.notice(h, 'warn', 'Flipkart prevented this check, so the reading stopped. The products not read yet were left as they are; press "Read the products again" when you are ready.') : null,
     h('ul', { class: 'fk-campaign-products' }, arr(x.products).map((p, i) => h('li', { key: `p${i}`, 'data-id': `product-${x.key}-${i}` }, h('div', { class: 'fk-typed' }, p.given), h('div', { class: 'small' }, productSaid(ctx, p))))),
   );
 }
@@ -417,10 +415,10 @@ function campaignForm(ctx) {
     h(
       'div',
       { class: 'actions' },
-      h('button', { type: 'button', class: 'btn btn-primary', disabled: c.busy || c.reading, onclick: () => saveCampaign(ctx), 'data-id': 'save-campaign' }, icon(h, 'check'), c.busy ? 'Saving…' : 'Save'),
+      // As on Amazon, Save waits only while rows are checked (no Flipkart row is checked yet); pressed while products are read, it shows the server's sentence.
+      h('button', { type: 'button', class: 'btn btn-primary', disabled: c.busy, onclick: () => saveCampaign(ctx), 'data-id': 'save-campaign' }, icon(h, 'check'), c.busy ? 'Saving…' : 'Save'),
       h('button', { type: 'button', class: 'btn btn-quiet', disabled: c.busy, onclick: () => ctx.update((st) => Object.assign(st.campaigns, { editing: null, values: blankCampaign(), error: null })), 'data-id': 'cancel-campaign' }, 'Cancel'),
     ),
-    c.reading ? h('p', { class: 'muted small', 'data-id': 'save-waits' }, 'Save can be pressed once the products are read.') : null,
   );
 }
 

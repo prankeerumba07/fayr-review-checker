@@ -168,7 +168,7 @@ test('the Campaigns box, the same as on Amazon: each campaign with its name, liv
   ]);
   assert.deepEqual(tagged(a, 'a'), [], 'no link to all reviews');
   assert.doesNotMatch(textOf(a), /Product ID|Item ID|stars|ratings|reviews/, 'the product ID, item ID, stars and counts are kept, not shown');
-  assert.deepEqual(withClass(a, 'notice-warn').map(textOf), ['Flipkart prevented this check, so the reading stopped. The products not read yet were left as they are; press "Read the products again" when you are ready.']);
+  assert.deepEqual(withClass(a, 'notice-warn').map(textOf), [], "no warning above the products, as on Amazon: a product's own line says why it was not read");
   assert.deepEqual(tagged(a, 'button').map(textOf), ['Change', 'End campaign', 'Read the products again', 'Delete']);
   const b = byId(box, `campaign-${KB}`);
   assert.match(b.attrs.class, /\bfk-campaign-ended\b/);
@@ -218,7 +218,7 @@ test('adding a campaign: the same form as on Amazon (a brand, a campaign name, l
   assert.equal(r.local.calls.filter((c) => c.method === 'POST').at(-1).path, `/local/flipkart/campaigns/${KA}`);
 });
 
-test('a campaign ended, deleted (asked first) or its products read again; while products are read, the box looks again every 2 seconds, its buttons wait, and Save waits', async () => {
+test("a campaign ended, deleted (asked first) or its products read again; while products are read, the box looks again every 2 seconds and its buttons wait, and Save is not greyed out, as on Amazon: pressed, it shows the server's sentence", async () => {
   const s = await opened();
   assert.deepEqual(s.timers.map((t) => t.ms), [2000]);
   const looks = () => s.local.calls.filter((c) => c.method === 'GET' && c.path === '/local/flipkart/campaigns').length;
@@ -244,8 +244,13 @@ test('a campaign ended, deleted (asked first) or its products read again; while 
   assert.equal(textOf(tagged(s.box(), 'summary')[0]), 'Campaigns1 ended, reading products from Flipkart…');
   assert.equal(byId(s.box(), `change-${KB}`).attrs.disabled, true, "a campaign's buttons wait while products are read");
   await s.click('add-campaign');
-  assert.equal(byId(s.page(), 'save-campaign').attrs.disabled, true);
-  assert.equal(textOf(byId(s.page(), 'save-waits')), 'Save can be pressed once the products are read.');
+  assert.deepEqual([byId(s.page(), 'save-campaign').attrs.disabled, byId(s.page(), 'save-waits')], [false, null], 'Save is not greyed out while products are read');
+  const WAIT = 'The products of a campaign are being read from Flipkart. Wait for it to finish, then press Save.';
+  s.local.save = new ApiError(409, WAIT);
+  await s.click('save-campaign');
+  assert.deepEqual(withClass(s.box(), 'notice-error').map(textOf), [WAIT], "the server's sentence, under the form");
+  assert.notEqual(byId(s.page(), 'campaign-form'), null, 'the form stays, to press Save again later');
+  s.local.save = null;
   const reading = looks();
   s.timers[0].fn();
   await settle();
@@ -255,7 +260,6 @@ test('a campaign ended, deleted (asked first) or its products read again; while 
   s.timers[0].fn();
   await settle();
   assert.equal(looks(), reading + 2, 'and once more when it ends');
-  assert.equal(byId(s.page(), 'save-campaign').attrs.disabled, false, 'Save can be pressed again');
   s.timers[0].fn();
   await settle();
   assert.equal(looks(), reading + 2, 'then no more');
