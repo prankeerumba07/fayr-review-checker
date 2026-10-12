@@ -6,7 +6,8 @@
 // it, its rows, the pictures in its cells and the columns chosen only in
 // data/flipkart/; they show again after a restart. The top bar's Google login:
 // the Amazon screen's own, handed over by serve.mjs, read as it is. A row's
-// page and its check, with a pretend Google Drive behind that login. Temporary
+// page and its check, "Start checking" for every row, and the line saying
+// which campaign the rows use, with a pretend Google Drive behind that login. Temporary
 // data folders and a Live Amazon Browser that is never used: nothing reaches
 // Amazon, Flipkart, Google or any other website.
 // Run: node test/flipkart-routes.test.mjs
@@ -22,10 +23,10 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import { createHandler, createSessions, bearerOf } from '../serve.mjs';
-import { createFlipkartRoutes } from '../flipkart/routes.js';
+import { createFlipkartRoutes, sheetView } from '../flipkart/routes.js';
 import { STEP_NAMES } from '../flipkart/check.js';
 import { tinyPng } from './fixtures/flipkart/zip-tools.mjs';
-import { MAX_SHEET_BYTES } from '../flipkart/store.js';
+import { MAX_SHEET_BYTES, createFlipkartStore, putCampaign } from '../flipkart/store.js';
 import { ONLY_FLIPKART_NAMES } from '../flipkart/browser.js';
 import { isFlipkartSite } from '../flipkart/links.js';
 import { createStore } from '../amazon/store.js';
@@ -208,6 +209,7 @@ test('uploading the made-up file finds what each column holds and keeps the file
     'Used for checking: Order ID, Order Date, Product, Amount, Order Screenshot, Delivery Screenshot, Review Link and Review Screenshot.',
     'Only shown, not used for checking: Reviewer Name and Email ID.',
     'It has no Status, Type or Note column, so the checked Excel file adds them after the last column.',
+    "No campaign was found for these rows: no campaign's brand is in their product names, the file's name or the tab's name, so each product is compared with its name in the file.",
   ]);
   assert.deepEqual(rows.map((r) => [r.n, r.label, r.orderId, r.orderDate, r.amount, r.product]), [
     [1, 'Row 1', orderId(2), '20-07-2026', '₹349', 'Test Brand Steel Bottle'],
@@ -292,6 +294,7 @@ test('a needed column that cannot be found: the columns are asked for and nothin
     'This file has no delivery screenshot, so every row needs a staff member to check the delivery.',
     'This file has no review link, so each review is read from its review screenshot.',
     'It has no Status, Type or Note column, so the checked Excel file adds them after the last column.',
+    "No campaign was found for these rows: no campaign's brand is in their product names, the file's name or the tab's name, so each product is compared with its name in the file.",
   ]);
   // The next file with the same column names: found by themselves, from the choice remembered in Flipkart's own settings.
   const next = await upload(at, 'odd names again.xlsx', await workbook({ Flipkart: [['REF', 'evidence', 'Buyer'], [orderId(4), reviewShot(4), person(4)]] }));
@@ -524,7 +527,7 @@ test("Check over HTTP, as on Amazon: the steps streamed as they run; the screens
   const running = check(three);
   for (let i = 0; i < 300 && !google.fetched.includes('1TestFlipkartOrder04abcd'); i++) await new Promise((r) => setTimeout(r, 10));
   const second = await check(one);
-  assert.deepEqual([second.status, second.json.message], [409, 'A row is being checked. Wait for it to finish, then press Check.']);
+  assert.deepEqual([second.status, second.json.message], [409, 'A row is being checked. Wait for it to finish, then press "Check again".'], 'row 1 is checked, so its button is "Check again", as on Amazon');
   const blocked = await upload(at, 'flipkart-orders.xlsx', FIXTURE);
   assert.deepEqual([blocked.status, blocked.json.message], [409, 'A row is being checked. Wait for it to finish, then upload the file again.']);
   google.hold = null;
@@ -539,6 +542,181 @@ test("Check over HTTP, as on Amazon: the steps streamed as they run; the screens
   assert.deepEqual([postPage.status, postPage.headers.allow], [405, 'GET, HEAD']);
   assert.equal((await call('GET', `/local/flipkart/rows/${one.id}`, { at, token: null })).status, 401);
   assert.equal((await check(one, { site: 'cross-site' })).status, 403);
+  assert.ok(filesIn(dir).every((p) => p.startsWith('flipkart/')), 'kept only in data/flipkart/');
+  await routes.close();
+});
+
+test("the line under the upload line says which campaign the rows use, found the Amazon way and in the Amazon words: a live campaign whose brand is in the row's product name, or else in the file's name or the tab's name; rows with no live campaign are said too", async () => {
+  const saved = (products, sheet = {}) => ({
+    sheet: { fileName: 'orders.xlsx', kind: 'xlsx', tab: 'Flipkart', headers: [{ col: 1, text: 'Order ID' }, { col: 2, text: 'Product' }], lastCol: 2, mapping: { orderId: 1, product: 2 }, uploadedAt: '2026-10-12T12:00:00.000Z', ...sheet },
+    rows: products.map((p, i) => ({ id: `r00000000000${i + 1}`, n: i + 1, row: i + 2, orderId: { text: orderId(i + 2) }, product: { text: p }, shots: {}, pictures: {}, values: {}, prev: null })),
+  });
+  const campaign = (key, brand, name, live = true) => ({ key, brand, name, live, products: [] });
+  const GLOW = campaign('f00000000000a', 'Test Glow', 'Test Glow Clean');
+  const CLAY = campaign('f00000000000b', 'Test Clay', 'Test Clay Care');
+  const line = (s, campaigns) => sheetView(s, campaigns).sheet.about.at(-1);
+  const NONE = "No campaign was found for these rows: no campaign's brand is in their product names, the file's name or the tab's name, so each product is compared with its name in the file.";
+  assert.equal(line(saved(['Test Glow Face Wash']), []), NONE, 'no campaign yet');
+  assert.equal(line(saved(['Test Glow Face Wash', 'TestGlow Clay Mask']), [GLOW, CLAY]), 'The rows use the live campaign "Test Glow Clean": its brand, Test Glow, is in their product names.');
+  assert.equal(line(saved(['Face Wash']), [GLOW]), NONE, "a brand that is nowhere: in no product name, nor in the file's name or the tab's name");
+  assert.equal(line(saved(['Face Wash'], { fileName: 'test glow orders.xlsx' }), [GLOW]), 'The rows use the live campaign "Test Glow Clean": its brand, Test Glow, is in the file\'s name.');
+  assert.equal(line(saved(['Face Wash'], { tab: 'Test Glow' }), [GLOW]), 'The rows use the live campaign "Test Glow Clean": its brand, Test Glow, is in the tab\'s name.');
+  assert.equal(line(saved(['Test Glow Face Wash', 'Face Mask'], { fileName: 'test glow.xlsx' }), [GLOW]), 'The rows use the live campaign "Test Glow Clean": its brand, Test Glow, is in their product names or the file\'s name.');
+  assert.equal(line(saved(['Test Glow Face Wash', 'Test Clay Mask', 'Plain Bottle']), [GLOW, CLAY]), 'The rows use the live campaign "Test Glow Clean" (1 row, by their product names) and the live campaign "Test Clay Care" (1 row, by their product names). 1 row uses no campaign, so its product is compared with its name in the file.');
+  assert.equal(line(saved(['Test Glow Face Wash', 'Plain Bottle', 'Plain Jar']), [GLOW]), 'The rows use the live campaign "Test Glow Clean" (1 row, by their product names). 2 rows use no campaign, so their products are compared with their names in the file.');
+  assert.equal(line(saved(['Test Glow Face Wash']), [{ ...GLOW, live: false, name: 'Old Glow' }]), 'No live campaign was found for these rows, so each product is compared with its name in the file. The campaign "Old Glow" has the brand, but it is marked Ended, so it is not used: mark it Live in the Campaigns box to use it.', 'a campaign marked Ended is never used');
+  assert.equal(line(saved(['Test Glow Face Wash']), [{ ...GLOW, brand: '' }]), NONE, 'a campaign with no brand yet is never used');
+  // Over HTTP: the line follows the campaigns as they are saved, under the other lines about the file.
+  const { dir, at } = await fresh();
+  assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
+  assert.equal((await call('GET', '/local/flipkart/sheet', { at })).json.sheet.about.at(-1), NONE);
+  await createFlipkartStore(dir).changeCampaigns((list) => putCampaign(list, campaign('f00000000000c', 'Test Brand', 'Test Brand Bottles')));
+  const about = (await call('GET', '/local/flipkart/sheet', { at })).json.sheet.about;
+  assert.deepEqual([about.length, about.at(-1)], [4, 'The rows use the live campaign "Test Brand Bottles" (4 rows, by their product names). 1 row uses no campaign, so its product is compared with its name in the file.'], 'row 5 has no product name');
+});
+
+/** "Start checking" as the page sends it, its lines read as they come; stop() closes it, as Stop does. */
+function startRun(at, body = {}) {
+  const lines = [];
+  let req;
+  const done = new Promise((resolve) => {
+    const data = Buffer.from(JSON.stringify(body));
+    req = request({ host: '127.0.0.1', port: at, path: '/local/flipkart/check-all', method: 'POST', headers: { Host: 'localhost:8093', Authorization: `Bearer ${TOKEN}`, 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json', 'Content-Length': data.length } }, (res) => {
+      let rest = '';
+      res.on('data', (c) => {
+        rest += c;
+        const parts = rest.split('\n');
+        rest = parts.pop();
+        for (const l of parts) if (l.trim()) lines.push(JSON.parse(l));
+      });
+      // Closed by stop(): the read ends there.
+      res.on('error', () => resolve(lines));
+      res.on('close', () => resolve(lines));
+    });
+    req.on('error', () => resolve(lines));
+    req.end(data);
+  });
+  return { lines, done, stop: () => req.destroy() };
+}
+
+test('"Start checking" over HTTP, as on Amazon: the rows not checked yet, one by one from the first one, each row\'s steps streamed and its new line sent once it is finished; no one logged in to Google, a login using the Live Amazon Browser, or a pause in a row\'s check pauses before or at that row, and checking carries on from it; Stop; "Check every row again"; one check at a time; still no Status', async () => {
+  const dir = tempDir();
+  const google = driveLogin();
+  const routes = createFlipkartRoutes({ dataDir: dir, auth, google, shotOptions: { gapMs: 0 } });
+  const at = await serve({ flipkart: routes });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const json = (body) => ({ at, body: Buffer.from(JSON.stringify(body)), type: 'application/json' });
+  const lines = (res) => res.text.trim().split('\n').map((l) => JSON.parse(l));
+  const checkAll = async (body = {}) => {
+    const res = await call('POST', '/local/flipkart/check-all', json(body));
+    return res.status === 200 ? lines(res) : res;
+  };
+  const doneNow = async () => (await call('GET', '/local/flipkart/sheet', { at })).json.rows.map((r) => r.done);
+  // Only the run's own lines: each row's steps come between them, as on Amazon.
+  const runLines = (events) => events.filter((e) => !['started', 'action', 'step', 'done'].includes(e.event)).map((e) => [e.event, e.label ?? null, e.done ?? null]);
+  /** Waits until nothing is checked: a campaign can then be saved (a form with no brand is refused for that alone, and nothing is saved). */
+  const free = async () => {
+    for (let i = 0; i < 300; i++) {
+      const r = await call('POST', '/local/flipkart/campaigns', json({}));
+      if (r.status !== 409) return r;
+      await sleep(10);
+    }
+    throw new Error('still checking');
+  };
+
+  const none = await fresh();
+  assert.deepEqual([(await call('POST', '/local/flipkart/check-all', { ...json({}), at: none.at })).json.message], ['There are no rows to check. Upload the file first.']);
+  assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
+  const rows = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  const [one, two] = rows;
+  assert.deepEqual(await doneNow(), [false, false, false, false, false], 'no row is checked yet');
+  // Row 2 checked by its own button first: it counts as checked once its check finished.
+  const single = lines(await call('POST', `/local/flipkart/rows/${two.id}/check`, json({})));
+  assert.equal(single.at(-1).event, 'done');
+  assert.deepEqual(await doneNow(), [false, true, false, false, false]);
+
+  // No one logged in to Google: checking pauses before the first row not checked yet whose screenshots are on Google Drive, and says what to do.
+  google.state = 'out';
+  const tally = { total: 5, done: 1, left: 4 };
+  assert.deepEqual(await checkAll(), [
+    { event: 'run-started', again: false, ...tally },
+    { event: 'row', rowId: one.id, label: 'Row 1', ...tally },
+    { event: 'paused', kind: 'google-out', says: 'No one is logged in to Google, so the screenshots on Google Drive cannot be downloaded. Press "Log in to Google" in the top bar and log in there, then press "Carry on checking".', rowId: one.id, label: 'Row 1', checked: 0, ...tally },
+  ]);
+  // A login using the Live Amazon Browser: the same, with its own plain sentence.
+  google.state = 'in';
+  google.amazonLogin = () => ({ state: 'waiting', busy: false });
+  assert.deepEqual((await checkAll()).at(-1), { event: 'paused', kind: 'login-busy', says: 'The Live Amazon Browser is busy with the Amazon login, so the Google Drive screenshots were not downloaded yet. Wait until that is done, then press "Carry on checking".', rowId: one.id, label: 'Row 1', checked: 0, ...tally });
+  google.amazonLogin = () => ({ state: 'in', busy: false });
+  // A pause in the row's own check (here, the Google login being checked just as its first screenshot is downloaded) pauses checking at that row too.
+  let asked = 0;
+  google.busy = () => ++asked > 1;
+  const mid = await checkAll();
+  assert.deepEqual(mid.filter((e) => e.event === 'step').map((e) => `${e.step.n} ${e.step.state}`), ['1 running', '1 fail']);
+  assert.deepEqual(mid.at(-1), { event: 'paused', kind: 'login-busy', says: 'The Google login is being checked, so the Google Drive screenshots were not downloaded yet. Wait a moment, then press "Carry on checking".', rowId: one.id, label: 'Row 1', checked: 0, ...tally });
+  google.busy = () => false;
+  assert.deepEqual(await doneNow(), [false, true, false, false, false], 'a paused row is not checked, so checking carries on from it next time');
+  assert.deepEqual([google.fetched, filesIn(dir).filter((p) => p.startsWith('flipkart/pictures/')).length], [[], 4], 'nothing was downloaded yet');
+
+  // Stop: at once; the row it was on is not checked.
+  let release;
+  google.hold = new Promise((r) => (release = r));
+  const stopped = startRun(at);
+  for (let i = 0; i < 300 && !(google.fetched.length && stopped.lines.length >= 2); i++) await sleep(10);
+  assert.deepEqual(google.fetched, ['1TestFlipkartOrder02abcd'], "row 1's purchase screenshot is being downloaded");
+  assert.deepEqual(stopped.lines.slice(0, 2).map((e) => [e.event, e.label ?? null]), [['run-started', null], ['row', 'Row 1']]);
+  stopped.stop();
+  google.hold = null;
+  release();
+  assert.deepEqual([(await free()).status, (await stopped.done).some((e) => e.event === 'row-done')], [400, false]);
+  assert.deepEqual(await doneNow(), [false, true, false, false, false], 'stopped: row 1 is not checked, so it is the first one checked next time');
+
+  // "Carry on checking": from row 1, passing row 2 (checked), to the last row; each row's new line is sent as soon as it is finished.
+  const run = await checkAll();
+  assert.deepEqual(runLines(run), [['run-started', null, 1], ['row', 'Row 1', 1], ['row-done', 'Row 1', 2], ['row', 'Row 3', 2], ['row-done', 'Row 3', 3], ['row', 'Row 4', 3], ['row-done', 'Row 4', 4], ['row', 'Row 5', 4], ['row-done', 'Row 5', 5], ['run-done', null, 5]]);
+  assert.deepEqual(run.filter((e) => e.event === 'started').map((e) => [e.name, e.steps]), [['Row 1', STEP_NAMES], ['Row 3', STEP_NAMES], ['Row 4', STEP_NAMES], ['Row 5', STEP_NAMES]], "each row's steps, streamed as they run");
+  assert.deepEqual(run.filter((e) => e.event === 'row-done').map((e) => [e.rows.length, e.rows[0].id === e.rowId, e.rows[0].done, e.rows[0].prev]), [[1, true, true, null], [1, true, true, null], [1, true, true, null], [1, true, true, null]], 'the row\'s new line for the table: checked, and still no Status');
+  assert.deepEqual(run.find((e) => e.event === 'done').result.steps.map((s) => s.state), ['pass', 'later', 'fail', 'later', 'pass', 'later', 'later', 'later', 'later'], "row 1's check: the screenshots only");
+  assert.deepEqual(run.at(-1), { event: 'run-done', checked: 4, total: 5, done: 5, left: 0 });
+  assert.deepEqual(await doneNow(), [true, true, true, true, true]);
+  const page = (await call('GET', `/local/flipkart/rows/${one.id}`, { at })).json;
+  assert.deepEqual([page.row.done, page.result.steps.length, 'status' in page.result], [true, 9, false], "its page shows its last check's steps, and no Status");
+  const all = await checkAll();
+  assert.deepEqual([all.status, all.json.message], [409, 'All rows are checked. To check them all again, press "Check every row again".']);
+
+  // "Check every row again": every row's last check goes, and every row is checked again from the first one. One check at a time meanwhile.
+  google.fetched.length = 0;
+  google.hold = new Promise((r) => (release = r));
+  const again = startRun(at, { again: true });
+  for (let i = 0; i < 300 && !google.fetched.length; i++) await sleep(10);
+  assert.deepEqual(google.fetched, ['1TestFlipkartDelivery02ab'], 'only the screenshot that could not be had is downloaded again');
+  const busy = [
+    await call('POST', `/local/flipkart/rows/${two.id}/check`, json({})),
+    await call('POST', '/local/flipkart/check-all', json({})),
+    await upload(at, 'flipkart-orders.xlsx', FIXTURE),
+    await call('POST', '/local/flipkart/campaigns', json({})),
+  ];
+  assert.deepEqual(busy.map((r) => [r.status, r.json.message]), [
+    [409, 'Rows are being checked. Press Stop, or wait for checking to finish, then press Check.'],
+    [409, 'Rows are being checked. Press Stop, or wait for checking to finish, then press "Start checking" again.'],
+    [409, 'Rows are being checked. Press Stop, or wait for checking to finish, then upload the file again.'],
+    [409, 'Rows are being checked. Press Stop, or wait for checking to finish, then press Save.'],
+  ]);
+  google.hold = null;
+  release();
+  const redone = await again.done;
+  assert.deepEqual(redone[0], { event: 'run-started', again: true, total: 5, done: 0, left: 5 });
+  assert.deepEqual(runLines(redone).filter(([e]) => e === 'row').map(([, label]) => label), ['Row 1', 'Row 2', 'Row 3', 'Row 4', 'Row 5']);
+  assert.deepEqual(redone.at(-1), { event: 'run-done', checked: 5, total: 5, done: 5, left: 0 });
+  const table = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  assert.deepEqual(table.map((r) => [r.done, r.prev]), Array.from({ length: 5 }, () => [true, null]), 'every row checked, and no Status');
+
+  // The same safety as every route.
+  const get = await call('GET', '/local/flipkart/check-all', { at });
+  assert.deepEqual([get.status, get.headers.allow], [405, 'POST']);
+  assert.equal((await call('POST', '/local/flipkart/check-all', { ...json({}), token: null })).status, 401);
+  assert.equal((await call('POST', '/local/flipkart/check-all', { ...json({}), site: 'cross-site' })).status, 403);
+  assert.equal((await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from('{}'), type: 'text/plain' })).status, 415);
   assert.ok(filesIn(dir).every((p) => p.startsWith('flipkart/')), 'kept only in data/flipkart/');
   await routes.close();
 });

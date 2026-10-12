@@ -227,7 +227,8 @@ test("a campaign ended, deleted (asked first) or its products read again; while 
   await settle();
   assert.equal(looks(), first, 'nothing is being read: the server is not asked again');
   await s.click(`end-${KA}`);
-  assert.deepEqual(s.local.calls.at(-1), { method: 'POST', path: `/local/flipkart/campaigns/${KA}/end`, body: {} });
+  assert.deepEqual(s.local.calls.filter((c) => c.method === 'POST').at(-1), { method: 'POST', path: `/local/flipkart/campaigns/${KA}/end`, body: {} });
+  assert.equal(s.local.calls.at(-1).path, '/local/flipkart/sheet', 'the line under the upload line, saying which campaign the rows use, is fetched again');
   assert.equal(goodNotice(s), 'The campaign "Test Glow Clean" has ended. It is no longer used.');
   s.ctx.confirm = (text) => (s.asked.push(text), false);
   await s.click(`delete-${KA}`);
@@ -235,7 +236,7 @@ test("a campaign ended, deleted (asked first) or its products read again; while 
   assert.equal(s.local.calls.some((c) => c.path.endsWith('/delete')), false, 'not deleted when the answer is no');
   s.ctx.confirm = () => true;
   await s.click(`delete-${KA}`);
-  assert.equal(s.local.calls.at(-1).path, `/local/flipkart/campaigns/${KA}/delete`);
+  assert.equal(s.local.calls.filter((c) => c.method === 'POST').at(-1).path, `/local/flipkart/campaigns/${KA}/delete`);
   assert.equal(goodNotice(s), 'The campaign "Test Glow Clean" was deleted.');
   assert.equal(byId(s.box(), `campaign-${KA}`), null);
   // Read again: the box follows the reading every 2 seconds until it ends.

@@ -5,13 +5,18 @@
 // yet), /local/flipkart/sheet (GET the uploaded file's rows, POST a file to
 // upload), /local/flipkart/campaigns (GET them; POST to add one, to change
 // one, or to end, delete or read again one), /local/flipkart/account (GET:
-// the Google login, for the top bar) and /local/flipkart/rows/… (GET a row's
+// the Google login, for the top bar), /local/flipkart/rows/… (GET a row's
 // page, with its last check, and its pictures; POST …/check to check it, as on
-// Amazon, the steps streamed as they run). The file is read on this
+// Amazon, the steps streamed as they run) and /local/flipkart/check-all (POST:
+// "Start checking", later "Carry on checking", or "Check every row again",
+// the rows checked one by one as on Amazon, each row's steps streamed as they
+// run). The file is read on this
 // computer, its columns are found as on Amazon (or chosen on the screen when
 // a needed one cannot be found), and it is kept in data/flipkart/ with its
-// rows and the pictures placed in its cells; its links are only shown, never
-// opened, and nothing is downloaded until a row is checked (check.js). A
+// rows and the pictures placed in its cells; under the upload line, the
+// screen is told, as on Amazon, which campaign the rows use. Its links are
+// only shown, never opened, and nothing is downloaded until a row is checked
+// (check.js). A
 // campaign's products are read, after it
 // is saved, from their Flipkart pages in the Live Flipkart Browser
 // (browser.js), one page at a time; the window opens only then, never when
@@ -29,14 +34,24 @@ import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS, ROW_ID } from
 import { cellLinks, linkLabel, linksIn, isDriveLink, linkKey } from './links.js';
 import { createScreenshots, downloadable } from './screenshots.js';
 import { runCheck, PAUSE_SAYS } from './check.js';
-import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct } from './campaigns.js';
+import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct, campaignsFound, brandIn } from './campaigns.js';
 import { FlipkartBrowser } from './browser.js';
 
 const TOO_BIG = `The file is larger than ${MAX_SHEET_BYTES / (1024 * 1024)} megabytes, so save a smaller copy (only the Flipkart tab, for example), then upload that.`;
 const MAX_JSON_BYTES = 64 * 1024;
 const READING_NOW = 'The products of a campaign are being read from Flipkart.';
 const CHECKING_NOW = 'A row is being checked.';
+const CHECKING_ALL = 'Rows are being checked.';
 const GONE = 'This campaign is no longer saved. Reload the page.';
+/** The button that checks the rows one by one, once a row is checked, as a pause names it. */
+const RUN_BUTTON = '"Carry on checking"';
+
+/** A row counts as checked once its last check finished: only a finished check is kept with the row (store.js saveCheck). */
+const isChecked = (r) => Boolean(r?.check);
+/** A row in a sentence, as on Amazon: "Row 3", its number on the dashboard. */
+const labelOf = (r) => `Row ${r?.n ?? '?'}`;
+/** A pause's sentence, naming the button there is to press: Check or "Check again" for one row, "Carry on checking" for the rows one by one. */
+const pressing = (says, button) => String(says).replace('"Carry on checking"', button).replace(/then try again\.$/, `then press ${button}.`);
 
 // Copied from the Amazon routes (amazon/routes.js): a refusal with its status, the request's bytes up to a limit, and a multipart form.
 class HttpError extends Error {
@@ -170,8 +185,9 @@ function pictureView(p, i) {
  * link cell with a few words saying where each link goes (`words` are the
  * cell's own words when they are not a link themselves) and how a picture
  * was given ('cell' or 'floating') with each picture kept or why it could
- * not be had, the file's other columns, and the Status, Type and Note the file
- * already had. The pictures themselves never come with it.
+ * not be had, the file's other columns, the Status, Type and Note the file
+ * already had, and whether it is checked (done: its last check finished). The
+ * pictures themselves never come with it.
  */
 export function rowView(r) {
   const shot = (which) => {
@@ -203,6 +219,7 @@ export function rowView(r) {
     // The file's other columns (such as the reviewer's name), by column number: their words, and where each link goes.
     values: Object.fromEntries(Object.entries(r.values ?? {}).map(([col, v]) => [col, { text: v?.text ?? '', labels: cellLinks(v?.text ?? '', v?.behind ?? '').links.map((link) => ({ link, label: linkLabel(link) })) }])),
     prev: r.prev ?? null,
+    done: isChecked(r),
   };
 }
 
@@ -234,12 +251,59 @@ const LACKS = {
   reviewLink: 'This file has no review link, so each review is read from its review screenshot.',
 };
 
+// Copied from the Amazon routes' words (amazon/notes.js): a list in a sentence, "a, b and c".
+function joinAnd(list) {
+  const l = list.filter(Boolean);
+  if (l.length <= 1) return l[0] ?? '';
+  return `${l.slice(0, -1).join(', ')} and ${l[l.length - 1]}`;
+}
+const quotedName = (c) => `"${c.name}"`;
+
+/**
+ * Which live campaign the rows use, as on Amazon (amazon/routes.js
+ * campaignSaid): by the brand in their product names, or else in the file's
+ * name or the tab's name; or that none was found, plainly when the brand has
+ * only a campaign marked Ended.
+ */
+function campaignSaid(view, rows, campaigns) {
+  const places = [view.fileName, view.tab].filter(Boolean);
+  const placeOf = (c) => (brandIn(view.fileName, c.brand) ? "the file's name" : "the tab's name");
+  const count = (n) => (n === 1 ? '1 row' : `${n} rows`);
+  const tally = new Map();
+  const endedOnly = new Map();
+  let none = 0;
+  for (const r of rows) {
+    const found = campaignsFound(r.product?.text ?? '', campaigns, places);
+    if (!found.list.length) {
+      none++;
+      for (const c of campaignsFound(r.product?.text ?? '', campaigns, places, { live: false }).list) endedOnly.set(c.key, c);
+    }
+    for (const c of found.list) {
+      const t = tally.get(c.key) ?? { c, product: 0, file: 0 };
+      t[found.by]++;
+      tally.set(c.key, t);
+    }
+  }
+  const ended = [...endedOnly.values()];
+  const endedSaid = ended.length ? ` ${ended.length === 1 ? `The campaign ${quotedName(ended[0])} has the brand, but it is marked Ended, so it is not used` : `The campaigns ${joinAnd(ended.map(quotedName))} have the brand, but they are marked Ended, so they are not used`}: mark it Live in the Campaigns box to use it.` : '';
+  if (!tally.size) {
+    if (ended.length) return `No live campaign was found for these rows, so each product is compared with its name in the file.${endedSaid}`;
+    return "No campaign was found for these rows: no campaign's brand is in their product names, the file's name or the tab's name, so each product is compared with its name in the file.";
+  }
+  const how = ({ c, product, file }) => (product && file ? "their product names or the file's name" : product ? 'their product names' : placeOf(c));
+  const named = (c) => `the live campaign "${c.name}"`;
+  const list = [...tally.values()];
+  if (list.length === 1 && !none) return `The rows use ${named(list[0].c)}: its brand, ${list[0].c.brand}, is in ${how(list[0])}.`;
+  const said = `The rows use ${joinAnd(list.map((t) => `${named(t.c)} (${count(t.product + t.file)}, by ${how(t)})`))}.`;
+  return none ? `${said} ${count(none)} ${none === 1 ? 'uses no campaign, so its product is compared with its name' : 'use no campaign, so their products are compared with their names'} in the file.${endedSaid}` : said;
+}
+
 /**
  * The short lines under the upload line, as on Amazon: which of the file's
- * columns are used for checking, which are only shown, and what the file
- * does not have and what that means.
+ * columns are used for checking, which are only shown, what the file does not
+ * have and what that means, and which campaign the rows use.
  */
-function aboutFile(view) {
+function aboutFile(view, rows = [], campaigns = []) {
   const m = view.mapping;
   const named = (h) => (/^Column [A-Z]{1,3}$/.test(h.text) ? 'a column with no name' : h.text);
   const list = (items) => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items.at(-1)}` : items[0] ?? '');
@@ -251,21 +315,23 @@ function aboutFile(view) {
   for (const [k, said] of Object.entries(LACKS)) if (!Number.isInteger(m[k])) out.push(said);
   const added = RESULT_FIELDS.filter((k) => !Number.isInteger(m[k])).map((k) => RESULT_HEADERS[k]);
   if (added.length) out.push(`It has no ${added.length > 1 ? `${added.slice(0, -1).join(', ')} or ${added.at(-1)}` : added[0]} column, so the checked Excel file adds ${added.length === 1 ? 'it' : 'them'} after the last column.`);
+  out.push(campaignSaid(view, rows, campaigns));
   return out;
 }
 
 /**
  * What the screen shows of the kept file: { sheet, rows }. sheet: its name,
  * the tab read (null for a CSV file), its column names, the columns found,
- * the table's columns, the lines about it and how many rows it has; rows:
- * every row as rowView gives it. A file kept before its columns were found
- * shows no rows: it must be uploaded again (uploadAgain).
+ * the table's columns, the lines about it (with which of the campaigns the
+ * rows use) and how many rows it has; rows: every row as rowView gives it. A
+ * file kept before its columns were found shows no rows: it must be uploaded
+ * again (uploadAgain).
  */
-export function sheetView(saved) {
+export function sheetView(saved, campaigns = []) {
   if (!saved || saved.old) return { sheet: null, rows: [], ...(saved?.old ? { uploadAgain: true } : {}) };
   const s = saved.sheet;
   const sheet = { fileName: s.fileName, kind: s.kind, tab: s.tab, headers: s.headers, lastCol: s.lastCol, mapping: s.mapping, columns: tableColumns(s, s.mapping), rowCount: saved.rows.length, uploadedAt: s.uploadedAt };
-  sheet.about = aboutFile(sheet);
+  sheet.about = aboutFile(sheet, saved.rows, campaigns);
   return { sheet, rows: saved.rows.map(rowView) };
 }
 
@@ -286,7 +352,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   const store = createFlipkartStore(dataDir);
   // A row's screenshots, downloaded when it is checked; the ones on Google Drive through the Amazon screen's Google login.
   const screenshots = createScreenshots({ store, google, ...shotOptions });
-  let checking = null; // the row being checked: { rowId, stop }. One check at a time.
+  let checking = null; // the row being checked: { rowId, stop }, with all: true while the rows are checked one by one. One check at a time.
   let live = browser;
   let closing = false; // the dashboard is stopping: no window is made, and no product is read
   const liveBrowser = () => {
@@ -353,8 +419,10 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
     return { campaigns: list.map(campaignView), reading: busy || Boolean(job) };
   }
 
+  /** What a row being checked, or the rows being checked one by one (Stop stops them), says to anything asked meanwhile, naming what to do after. */
+  const checkingSays = (then) => (checking?.all ? `${CHECKING_ALL} Press Stop, or wait for checking to finish, then ${then}.` : `${CHECKING_NOW} Wait for it to finish, then ${then}.`);
   /** Why a campaign cannot be changed just now, naming the button to press later; null when it can. */
-  const campaignBusy = (button) => (job || checking ? `${job ? READING_NOW : CHECKING_NOW} Wait for it to finish, then press ${button}.` : null);
+  const campaignBusy = (button) => (job ? `${READING_NOW} Wait for it to finish, then press ${button}.` : checking ? checkingSays(`press ${button}`) : null);
 
   /** A campaign from the screen's form: its brand, its name, live or ended, and its products, one per line. A product typed before keeps what was read for it. */
   function campaignFrom(body, old) {
@@ -503,7 +571,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
     const { fields, files } = await readForm(req);
     const file = files.file;
     if (!file) return refuse(res, 400, 'Choose the Flipkart file first.');
-    if (checking) return refuse(res, 409, `${CHECKING_NOW} Wait for it to finish, then upload the file again.`);
+    if (checking) return refuse(res, 409, checkingSays('upload the file again'));
     if (file.data.length > MAX_SHEET_BYTES) return refuse(res, 413, TOO_BIG);
     const chosen = chosenColumns(fields.mapping);
     let book;
@@ -530,7 +598,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
     }
     const saved = await store.saveSheet({ fileName: file.filename, kind, tab: tab.name, headerRow: tab.headerRow, headers: tab.headers, lastCol: tab.lastCol, mapping }, file.data, made.rows);
     await store.setColumnChoice(rememberedChoice(mapping, tab.headers));
-    return sendJson(res, 200, { made: saved.rows.length, tab: tab.name, unplaced: made.unplaced, ...sheetView(saved) });
+    return sendJson(res, 200, { made: saved.rows.length, tab: tab.name, unplaced: made.unplaced, ...sheetView(saved, await store.campaigns()) });
   }
 
   // ---- the Google login: the Amazon screen's own ----
@@ -549,39 +617,147 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   }
 
   /**
-   * "Check": one row's check, its steps streamed as they run, as on Amazon.
-   * One check at a time, never while a campaign's products are read. A row
-   * with a Google Drive screenshot to download while no one is logged in to
-   * Google pauses before it starts, as on Amazon. A paused or stopped check
-   * saves nothing for the row; a finished one keeps its steps with the row.
+   * Before a row with a Google Drive screenshot still to download, as on
+   * Amazon: why it cannot be checked just now, { kind, says }, or null. A
+   * login using the Live Amazon Browser (screenshots.js says which, in a plain
+   * sentence), or no one logged in to Google.
+   */
+  function googleBefore(row) {
+    if (!needsGoogle(row)) return null;
+    const busy = screenshots.busyNow();
+    if (busy) return { kind: 'login-busy', says: busy };
+    if (accountView().google?.state !== 'in') return { kind: 'google-out', says: PAUSE_SAYS['google-out'] };
+    return null;
+  }
+
+  /** The file's columns a check needs to know about: { orderShot, deliveryShot, reviewShot, reviewLink }, each true when the file has it. */
+  const hasColumns = (mapping) => Object.fromEntries(['orderShot', 'deliveryShot', 'reviewShot', 'reviewLink'].map((k) => [k, Number.isInteger(mapping?.[k])]));
+  /** A row's own button, as the screen words it, as on Amazon: Check, or "Check again" once the row is checked. */
+  const checkButton = (row) => (isChecked(row) ? '"Check again"' : 'Check');
+  /** The button that checks the rows one by one: "Carry on checking" once a row is checked. */
+  const runButton = (rows) => (rows.some(isChecked) ? RUN_BUTTON : '"Start checking"');
+  /** The kept file's rows, as kept; none when no file is kept. */
+  const keptRows = async () => {
+    const saved = await store.sheet();
+    return Array.isArray(saved?.rows) ? saved.rows : [];
+  };
+
+  /**
+   * "Check" (or "Check again"): one row's check, its steps streamed as they
+   * run, as on Amazon. One check at a time, never while a campaign's products
+   * are read. A row with a Google Drive screenshot to download while a login
+   * is using the Live Amazon Browser, or while no one is logged in to Google,
+   * pauses before it starts, as on Amazon. A paused or stopped check saves
+   * nothing for the row; a finished one keeps its steps with the row.
    */
   async function startCheck(req, res, id) {
     await readBody(req, MAX_JSON_BYTES, 'That is too large to send here.');
     if (closing) throw new HttpError(409, 'The dashboard is stopping.');
     const row = await store.row(id);
     if (!row) return refuse(res, 404, 'No row has that id.');
-    if (job) return refuse(res, 409, `${READING_NOW} Wait for it to finish, then press Check.`);
-    if (checking) return refuse(res, 409, `${CHECKING_NOW} Wait for it to finish, then press Check.`);
+    const button = checkButton(row);
+    if (job) return refuse(res, 409, `${READING_NOW} Wait for it to finish, then press ${button}.`);
+    if (checking) return refuse(res, 409, checkingSays(`press ${button}`));
     const run = (checking = { rowId: id, stop: new AbortController() });
     res.on('close', () => {
       if (!res.writableFinished) run.stop.abort();
     });
     const emit = streamTo(res);
     try {
-      // The pause names the button there is for the row: Check (there is no "Carry on checking" yet).
-      const pause = (kind, says) => emit({ event: 'paused', kind, says: says.replace('"Carry on checking"', 'Check') });
-      if (needsGoogle(row) && accountView().google?.state !== 'in') return pause('google-out', PAUSE_SAYS['google-out']);
-      const mapping = (await store.sheet())?.sheet?.mapping ?? {};
-      const has = Object.fromEntries(['orderShot', 'deliveryShot', 'reviewShot', 'reviewLink'].map((k) => [k, Number.isInteger(mapping[k])]));
+      // The pause names the button there is for the row.
+      const pause = (kind, says) => emit({ event: 'paused', kind, says: pressing(says, button) });
+      const before = googleBefore(row);
+      if (before) return pause(before.kind, before.says);
+      const has = hasColumns((await store.sheet())?.sheet?.mapping);
       const result = await runCheck({ row, has, screenshots, emit, signal: run.stop.signal, now });
       if (result.paused) pause(result.paused.kind, result.paused.says);
       else if (!result.stopped) await store.saveCheck(id, result);
     } catch (err) {
       log(`Flipkart check failed: ${err?.name ?? 'Error'}`);
-      emit({ event: 'failed', says: 'Something went wrong on this computer part way through the check. Nothing was saved for it; press Check to try again.' });
+      emit({ event: 'failed', says: `Something went wrong on this computer part way through the check. Nothing was saved for it; press ${button} to try again.` });
     } finally {
       if (checking === run) checking = null;
       endStream(res);
+    }
+  }
+
+  // ---- checking the rows one by one (copied from the Amazon routes, amazon/routes.js, and changed for Flipkart) ----
+
+  /** How many rows there are, how many are checked, and how many are left. */
+  function tally(rows) {
+    const done = rows.filter(isChecked).length;
+    return { total: rows.length, done, left: rows.length - done };
+  }
+
+  /**
+   * "Start checking" (later "Carry on checking"): the rows not checked yet,
+   * one at a time, from the first one, in the file's order, as on Amazon.
+   * "Check every row again" (again) first removes every row's last check. As
+   * on Amazon, before a row with a Google Drive screenshot to download, a
+   * login using the Live Amazon Browser or no one logged in to Google pauses
+   * it; so does a pause in a row's check (Google's login page, a robot check
+   * or a block). Stop, or the page closing, stops it at once. Either way the
+   * row it was on is not checked, so it is the first one checked next time.
+   * Never while a campaign's products are read, or while a row is checked.
+   */
+  async function checkAll(req, res) {
+    const body = await readJson(req);
+    if (closing) throw new HttpError(409, 'The dashboard is stopping.');
+    const again = body?.again === true;
+    const rows = await keptRows();
+    const button = again ? '"Check every row again"' : runButton(rows);
+    if (job) return refuse(res, 409, `${READING_NOW} Wait for it to finish, then press ${button} again.`);
+    if (checking) return refuse(res, 409, checkingSays(`press ${button} again`));
+    if (!rows.length) return refuse(res, 400, 'There are no rows to check. Upload the file first.');
+    if (!again && rows.every(isChecked)) return refuse(res, 409, 'All rows are checked. To check them all again, press "Check every row again".');
+    const run = (checking = { rowId: null, all: true, stop: new AbortController() });
+    res.on('close', () => {
+      if (!res.writableFinished) run.stop.abort();
+    });
+    try {
+      if (again) await store.clearChecks();
+      await runAll(run, res, again);
+    } finally {
+      if (checking === run) checking = null;
+      endStream(res);
+    }
+  }
+
+  async function runAll(run, res, again) {
+    const emit = streamTo(res);
+    const tried = new Set(); // no row is checked twice in one go
+    let checked = 0;
+    try {
+      const saved = await store.sheet();
+      const has = hasColumns(saved?.sheet?.mapping);
+      let rows = Array.isArray(saved?.rows) ? saved.rows : [];
+      emit({ event: 'run-started', again, ...tally(rows) });
+      for (;;) {
+        if (run.stop.signal.aborted) break;
+        // The first row not checked yet.
+        const r = rows.find((x) => !isChecked(x) && !tried.has(x.id));
+        if (!r) break;
+        tried.add(r.id);
+        run.rowId = r.id;
+        emit({ event: 'row', rowId: r.id, label: labelOf(r), ...tally(rows) });
+        const paused = (kind, says) => emit({ event: 'paused', kind, says: pressing(says, RUN_BUTTON), rowId: r.id, label: labelOf(r), checked, ...tally(rows) });
+        // A row with a Google Drive screenshot to download, while a login is using the Live Amazon Browser or no one is logged in to Google: checking pauses before it.
+        const before = googleBefore(r);
+        if (before) return paused(before.kind, before.says);
+        const result = await runCheck({ row: r, has, screenshots, emit, signal: run.stop.signal, now });
+        if (result.stopped) break;
+        if (result.paused) return paused(result.paused.kind, result.paused.says);
+        const kept = await store.saveCheck(r.id, result);
+        checked++;
+        rows = await keptRows();
+        // The row's new line for the table, before the next row starts.
+        emit({ event: 'row-done', rowId: r.id, label: labelOf(r), seconds: result.seconds, rows: [rowView(kept)], ...tally(rows) });
+      }
+      rows = await keptRows();
+      emit({ event: run.stop.signal.aborted ? 'run-stopped' : 'run-done', checked, ...tally(rows) });
+    } catch (err) {
+      log(`Flipkart checking failed: ${err?.name ?? 'Error'}`);
+      emit({ event: 'failed', says: `Something went wrong on this computer part way through checking. The rows finished before it stay checked. Press ${RUN_BUTTON} to go on from the row it was on.` });
     }
   }
 
@@ -644,10 +820,15 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         return refuse(res, 405, 'Only GET and HEAD are answered here.'), true;
       }
       if (path === 'sheet') {
-        if (method === 'GET') return sendJson(res, 200, sheetView(await store.sheet())), true;
+        if (method === 'GET') return sendJson(res, 200, sheetView(await store.sheet(), await store.campaigns())), true;
         if (method === 'POST') return (await uploadSheet(req, res)), true;
         res.setHeader('Allow', 'GET, HEAD, POST');
         return refuse(res, 405, 'Only GET, HEAD and POST are answered here.'), true;
+      }
+      if (path === 'check-all') {
+        if (method === 'POST') return (await checkAll(req, res)), true;
+        res.setHeader('Allow', 'POST');
+        return refuse(res, 405, 'Only POST is answered here.'), true;
       }
       const parts = path.split('/');
       if (parts[0] === 'rows' && ROW_ID.test(parts[1] ?? '')) return (await rowRoute(req, res, method, parts)), true;

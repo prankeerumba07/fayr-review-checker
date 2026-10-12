@@ -12,24 +12,30 @@
 // columns" sends the same file again with the columns chosen. Once a file is
 // in, one slim line says its name, the tab read and how many rows it has,
 // with "Replace file", and under it the same lines as on Amazon: which
-// columns are used for checking, which are only shown, and what the file does
-// not have. Under the upload area, the Campaigns box, the same as the Amazon
+// columns are used for checking, which are only shown, what the file does
+// not have, and which campaign the rows use (the line changes as soon as a
+// campaign is saved, ended or deleted). Under the upload area, the Campaigns box, the same as the Amazon
 // one: each campaign's name, live or ended, and brand, and under each of its
 // Flipkart products what was read from Flipkart (its name, its brand, its
-// other colours and sizes, and when), or why it is not used. Then the rows,
+// other colours and sizes, and when), or why it is not used. Then, as on
+// Amazon, "Start checking" (later "Carry on checking"), which checks the rows
+// one by one from the first one not checked yet, with Stop and "Check every
+// row again"; while they are checked, the live checking area beside the table
+// shows the row being checked and its steps as they run. Then the rows,
 // in a table like the Amazon one: every column of the file in its order, with
 // its letter, the rows numbered from 1, each link as a small label saying
 // where it goes ("Google Drive"), a picture in a cell as "Picture in the
 // cell", and Status, Type and Note at the end, empty until rows are checked.
-// Each row has a Check button at its end, and clicking a row opens its page,
+// Each row has a Check button at its end ("Check again" once it is checked),
+// and clicking a row opens its page,
 // as on Amazon: the row's details, with its screenshots as small pictures
 // that open large when clicked (or why one could not be had, in the Amazon
 // words), and a check's steps, shown live as each one runs and still shown
 // after a reload. For now a check only gets the screenshots: every other step
-// comes in a later step, and no row gets a Status yet. No "Start checking"
-// and no Status cards yet. The local server reads and keeps the file and the
-// campaigns, and runs the checks and the Google login; this screen only shows
-// them.
+// comes in a later step, and no row gets a Status yet: a row counts as
+// checked once its last check finished. No Status cards yet. The local server
+// reads and keeps the file and the campaigns, and runs the checks and the
+// Google login; this screen only shows them.
 
 const BASE = '/local/flipkart';
 const ROWS = `${BASE}/rows`;
@@ -121,6 +127,7 @@ function initial() {
     account: { data: null, error: null, lost: null, busy: false, seq: 0 },
     open: null, // the row whose page is open: { id, loading, error, row, result }
     check: null, // the row being checked: { rowId, running, controller, view, notice }
+    all: null, // the rows being checked one by one: { running, controller, current, view, paused, summary, notice }
     thumbs: {}, // `${id}:${which}:${i}:${at}` -> object URL
     big: null, // the picture opened large: { title, url, loading, error }
     seq: { open: 0, big: 0, thumbs: 0 },
@@ -193,6 +200,8 @@ async function sendFile(ctx, { tab = null, mapping = null } = {}) {
     ctx.update((st) => {
       st.upload = { file: null, gen: st.upload.gen + 1, busy: false, error: null, dragging: false, done: { made: Number(out?.made) || 0, tab: out?.tab ?? null, unplaced: arr(out?.unplaced).map(String) }, chooseTab: null, tab: null };
       st.columns = freshColumns();
+      // The checking area of the rows before goes with them, as on Amazon.
+      if (st.all && !st.all.running) st.all = null;
       // Newer than any answer still on its way.
       Object.assign(st, { saved: { sheet: out?.sheet ?? null, rows: arr(out?.rows) }, loaded: true, loadError: null, loadGen: st.loadGen + 1 });
     });
@@ -292,6 +301,8 @@ async function saveCampaign(ctx) {
         fold: st.campaigns.fold ?? true,
       });
     });
+    // The line under the upload line says which campaign the rows use now.
+    loadSaved(ctx);
   } catch (err) {
     ctx.update((st) => Object.assign(st.campaigns, { busy: false, error: err.message }));
   }
@@ -317,6 +328,7 @@ async function campaignAction(ctx, key, action) {
       });
       if (action === 'delete' && st.campaigns.editing === key) Object.assign(st.campaigns, { editing: null, values: blankCampaign() });
     });
+    if (action !== 'read') loadSaved(ctx);
   } catch (err) {
     ctx.update((st) => Object.assign(st.campaigns, { busy: false, error: err.message }));
   }
@@ -377,10 +389,12 @@ function enter(ctx) {
 function reset(ctx) {
   if (typeof ctx.state.poll === 'function') ctx.state.poll();
   ctx.state.check?.controller?.abort();
+  ctx.state.all?.controller?.abort();
   for (const url of Object.values(ctx.state.thumbs)) ctx.local.revoke(url);
   if (ctx.state.big?.url) ctx.local.revoke(ctx.state.big.url);
   ctx.update((st) => {
     st.check = null;
+    st.all = null;
     st.thumbs = {};
     st.big = null;
     if (st.open) st.open.loading = false;
@@ -672,16 +686,18 @@ function tableRow(ctx, r, columns) {
     e?.stopPropagation?.();
     ctx.go(`flipkart/${r.id}`);
   };
+  const done = isDone(r);
   return h(
     'tr',
-    { key: r?.id ?? `n${r?.n}`, class: 'clickable', onclick: () => ctx.go(`flipkart/${r.id}`), 'data-id': `row-${r?.n}` },
+    // The row being checked, while the rows are checked one by one, stands out, as on Amazon.
+    { key: r?.id ?? `n${r?.n}`, class: `clickable${state.all?.running && rowBeingChecked(state) === r?.id ? ' fk-current-row' : ''}`, onclick: () => ctx.go(`flipkart/${r.id}`), 'data-id': `row-${r?.n}` },
     h('td', { class: 'nowrap fk-row-cell' }, h('button', { type: 'button', class: 'linkish', onclick: go }, String(r?.n ?? ''))),
     columns.map(cellOf),
-    h('td', { class: 'nowrap' }, h('button', { type: 'button', class: 'btn btn-small', disabled: busy(state), onclick: (e) => { go(e); startCheck(ctx, r.id); }, 'data-id': `check-${r?.id}` }, icon(h, 'play'), 'Check')),
+    h('td', { class: 'nowrap' }, h('button', { type: 'button', class: 'btn btn-small', disabled: busy(state), onclick: (e) => { go(e); startCheck(ctx, r.id); }, 'data-id': `check-${r?.id}` }, icon(h, done ? 'refresh' : 'play'), done ? 'Check again' : 'Check')),
   );
 }
 
-/** The table of rows, like the Amazon one: every column of the file in its order, numbered from 1, then Status, Type and Note. */
+/** The table of rows, like the Amazon one: every column of the file in its order, numbered from 1, then Status, Type and Note; the live checking area beside it while the rows are checked one by one. */
 function rowsCard(ctx) {
   const { h, state } = ctx;
   const sheet = state.saved?.sheet ?? null;
@@ -705,11 +721,12 @@ function rowsCard(ctx) {
       ),
     );
   }
+  const panel = runPanel(ctx);
   return h(
     'section',
     { class: 'card fk-rows-card', key: 'rows', 'data-id': 'rows' },
     h('div', { class: 'fk-rows-head' }, h('h2', null, 'Rows'), rows.length && !waiting ? h('span', { class: 'fk-rows-count', 'data-id': 'rows-count' }, rowsWord(rows.length)) : null),
-    body,
+    h('div', { class: `fk-rows-layout${panel ? ' fk-with-live' : ''}` }, h('div', { class: 'fk-rows-main' }, body), panel),
   );
 }
 
@@ -752,7 +769,7 @@ function campaignBlock(ctx, x, locked) {
   );
 }
 
-function campaignForm(ctx) {
+function campaignForm(ctx, checking) {
   const { h, state } = ctx;
   const c = state.campaigns;
   const v = c.values;
@@ -784,10 +801,11 @@ function campaignForm(ctx) {
     h(
       'div',
       { class: 'actions' },
-      // As on Amazon, Save waits only while rows are checked (no Flipkart row is checked yet); pressed while products are read, it shows the server's sentence.
-      h('button', { type: 'button', class: 'btn btn-primary', disabled: c.busy, onclick: () => saveCampaign(ctx), 'data-id': 'save-campaign' }, icon(h, 'check'), c.busy ? 'Saving…' : 'Save'),
+      // As on Amazon, Save waits only while rows are checked; pressed while products are read, it shows the server's sentence.
+      h('button', { type: 'button', class: 'btn btn-primary', disabled: c.busy || checking, onclick: () => saveCampaign(ctx), 'data-id': 'save-campaign' }, icon(h, 'check'), c.busy ? 'Saving…' : 'Save'),
       h('button', { type: 'button', class: 'btn btn-quiet', disabled: c.busy, onclick: () => ctx.update((st) => Object.assign(st.campaigns, { editing: null, values: blankCampaign(), error: null })), 'data-id': 'cancel-campaign' }, 'Cancel'),
     ),
+    checking ? h('p', { class: 'muted small', 'data-id': 'save-waits' }, 'Save can be pressed once the rows are checked.') : null,
   );
 }
 
@@ -801,13 +819,15 @@ function campaignsCard(ctx) {
   // Until the campaigns come from the server, the box says so, rather than "None yet".
   const sum = c.loaded ? counted : c.loadError ? 'Could not be opened' : 'Opening…';
   const reading = c.reading || list.some((x) => arr(x?.products).some((p) => p?.state === 'reading'));
+  // As on Amazon, Save is greyed out while rows are being checked; a campaign's buttons also wait while products are read.
+  const checking = busy(state);
   const open = Boolean(c.editing) || (c.fold ?? (c.loaded ? !list.length : Boolean(c.loadError)));
   const shown = !c.loaded
     ? c.loadError
       ? words.notice(h, 'error', `The campaigns could not be opened: ${c.loadError} The dashboard asks again every 2 seconds.`)
       : h('p', { class: 'muted', 'data-id': 'campaigns-opening' }, 'Opening the campaigns…')
     : list.length
-      ? h('div', { class: 'fk-campaigns' }, list.map((x) => campaignBlock(ctx, x, c.busy || reading)))
+      ? h('div', { class: 'fk-campaigns' }, list.map((x) => campaignBlock(ctx, x, c.busy || reading || checking)))
       : c.editing
         ? null
         : h('p', { class: 'muted', 'data-id': 'no-campaigns' }, 'No campaigns yet. Rows are checked by the product name in the sheet until a campaign has their brand.');
@@ -833,7 +853,7 @@ function campaignsCard(ctx) {
         h('p', { class: 'card-sub' }, 'The Flipkart products users may buy for a brand. A row uses every live campaign whose brand is in its product name, the file\'s name or the tab\'s name; a campaign marked Ended is never used.'),
         c.editing ? null : h('button', { type: 'button', class: 'btn btn-primary', disabled: c.busy || !c.loaded, onclick: () => editCampaign(ctx, null), 'data-id': 'add-campaign' }, icon(h, 'plus'), 'Add a campaign'),
       ),
-      c.editing ? campaignForm(ctx) : null,
+      c.editing ? campaignForm(ctx, checking) : null,
       shown,
       c.notice ? words.notice(h, 'good', c.notice) : null,
       words.notice(h, 'error', c.error),
@@ -930,9 +950,13 @@ async function openRow(ctx, id, { keep = false } = {}) {
   }
 }
 
-// ---- checking one row (copied from the Amazon screen) ----
+// ---- checking (copied from the Amazon screen) ----
 
-const busy = (s) => Boolean(s.check?.running || s.upload.busy);
+const busy = (s) => Boolean(s.check?.running || s.all?.running || s.upload.busy);
+/** A row that is checked, as the server says: its last check finished. */
+const isDone = (r) => r?.done === true;
+/** The row being checked at this moment, by its own button or one by one; null when none. */
+const rowBeingChecked = (s) => (s?.check?.running ? s.check.rowId : s?.all?.running && s.all.current && !s.all.current.finished ? s.all.current.rowId : null);
 
 /** One check's line, onto its view: started, action, step, done, paused, failed. */
 function applyCheckEvent(view, e) {
@@ -955,7 +979,7 @@ function applyCheckEvent(view, e) {
   }
 }
 
-/** "Check": the server checks the row, and its page shows each step as it runs. */
+/** "Check" (or "Check again"): the server checks the row, and its page shows each step as it runs. */
 async function startCheck(ctx, id) {
   const s = ctx.state;
   if (busy(s)) return;
@@ -968,16 +992,17 @@ async function startCheck(ctx, id) {
     ctx.update();
   }, run.controller.signal);
   if (!isCurrent()) return;
+  const button = isDone(arr(s.saved?.rows).find((x) => x?.id === id)) ? '"Check again"' : 'Check';
   ctx.update(() => {
     run.running = false;
     run.controller = null;
     run.view.action = null;
     const r = run.view.result;
     if (!out.ok && !out.aborted) run.notice = { tone: 'error', text: out.message };
-    else if (out.aborted) run.notice = { tone: 'warn', text: 'The check was stopped, and nothing was saved for it. Press Check to check this row again.' };
+    else if (out.aborted) run.notice = { tone: 'warn', text: `The check was stopped, and nothing was saved for it. Press ${button} to check this row again.` };
     else if (run.view.failed) run.notice = { tone: 'error', text: run.view.failed };
     else if (run.view.paused || r?.paused) run.notice = { tone: 'warn', text: `The check paused, and nothing was saved for this row. ${run.view.paused?.says ?? r.paused.says}` };
-    else if (!run.view.done) run.notice = { tone: 'warn', text: 'The check stopped part way, and nothing was saved for it. Press Check to try again.' };
+    else if (!run.view.done) run.notice = { tone: 'warn', text: `The check stopped part way, and nothing was saved for it. Press ${button} to try again.` };
   });
   loadSaved(ctx);
   if (s.open?.id === id) openRow(ctx, id, { keep: true });
@@ -985,6 +1010,179 @@ async function startCheck(ctx, id) {
 
 function stopCheck(ctx) {
   ctx.state.check?.controller?.abort();
+}
+
+/** Puts rows the server sent (the row just checked) into the table in their places. */
+function putRows(s, list) {
+  const items = arr(s.saved?.rows);
+  for (const r of arr(list)) {
+    const i = items.findIndex((x) => x?.id === r?.id);
+    if (i >= 0) items[i] = r;
+  }
+}
+
+export const STOPPED_SAYS = 'Stopped. The rows finished before it stay checked. The row it was on was not finished, so it is the first one checked next time.';
+
+/**
+ * "Start checking" (later "Carry on checking"), as on Amazon: the server
+ * checks the rows not checked yet, one at a time from the first one, and the
+ * table shows each row as soon as it is finished. again: "Check every row
+ * again", which removes every row's last check first.
+ */
+async function checkRows(ctx, { again = false } = {}) {
+  const s = ctx.state;
+  if (busy(s)) return;
+  const run = { running: true, controller: new AbortController(), current: null, view: newView(), paused: null, summary: null, notice: null };
+  ctx.update((st) => {
+    // An earlier single check's view would hide this one's on the row page.
+    if (st.check && !st.check.running) st.check = null;
+    st.all = run;
+  });
+  const isCurrent = () => s.all === run;
+  const refreshOpen = (id) => {
+    if (id && s.open?.id === id) openRow(ctx, id, { keep: true });
+  };
+  const out = await ctx.local.stream('POST', `${BASE}/check-all`, again ? { again: true } : {}, (e) => {
+    if (!isCurrent()) return;
+    if (e?.event === 'run-started') {
+      // "Check every row again": the server has removed every row's last check.
+      if (e.again) for (const r of arr(s.saved?.rows)) if (r) r.done = false;
+    } else if (e?.event === 'row') {
+      run.view = { ...newView(), action: 'Starting the check…' };
+      run.current = { rowId: e.rowId, label: e.label ?? '' };
+    } else if (e?.event === 'row-done') {
+      // The row's line in the table changes at once, before the next row starts.
+      if (run.current?.rowId === e.rowId) run.current.finished = true;
+      putRows(s, e.rows);
+      refreshOpen(e.rowId);
+    } else if (e?.event === 'paused') {
+      run.paused = { kind: e.kind, says: e.says ?? 'Checking paused.', rowId: e.rowId, label: e.label ?? '' };
+    } else if (e?.event === 'run-done' || e?.event === 'run-stopped') {
+      run.summary = { stopped: e.event === 'run-stopped', checked: e.checked ?? 0 };
+    } else if (e?.event === 'failed' && !run.current) {
+      run.notice = { tone: 'error', text: e.says };
+    } else {
+      applyCheckEvent(run.view, e);
+    }
+    ctx.update();
+  }, run.controller.signal);
+  if (!isCurrent()) return;
+  ctx.update(() => {
+    run.running = false;
+    run.controller = null;
+    run.view.action = null;
+    if (!out.ok && !out.aborted) run.notice = { tone: 'error', text: out.message };
+    else if (out.aborted || run.summary?.stopped) run.notice = { tone: 'warn', text: STOPPED_SAYS };
+    else if (run.view.failed) run.notice = { tone: 'error', text: run.view.failed };
+    else if (!run.summary && !run.paused) {
+      run.notice = { tone: 'error', text: `The connection to the dashboard's server broke before checking finished. The rows finished before it stay checked. Press "Carry on checking" to go on from the row it was on.` };
+    }
+  });
+  loadSaved(ctx);
+  refreshOpen(run.current?.rowId);
+}
+
+/** "Check every row again": asks first, then every row's last check goes and the rows are checked from the first one. */
+function checkEveryRowAgain(ctx) {
+  const n = arr(ctx.state.saved?.rows).length;
+  if (!n || busy(ctx.state)) return;
+  if (!ctx.confirm(n === 1 ? 'This checks the 1 row again and replaces its last check. Go on?' : `This checks all ${n} rows again and replaces their last checks. Go on?`)) return;
+  return checkRows(ctx, { again: true });
+}
+
+/** Stop: at once. The row it was on is not checked. */
+function stopAll(ctx) {
+  ctx.state.all?.controller?.abort();
+}
+
+/** Scrolls the table to a row. */
+function showRow(ctx, id) {
+  const r = arr(ctx.state.saved?.rows).find((x) => x?.id === id);
+  if (r) ctx.reveal?.(`row-${r.n}`, 'center');
+}
+
+/** How many rows there are, how many are checked, and how many are left to check. */
+function tallyOf(rows) {
+  const done = rows.filter(isDone).length;
+  return { total: rows.length, done, left: rows.length - done };
+}
+
+/** The words of the one button that checks the rows one by one. */
+function runWords(rows, running) {
+  const { total, done, left } = tallyOf(rows);
+  if (running) return 'Checking…';
+  if (total && !left) return 'All rows are checked';
+  return done ? 'Carry on checking' : 'Start checking';
+}
+
+/** A row in a sentence: "row 23" (its number on the dashboard, from 1). */
+function rowWords(r, label = '') {
+  if (r?.n != null) return `row ${r.n}`;
+  return String(label || 'the row').replace(/^Row /, 'row ');
+}
+
+/** "Checking row 23: 5 of 200 rows done, 195 left". */
+function checkingWords(ctx, rows) {
+  const run = ctx.state.all;
+  const { total, done, left } = tallyOf(rows);
+  const r = rows.find((x) => x?.id === run.current.rowId);
+  return `Checking ${rowWords(r, run.current.label)}: ${done} of ${total} ${total === 1 ? 'row' : 'rows'} done, ${left} left`;
+}
+
+/** The main buttons above the table, as on Amazon: "Start checking" (or "Carry on checking"), Stop while it runs, and "Check every row again". No Status cards yet. */
+function overview(ctx, rows) {
+  const { h, state } = ctx;
+  const running = Boolean(state.all?.running);
+  const { total, left } = tallyOf(rows);
+  const mark = running ? 'spinner' : total && !left ? 'check' : 'play';
+  return h(
+    'section',
+    { class: 'fk-overview', key: 'overview', 'data-id': 'overview' },
+    h(
+      'div',
+      { class: 'fk-main-actions', 'data-id': 'main-actions' },
+      h('button', { type: 'button', class: 'btn btn-primary', disabled: busy(state) || !left, onclick: () => checkRows(ctx), 'data-id': 'start-checking' }, icon(h, mark, running ? 'icon-spin' : ''), runWords(rows, running)),
+      running ? h('button', { type: 'button', class: 'btn btn-danger', onclick: () => stopAll(ctx), 'data-id': 'stop-all' }, icon(h, 'stop'), 'Stop') : null,
+      h('button', { type: 'button', class: 'btn', disabled: busy(state), onclick: () => checkEveryRowAgain(ctx), 'data-id': 'check-every-row' }, icon(h, 'refresh'), 'Check every row again'),
+    ),
+  );
+}
+
+/**
+ * The live checking area beside the table, while the rows are checked one by
+ * one, as on Amazon: one progress bar with how many rows are done and left,
+ * the row being checked with its steps as they happen, and what the check is
+ * doing now. A pause is said plainly.
+ */
+function runPanel(ctx) {
+  const { h, words, state } = ctx;
+  const run = state.all;
+  if (!run) return null;
+  const rows = arr(state.saved?.rows);
+  const { total, done } = tallyOf(rows);
+  const pausedAt = run.paused ? rowWords(rows.find((x) => x?.id === run.paused.rowId), run.paused.label) : null;
+  let progress = null;
+  if (run.running && run.current) progress = [`${checkingWords(ctx, rows)}. `, h('button', { type: 'button', class: 'linkish', key: 'show', onclick: () => showRow(ctx, run.current.rowId), 'data-id': 'show-current' }, 'Show this row in the table')];
+  else if (run.running) progress = run.view.action ?? 'Starting…';
+  else if (run.summary && !run.summary.stopped) progress = 'Finished.';
+  const view = { ...run.view, running: run.running };
+  return h(
+    'aside',
+    { class: 'fk-live-panel', key: 'run', 'aria-label': 'Checking the rows', 'data-id': 'run' },
+    h(
+      'div',
+      { class: 'fk-live-head' },
+      h('h2', null, icon(h, run.running ? 'spinner' : 'browser', run.running ? 'icon-spin' : ''), 'Checking'),
+      !run.running ? h('button', { type: 'button', class: 'btn btn-quiet btn-small', onclick: () => ctx.update({ all: null }), 'data-id': 'close-run' }, icon(h, 'close'), 'Close') : null,
+    ),
+    progress ? h('p', { class: 'fk-run-progress', role: 'status', 'aria-live': 'polite', 'data-id': 'run-progress' }, progress) : null,
+    total ? h('progress', { max: String(total), value: String(done), 'aria-label': 'Rows done' }) : null,
+    run.paused ? h('div', { class: 'notice notice-warn', role: 'alert', 'data-id': 'paused' }, h('p', null, `Paused at ${pausedAt}. ${run.paused.says} That row is not checked yet, so it is the first one checked next time.`)) : null,
+    run.notice ? words.notice(h, run.notice.tone, run.notice.text) : null,
+    run.current ? h('p', { class: 'fk-live-links', key: 'links' }, h('button', { type: 'button', class: 'linkish', onclick: () => ctx.go(`flipkart/${run.current.rowId}`), 'data-id': 'open-current' }, icon(h, 'open'), "Open this row's page")) : null,
+    run.current ? liveCard(ctx, view, { flat: true }) : null,
+    run.current ? activityCard(ctx, view, { flat: true }) : null,
+  );
 }
 
 // ---- drawing one row's page ----
@@ -1084,10 +1282,10 @@ function resultCard(ctx, r) {
   );
 }
 
-/** At the top of a row's page: its Status, large, and the reason; a Flipkart row has none yet. */
-function finalBanner(ctx, single) {
+/** At the top of a row's page: its Status, large, and the reason; a Flipkart row has none yet. live: the check running for this row, by its own button or one by one. */
+function finalBanner(ctx, live) {
   const { h } = ctx;
-  const now = Boolean(single?.running);
+  const now = Boolean(live?.running);
   return h(
     'section',
     { class: 'fk-final-banner fk-final-banner-none', key: 'final', 'data-id': 'final-banner' },
@@ -1096,26 +1294,26 @@ function finalBanner(ctx, single) {
   );
 }
 
-/** What the check is doing now. The Live Flipkart Browser is not used by the steps that run now: they only open the screenshots. */
-function liveCard(ctx, view) {
+/** What the check is doing now. The Live Flipkart Browser is not used by the steps that run now: they only open the screenshots. flat: drawn inside the live checking area, without a card of its own, as on Amazon. */
+function liveCard(ctx, view, { flat = false } = {}) {
   const { h } = ctx;
   return h(
     'section',
-    { class: 'card fk-live', key: 'live', 'data-id': 'live' },
+    { class: flat ? 'fk-live fk-live-flat' : 'card fk-live', key: 'live', 'data-id': 'live' },
     h('h3', null, icon(h, 'browser'), 'Live Flipkart Browser'),
-    h('p', { class: 'card-sub' }, 'The Chrome window named "Live Flipkart Browser" shows each Flipkart page as it opens. The steps that run now only open the screenshots, so it is not used yet.'),
+    flat ? null : h('p', { class: 'card-sub' }, 'The Chrome window named "Live Flipkart Browser" shows each Flipkart page as it opens. The steps that run now only open the screenshots, so it is not used yet.'),
     h('p', { class: 'fk-action', role: 'status', 'aria-live': 'polite', 'data-id': 'current-action' }, view.action ?? (view.running ? 'Working…' : 'Not running.')),
     h('p', { class: 'fk-live-empty' }, icon(h, 'image'), 'No picture yet. Flipkart pages open in a later step.'),
   );
 }
 
-/** A check's steps, each marked as it happens. */
-function activityCard(ctx, view) {
+/** A check's steps, each marked as it happens. flat: drawn inside the live checking area, as on Amazon. */
+function activityCard(ctx, view, { flat = false } = {}) {
   const { h } = ctx;
   const steps = arr(view.steps).length ? view.steps : freshSteps();
   return h(
     'section',
-    { class: 'card fk-steps', key: 'activity', 'data-id': 'activity' },
+    { class: flat ? 'fk-steps fk-steps-flat' : 'card fk-steps', key: 'activity', 'data-id': 'activity' },
     h('h3', null, icon(h, 'steps'), 'Steps'),
     h(
       'ol',
@@ -1141,8 +1339,12 @@ function rowPage(ctx) {
   if (!o || (o.loading && !o.row)) return h('div', { key: 'row-page' }, h('div', { class: 'actions' }, back), h('p', { class: 'muted', role: 'status' }, 'Opening the row…'));
   if (o.error && !o.row) return h('div', { key: 'row-page' }, h('div', { class: 'actions' }, back), words.notice(h, 'error', o.error));
   const r = obj(o.row);
-  const single = r.id && state.check && state.check.rowId === r.id ? state.check : null;
-  const view = single ? { ...single.view, running: single.running } : { running: false, steps: arr(o.result?.steps), action: o.result?.finishedAt ? `Last check finished ${words.ist(o.result.finishedAt)}.` : null };
+  // The check running for this row: one by one, as the live checking area shows it, or by its own button.
+  const inRun = r.id && state.all?.running && state.all.current?.rowId === r.id ? state.all : null;
+  const single = !inRun && r.id && state.check && state.check.rowId === r.id ? state.check : null;
+  const liveView = inRun ? { ...inRun.view, running: true } : single ? { ...single.view, running: single.running } : null;
+  const view = liveView ?? { running: false, steps: arr(o.result?.steps), action: o.result?.finishedAt ? `Last check finished ${words.ist(o.result.finishedAt)}.` : null };
+  const listed = arr(state.saved?.rows).find((x) => x?.id === r.id) ?? r;
   return h(
     'div',
     { key: 'row-page', 'data-id': 'row-page' },
@@ -1154,11 +1356,11 @@ function rowPage(ctx) {
       h(
         'div',
         { class: 'actions' },
-        h('button', { type: 'button', class: 'btn btn-primary', disabled: busy(state), onclick: () => startCheck(ctx, r.id), 'data-id': 'check' }, icon(h, single?.running ? 'spinner' : 'play', single?.running ? 'icon-spin' : ''), single?.running ? 'Checking…' : 'Check'),
+        h('button', { type: 'button', class: 'btn btn-primary', disabled: busy(state), onclick: () => startCheck(ctx, r.id), 'data-id': 'check' }, icon(h, single?.running ? 'spinner' : isDone(listed) ? 'refresh' : 'play', single?.running ? 'icon-spin' : ''), single?.running ? 'Checking…' : isDone(listed) ? 'Check again' : 'Check'),
         single?.running ? h('button', { type: 'button', class: 'btn btn-danger', onclick: () => stopCheck(ctx), 'data-id': 'stop' }, icon(h, 'stop'), 'Stop') : null,
       ),
     ),
-    finalBanner(ctx, single),
+    finalBanner(ctx, liveView),
     single?.notice ? words.notice(h, single.notice.tone, single.notice.text) : null,
     h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, r), detailsCard(ctx, r)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
     bigPicture(ctx),
@@ -1169,7 +1371,8 @@ function renderScreen(ctx) {
   const { h, words, state } = ctx;
   if (ctx.route) return rowPage(ctx);
   if (!state.loaded) return h('p', { class: 'muted', key: 'opening', role: 'status', 'data-id': 'opening' }, 'Opening the Flipkart rows…');
-  return [uploadCard(ctx), words.notice(h, 'error', state.loadError), campaignsCard(ctx), state.saved?.sheet || state.columns.need ? rowsCard(ctx) : null];
+  const rows = arr(state.saved?.rows);
+  return [uploadCard(ctx), words.notice(h, 'error', state.loadError), campaignsCard(ctx), rows.length && !state.columns.need ? overview(ctx, rows) : null, state.saved?.sheet || state.columns.need ? rowsCard(ctx) : null];
 }
 
 export default {

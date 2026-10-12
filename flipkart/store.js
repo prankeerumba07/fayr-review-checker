@@ -337,6 +337,21 @@ export function createFlipkartStore(dataDir) {
         return row;
       });
     },
+    /** "Check every row again", as on Amazon: every row's last check goes, so the rows are checked again from the first one. Their pictures stay. -> how many had one. */
+    clearChecks() {
+      return locked(async () => {
+        const d = await savedRows();
+        if (!d) return 0;
+        let n = 0;
+        for (const r of d.rows) {
+          if (!r.check) continue;
+          delete r.check;
+          n++;
+        }
+        await writeWhole(rowsFile, JSON.stringify(d));
+        return n;
+      });
+    },
     /** Where a row's kept picture is: data/flipkart/pictures/<its file>; null when the row has no such picture. */
     pictureFile(row, which, index) {
       const f = row?.pictures?.[which]?.[index]?.file;

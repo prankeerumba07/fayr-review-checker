@@ -59,7 +59,7 @@ export function downloadable(which, link) {
  *   fetch(url, init), the Live Amazon Browser opened when it is not (as
  *   before an Amazon download) and its own download, with no page opened
  * download, prepare — tests may give their own
- * -> { forCell(rowId, which, { signal }), fetchOne(link, signal) }
+ * -> { forCell(rowId, which, { signal }), fetchOne(link, signal), busyNow() }
  */
 export function createScreenshots({ store, google: given = null, download = downloadPicture, prepare = preparePicture, allowed = PICTURE_WEBSITES, gapMs = DOWNLOAD_GAP_MS }) {
   const google = given ?? NOBODY;
@@ -163,5 +163,5 @@ export function createScreenshots({ store, google: given = null, download = down
     };
   }
 
-  return { forCell, fetchOne };
+  return { forCell, fetchOne, busyNow };
 }

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { h, textOf, findAll, byId } from '../lib/vdom.js';
 import { ApiError } from '../lib/api.js';
 import * as words from '../lib/words.js';
-import flipkart, { SHEET_ACCEPT, GOOGLE_WORDS, LOGIN_POLL_MS, STEP_NAMES, MARKS, FINAL_NONE } from '../views/flipkart.js';
+import flipkart, { SHEET_ACCEPT, GOOGLE_WORDS, LOGIN_POLL_MS, STEP_NAMES, MARKS, FINAL_NONE, STOPPED_SAYS } from '../views/flipkart.js';
 import amazon, { GOOGLE_WORDS as AMAZON_GOOGLE_WORDS, LOGIN_POLL_MS as AMAZON_LOGIN_POLL_MS, MARKS as AMAZON_MARKS } from '../views/amazon.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -259,7 +259,7 @@ test('choosing a file uploads it at once: its name, its tab and how many rows in
   assert.equal(s.local.calls.filter((c) => c.method === 'POST').length, 2);
 });
 
-test('as on Amazon: each link a small label saying where it goes, opening in a new tab; a link that is not a web link opens nothing; a picture in a cell or over it said so; Status, Type and Note empty; a Check button at the end of each row; no Status cards', async () => {
+test('as on Amazon: each link a small label saying where it goes, opening in a new tab; a link that is not a web link opens nothing; a picture in a cell or over it said so; Status, Type and Note empty; a Check button at the end of each row; "Start checking" above the table, and no Status cards', async () => {
   const s = await opened(fakeLocal({ saved: SAVED }));
   const table = byId(s.page(), 'rows-table');
   const links = findAll(table, (n) => n.tag === 'a');
@@ -281,8 +281,9 @@ test('as on Amazon: each link a small label saying where it goes, opening in a n
   assert.deepEqual(findAll(table, (n) => n.tag === 'th').map((n) => n.attrs['data-col'] ?? null), [null, ...KEYS, 'status', 'type', 'note', null], 'and the Check column, last');
   assert.deepEqual(findAll(table, (n) => /\bfk-col-letter\b/.test(n.attrs?.class ?? '')).map(textOf), [...LETTERS]);
   const page = s.page();
-  assert.deepEqual(findAll(page, (n) => n.tag === 'button' && /^(Check|Check again|Start checking)$/.test(textOf(n))).map((n) => n.attrs['data-id']), ['check-r000000000001', 'check-r000000000002', 'check-r000000000003'], 'a Check button for each row, and no "Start checking"');
-  assert.doesNotMatch(textOf(page), /Needs Manual|Not checked yet|Start checking/, 'no Status cards');
+  assert.deepEqual(findAll(page, (n) => n.tag === 'button' && /^(Check|Check again)$/.test(textOf(n))).map((n) => n.attrs['data-id']), ['check-r000000000001', 'check-r000000000002', 'check-r000000000003'], 'a Check button for each row');
+  assert.deepEqual(findAll(byId(page, 'overview'), (n) => n.tag === 'button').map(textOf), ['Start checking', 'Check every row again'], 'above the table, as on Amazon');
+  assert.doesNotMatch(textOf(page), /Needs Manual|Not checked yet/, 'no Status cards');
   assert.equal(findAll(table, (n) => n.tag === 'img').length, 0, 'no picture is shown or fetched in the table');
   assert.deepEqual(s.local.calls.map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/sheet', 'GET /local/flipkart/campaigns', 'GET /local/flipkart/account'], 'a link is only opened when it is pressed');
 });
@@ -593,6 +594,116 @@ test("Check on a row's page: each step shown live as it runs, with the same mark
   assert.equal(STEP_NAMES.length, 9);
 });
 
+/** What the server says when no one is logged in to Google before a row, for "Start checking". */
+const RUN_GOOGLE_OUT = 'No one is logged in to Google, so the screenshots on Google Drive cannot be downloaded. Press "Log in to Google" in the top bar and log in there, then press "Carry on checking".';
+
+test('"Start checking", as on Amazon: the rows checked one by one from the first one not checked yet; the row being checked and its steps shown live beside the table; each row\'s line changes once it is finished; a pause says what to do and where checking carries on; Stop; "Check every row again" asks first; still no Status', async () => {
+  const saved = structuredClone(SAVED);
+  const local = fakeLocal({ saved, pages: { r000000000001: { row: PICTURED, result: null } } });
+  const s = await opened(local);
+  const shown = [];
+  s.ctx.reveal = (id, block) => shown.push([id, block]);
+  const buttons = () => findAll(byId(s.page(), 'main-actions'), (n) => n.tag === 'button').map((b) => [b.attrs['data-id'], textOf(b), Boolean(b.attrs.disabled)]);
+  assert.deepEqual(buttons(), [['start-checking', 'Start checking', false], ['check-every-row', 'Check every row again', false]]);
+  assert.equal(byId(s.page(), 'run'), null, 'no checking area before rows are checked');
+  let release;
+  const gate = new Promise((r) => (release = r));
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'run-started', again: false, total: 3, done: 0, left: 3 });
+    onEvent({ event: 'row', rowId: 'r000000000001', label: 'Row 1', total: 3, done: 0, left: 3 });
+    onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
+    onEvent({ event: 'step', step: { n: 1, name: STEP_NAMES[0], state: 'running', detail: null } });
+    onEvent({ event: 'action', says: 'Opening the purchase screenshot' });
+    await gate;
+    for (const st of STEPS_DONE) onEvent({ event: 'step', step: st });
+    onEvent({ event: 'done', result: LAST_CHECK });
+    saved.rows[0].done = true;
+    onEvent({ event: 'row-done', rowId: 'r000000000001', label: 'Row 1', seconds: 2, rows: [saved.rows[0]], total: 3, done: 1, left: 2 });
+    onEvent({ event: 'row', rowId: 'r000000000002', label: 'Row 2', total: 3, done: 1, left: 2 });
+    onEvent({ event: 'paused', kind: 'google-out', says: RUN_GOOGLE_OUT, rowId: 'r000000000002', label: 'Row 2', checked: 1, total: 3, done: 1, left: 2 });
+    return { ok: true };
+  };
+  byId(s.page(), 'start-checking').attrs.onclick();
+  await settle();
+  assert.deepEqual(local.calls.filter((c) => c.stream), [{ method: 'POST', path: '/local/flipkart/check-all', body: {}, stream: true }]);
+  let page = s.page();
+  // While the rows are checked: the button says so, Stop is there, every other check waits, and the row being checked stands out.
+  assert.deepEqual(buttons(), [['start-checking', 'Checking…', true], ['stop-all', 'Stop', false], ['check-every-row', 'Check every row again', true]]);
+  assert.deepEqual([byId(page, 'check-r000000000002').attrs.disabled, byId(page, 'row-1').attrs.class, byId(page, 'row-2').attrs.class], [true, 'clickable fk-current-row', 'clickable']);
+  // Beside the table: how far it is, the row being checked, what it is doing now and its steps, live.
+  assert.equal(findAll(byId(page, 'rows'), (n) => /\bfk-rows-layout\b/.test(n.attrs?.class ?? ''))[0].attrs.class, 'fk-rows-layout fk-with-live');
+  const run = byId(page, 'run');
+  assert.equal(textOf(byId(run, 'run-progress')), 'Checking row 1: 0 of 3 rows done, 3 left. Show this row in the table');
+  assert.deepEqual(findAll(run, (n) => n.tag === 'progress').map((n) => [n.attrs.max, n.attrs.value]), [['3', '0']]);
+  assert.deepEqual([textOf(byId(run, 'current-action')), textOf(stepsOf(run)[0]), stepsOf(run).length], ['Opening the purchase screenshot', '…1. Opening the purchase screenshot running', 9]);
+  assert.deepEqual([byId(run, 'live').attrs.class, byId(run, 'activity').attrs.class], ['fk-live fk-live-flat', 'fk-steps fk-steps-flat'], 'inside the checking area, as on Amazon');
+  byId(run, 'show-current').attrs.onclick();
+  assert.deepEqual(shown, [['row-1', 'center']], 'the table scrolls to the row');
+  byId(run, 'open-current').attrs.onclick();
+  assert.deepEqual(s.went, ['flipkart/r000000000001']);
+  // The row's own page shows the same check, live.
+  s.ctx.route = 'r000000000001';
+  await flipkart.enter(s.ctx);
+  await settle();
+  page = s.page();
+  assert.deepEqual([textOf(byId(page, 'final-word')), textOf(byId(page, 'current-action')), byId(page, 'check').attrs.disabled], ['Checking…', 'Opening the purchase screenshot', true]);
+  s.ctx.route = '';
+  await flipkart.enter(s.ctx);
+  release();
+  await settle();
+  page = s.page();
+  // Row 1 is finished: its line changed at once, and its button says "Check again"; still no Status.
+  assert.deepEqual([textOf(byId(page, 'check-r000000000001')), textOf(byId(page, 'check-r000000000002'))], ['Check again', 'Check']);
+  assert.deepEqual(findAll(byId(page, 'rows-table'), (n) => n.attrs?.['data-cell'] === 'status').map(textOf), ['Empty', 'Empty', 'Empty'], 'still no Status');
+  // Paused before row 2: what to do, and where checking carries on.
+  assert.equal(textOf(byId(page, 'paused')), `Paused at row 2. ${RUN_GOOGLE_OUT} That row is not checked yet, so it is the first one checked next time.`);
+  assert.deepEqual(buttons(), [['start-checking', 'Carry on checking', false], ['check-every-row', 'Check every row again', false]]);
+  assert.deepEqual(findAll(byId(page, 'run'), (n) => n.tag === 'progress').map((n) => n.attrs.value), ['1']);
+  assert.ok(local.calls.filter((c) => c.path === '/local/flipkart/sheet').length >= 2, 'the rows are fetched again once it ends');
+  // Stop: at once; the row it was on is not checked.
+  local.checking = (onEvent, signal) => new Promise((resolve) => {
+    onEvent({ event: 'run-started', again: false, total: 3, done: 1, left: 2 });
+    onEvent({ event: 'row', rowId: 'r000000000002', label: 'Row 2', total: 3, done: 1, left: 2 });
+    signal.addEventListener('abort', () => resolve({ ok: false, aborted: true }));
+  });
+  byId(s.page(), 'start-checking').attrs.onclick();
+  await settle();
+  assert.equal(textOf(byId(s.page(), 'run-progress')), 'Checking row 2: 1 of 3 rows done, 2 left. Show this row in the table');
+  byId(s.page(), 'stop-all').attrs.onclick();
+  await settle();
+  assert.match(textOf(byId(s.page(), 'run')), new RegExp(STOPPED_SAYS.replace(/[.]/g, '\\.')));
+  assert.equal(STOPPED_SAYS, 'Stopped. The rows finished before it stay checked. The row it was on was not finished, so it is the first one checked next time.');
+  // "Check every row again": asked first; no is no.
+  const asked = [];
+  s.ctx.confirm = (text) => (asked.push(text), false);
+  byId(s.page(), 'check-every-row').attrs.onclick();
+  await settle();
+  assert.deepEqual([asked, local.calls.filter((c) => c.stream).length], [['This checks all 3 rows again and replaces their last checks. Go on?'], 2]);
+  s.ctx.confirm = () => true;
+  let during = null;
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'run-started', again: true, total: 3, done: 0, left: 3 });
+    during = textOf(byId(s.page(), 'check-r000000000001'));
+    for (const row of saved.rows) {
+      onEvent({ event: 'row', rowId: row.id, label: row.label, total: 3, done: 0, left: 3 });
+      row.done = true;
+      onEvent({ event: 'row-done', rowId: row.id, label: row.label, seconds: 1, rows: [row], total: 3, done: 1, left: 2 });
+    }
+    onEvent({ event: 'run-done', checked: 3, total: 3, done: 3, left: 0 });
+    return { ok: true };
+  };
+  byId(s.page(), 'check-every-row').attrs.onclick();
+  await settle();
+  assert.deepEqual(local.calls.filter((c) => c.stream).at(-1).body, { again: true });
+  assert.equal(during, 'Check', "every row's last check went first");
+  page = s.page();
+  assert.deepEqual(buttons(), [['start-checking', 'All rows are checked', true], ['check-every-row', 'Check every row again', false]]);
+  assert.equal(textOf(byId(page, 'run-progress')), 'Finished.');
+  byId(page, 'close-run').attrs.onclick();
+  assert.equal(byId(s.page(), 'run'), null, 'Close puts the checking area away');
+  assert.doesNotMatch(textOf(s.page()), /Needs Manual|Not checked yet/, 'no Status cards');
+});
+
 test('the tabs go to the right screen: Amazon to #/amazon from the Flipkart screen, Flipkart to #/flipkart from the Amazon screen', () => {
   const s = screen(flipkart);
   byId(s.draw(), 'market-amazon').attrs.onclick({ stopPropagation() {} });
@@ -656,6 +767,25 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   byId(rowPage.page(), 'check').attrs.onclick();
   await settle();
   add(rowPage);
+  // "Start checking": the rows checked one by one, with the checking area beside the table, then paused.
+  const runLocal = fakeLocal({ saved: SAVED });
+  const running = await opened(runLocal);
+  let pause;
+  runLocal.checking = (onEvent) => {
+    onEvent({ event: 'run-started', again: false, total: 3, done: 0, left: 3 });
+    onEvent({ event: 'row', rowId: 'r000000000001', label: 'Row 1', total: 3, done: 0, left: 3 });
+    onEvent({ event: 'step', step: { n: 1, name: STEP_NAMES[0], state: 'running', detail: null } });
+    return new Promise((resolve) => (pause = () => {
+      onEvent({ event: 'paused', kind: 'google-out', says: RUN_GOOGLE_OUT, rowId: 'r000000000001', label: 'Row 1', checked: 0, total: 3, done: 0, left: 3 });
+      resolve({ ok: true });
+    }));
+  };
+  byId(running.page(), 'start-checking').attrs.onclick();
+  await settle();
+  add(running);
+  pause();
+  await settle();
+  add(running);
   for (const cls of used) {
     const from = cls.startsWith('fk-') ? css : shared;
     assert.match(from, new RegExp(`\\.${cls}\\b`), `${cls}: from ${cls.startsWith('fk-') ? 'views/flipkart.css' : 'styles.css'}`);
@@ -689,6 +819,19 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   const narrow = (src) => src.match(/@media \(max-width: 1000px\) \{([^]*?)\n\}/)?.[1] ?? null;
   assert.equal(narrow(css), narrow(amazonCss).replaceAll('.amazon-page', '.fk-page').replaceAll('.amazon-right', '.fk-right'), 'in a narrow window, one column, as on Amazon');
   for (const cls of ['clickable', 'linkish', 'fk-row-head', 'fk-row-title', 'fk-back', 'fk-final-banner', 'fk-final-banner-none', 'fk-final-big', 'fk-final-says', 'fk-page', 'fk-left', 'fk-right', 'fk-result-card', 'fk-user-shots', 'fk-user-shot', 'fk-thumb', 'fk-thumb-large', 'fk-missing-word', 'fk-live', 'fk-action', 'fk-live-empty', 'fk-steps', 'fk-activity', 'fk-step', 'fk-step-good', 'fk-step-bad', 'fk-step-info', 'fk-step-mark', 'fk-step-body', 'fk-step-name', 'fk-step-state', 'fk-step-detail', 'fk-big', 'fk-big-inner']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
+  // "Start checking" and the live checking area beside the table look like the Amazon ones too.
+  for (const [mine, theirs] of [
+    ['.fk-overview', '.overview'], ['.fk-main-actions', '.main-actions'],
+    ['.fk-rows-layout.fk-with-live', '.rows-layout.with-live'], ['.fk-rows-main', '.rows-main'], ['.fk-rows-main > .fk-empty-state', '.rows-main > .empty-state'], ['.fk-with-live .fk-rows-wrap', '.with-live .rows-wrap'],
+    ['.fk-rows-table tbody tr.fk-current-row > td', '.rows-table tbody tr.current-row > td'], ['.fk-rows-table tbody tr.fk-current-row > td:first-child', '.rows-table tbody tr.current-row > td:first-child'],
+    ['.fk-live-panel', '.live-panel'], ['.fk-live-head', '.live-head'], ['.fk-live-head h2', '.live-head h2'], ['.fk-run-progress', '.run-progress'], ['.fk-live-links', '.live-links'], ['.fk-live-flat, .fk-steps-flat', '.live-flat, .steps-flat'],
+  ]) {
+    assert.ok(rule(amazonCss, theirs), `${theirs} is an Amazon rule`);
+    assert.equal(rule(css, mine), rule(amazonCss, theirs), `${mine} is the same as ${theirs}`);
+  }
+  const wide = (src) => src.match(/@media \(max-width: 1200px\) \{([^]*?)\n\}/)?.[1] ?? null;
+  assert.equal(wide(css), wide(amazonCss).replaceAll('.rows-layout.with-live', '.fk-rows-layout.fk-with-live').replaceAll('.live-panel', '.fk-live-panel'), 'in a narrower window, the checking area goes under the table, as on Amazon');
+  for (const cls of ['fk-overview', 'fk-main-actions', 'fk-rows-layout', 'fk-with-live', 'fk-rows-main', 'fk-current-row', 'fk-live-panel', 'fk-live-head', 'fk-run-progress', 'fk-live-links', 'fk-live-flat', 'fk-steps-flat']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
   for (const name of ['about-file', 'columns', 'column-grid', 'req', 'opt', 'col-letter', 'row-cell', 'strong-cell', 'product-cell', 'status-cell', 'type-cell', 'note-cell', 'cell-words', 'link-cell', 'other-cell', 'link-label', 'nolink', 'link-warning', 'empty-cell', 'empty-state', 'rows-wrap', 'rows-count']) {
     assert.ok(rule(amazonCss, `.${name}`), `.${name} is an Amazon rule`);
     assert.equal(rule(css, `.fk-${name}`), rule(amazonCss, `.${name}`), `.fk-${name} is the same as .${name}`);

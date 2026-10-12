@@ -11,7 +11,9 @@
 // none, and is not used until its brand is added. A robot check, a block or
 // an error stops the reading ("Flipkart prevented this check"), and is never
 // got around. Copied from the Amazon campaigns (amazon/campaigns.js) and
-// changed for Flipkart. Nothing here checks a row yet.
+// changed for Flipkart. A row uses every live campaign whose brand is in its
+// product name, or else in the file's name or the tab's name, as on Amazon;
+// nothing here checks a row yet.
 
 import { randomBytes } from 'node:crypto';
 import { parseUrl, isFlipkart, pidFrom, itemIdFrom, pageForPid, pageForLink, PID } from './links.js';
@@ -107,6 +109,23 @@ export function brandIn(name, brand) {
     }
   }
   return false;
+}
+
+/**
+ * Where a row finds its campaigns, as on Amazon: 'product' when a live
+ * campaign's brand is in the row's product name, else 'file' when one's brand
+ * is in the file's name or the tab's name (places), else null; with those
+ * campaigns. A campaign marked Ended is never used. With `live: false`, the
+ * same search among the ended campaigns, to say that a brand has only ended
+ * ones. Copied from amazon/campaigns.js.
+ */
+export function campaignsFound(productName, campaigns, places = [], { live = true } = {}) {
+  const pool = (campaigns ?? []).filter((c) => Boolean(c?.live) === live);
+  const byProduct = pool.filter((c) => brandIn(productName, c.brand));
+  if (byProduct.length) return { by: 'product', list: byProduct };
+  const byFile = pool.filter((c) => places.some((p) => brandIn(p, c.brand)));
+  if (byFile.length) return { by: 'file', list: byFile };
+  return { by: null, list: [] };
 }
 
 /** A product ID typed alone: 16 letters and digits, with both in it ("FCPHEW7AM9C7RU24"). */
