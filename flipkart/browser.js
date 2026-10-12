@@ -20,6 +20,8 @@ import { isFlipkartSite } from './links.js';
 export const LIVE_BROWSER_NAME = 'Live Flipkart Browser';
 export const PAGE_GAP_MS = 3000;
 const NAV_TIMEOUT_MS = 30_000;
+/** How long a page is given to show what closing its login box or pressing "Read more" changed. */
+const PREPARE_WAIT_MS = 1000;
 /** The dashboard closes the browser itself when it stops; Playwright must not as well. */
 const NO_SIGNALS = { handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false };
 /** Chrome's name lookup in the window: only Flipkart's websites can be found; every other name is "not found". */
@@ -162,8 +164,14 @@ export class FlipkartBrowser {
     this.page = await context.newPage();
   }
 
-  /** Open one Flipkart page, through the gate. Never throws: says what went wrong instead. */
-  async open(url, { onWait } = {}) {
+  /**
+   * Open one Flipkart page, through the gate, and read it. read — what is
+   * read inside the page (a product page's facts unless said); prepare — run
+   * inside the page first, to close Flipkart's login box or press "Read more"
+   * (it never types); html — also give back the page as Flipkart sent it.
+   * Never throws: says what went wrong instead.
+   */
+  async open(url, { onWait, read = readFlipkartPage, prepare = null, html = false } = {}) {
     if (!this.isOpen()) return { ok: false, error: 'closed', message: 'The Live Flipkart Browser was closed.' };
     return this.gate.run(async () => {
       this.leftSite = null;
@@ -172,8 +180,12 @@ export class FlipkartBrowser {
         await this.context.clearCookies();
         const res = await this.page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
         await this.page.waitForLoadState('load', { timeout: 10_000 }).catch(() => {});
-        const facts = await this.page.evaluate(readFlipkartPage);
-        return { ok: true, status: res ? res.status() : null, url: this.page.url(), facts };
+        const prepared = prepare ? await this.page.evaluate(prepare).catch(() => null) : null;
+        // Whatever was closed or opened is given a moment to show.
+        if (prepared?.closed || prepared?.pressed) await this.page.waitForTimeout(PREPARE_WAIT_MS);
+        const facts = await this.page.evaluate(read);
+        const sent = html && res ? await res.text().catch(() => null) : null;
+        return { ok: true, status: res ? res.status() : null, url: this.page.url(), facts, ...(prepare ? { prepared } : {}), ...(html ? { html: sent } : {}) };
       } catch (err) {
         if (!this.isOpen()) return { ok: false, error: 'closed', message: 'The Live Flipkart Browser was closed.' };
         if (this.leftSite) return { ok: false, error: 'elsewhere', host: this.leftSite, message: `The page went to ${this.leftSite} instead of Flipkart.` };

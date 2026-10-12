@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<!-- A made-up Flipkart review page (page 1 of a made-up product's reviews) covered by a login box like Flipkart's, which asks a visitor who is not signed in for an email address or a mobile number. Its close button takes it away, as the little script below does; the script also counts any key pressed or anything typed, which must stay 0. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>Made-up review page under a login box | Flipkart.com</title></head>
+<body>
+<div dir="auto">1 rating and 1 review</div>
+<div>
+  <div>
+    <div><div><div dir="auto">3.0</div><div dir="auto">•</div></div><div dir="auto">Fair</div></div>
+    <div dir="auto"><span>Made-up review: the clay dries a little fast.</span></div>
+    <div><div><div dir="auto">Made-up Reviewer G</div><div dir="auto">, Test Village</div></div><div><div dir="auto">Helpful</div></div></div>
+    <div><div><div dir="auto">Verified Purchase</div></div><div dir="auto">· 1 month ago</div></div>
+  </div>
+</div>
+<div data-test="login-box" style="position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center;">
+  <div style="position: relative; background: #fff; width: 600px; padding: 32px;">
+    <button type="button" aria-label="Close" style="position: absolute; top: 8px; right: 8px;">✕</button>
+    <div>Login</div>
+    <p>Get access to your Orders, Wishlist and Recommendations</p>
+    <label>Enter Email/Mobile number <input type="text" name="loginId" autocomplete="off"></label>
+    <button type="button">Request OTP</button>
+  </div>
+</div>
+<script>
+  window.typed = 0;
+  document.addEventListener('keydown', () => window.typed++, true);
+  document.addEventListener('input', () => window.typed++, true);
+  document.querySelector('[aria-label="Close"]').addEventListener('click', () => {
+    window.closedWith = 'its close button';
+    document.querySelector('[data-test="login-box"]').remove();
+  });
+</script>
+</body>
+</html>

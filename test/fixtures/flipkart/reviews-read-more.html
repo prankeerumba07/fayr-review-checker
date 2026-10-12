@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<!-- A made-up Flipkart review page (page 1 of a made-up product's reviews) where one review's text is cut and ends in "Read more": pressing it shows the whole text, as the little script below does. Its other review is short. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>Made-up review page with Read more | Flipkart.com</title></head>
+<body>
+<div dir="auto">2 ratings and 2 reviews</div>
+<div>
+  <div>
+    <div><div><div dir="auto">5.0</div><div dir="auto">•</div></div><div dir="auto">Terrific</div></div>
+    <div dir="auto" data-full="This made-up mask feels light and cool on the skin, and after a week my skin looked brighter."><span>This made-up mask feels light and cool on the skin, and</span><span>…</span> <span data-more>Read more</span></div>
+    <div><div><div dir="auto">Made-up Reviewer E</div><div dir="auto">, Test Town</div></div><div><div dir="auto">Helpful</div></div></div>
+    <div><div><div dir="auto">Verified Purchase</div></div><div dir="auto">· Today</div></div>
+  </div>
+  <div>
+    <div><div><div dir="auto">4.0</div><div dir="auto">•</div></div><div dir="auto">Good</div></div>
+    <div dir="auto"><span>Nice.</span></div>
+    <div><div><div dir="auto">Made-up Reviewer F</div><div dir="auto">, Test City</div></div><div><div dir="auto">Helpful</div></div></div>
+    <div><div><div dir="auto">Verified Purchase</div></div><div dir="auto">· 2 days ago</div></div>
+  </div>
+</div>
+<script>
+  // "Read more" shows the whole text in place, as Flipkart's does; it opens no other page.
+  window.pressed = 0;
+  document.addEventListener('click', (e) => {
+    const more = e.target.closest('[data-more]');
+    if (!more) return;
+    window.pressed++;
+    const box = more.parentElement;
+    box.textContent = '';
+    const whole = document.createElement('span');
+    whole.textContent = box.getAttribute('data-full');
+    box.appendChild(whole);
+  });
+</script>
+</body>
+</html>

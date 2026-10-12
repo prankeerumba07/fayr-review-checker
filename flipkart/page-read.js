@@ -73,14 +73,15 @@ const ERROR_WORDS = /something went wrong|something'?s not right|site is (overlo
  * What kind of page Flipkart showed: { kind, why }, kind being 'captcha' (a
  * robot check), 'blocked', 'error', 'not-found' or 'page'. A page whose
  * JSON-LD names a product is a product page whatever its reviews say (one
- * may say "something went wrong"); only its address, a robot check in it or
- * its status can make it a robot check, a block or an error.
+ * may say "something went wrong"), and so is a page that shows reviews
+ * (facts.reviews); only its address, a robot check in it or its status can
+ * make it a robot check, a block or an error.
  */
 export function whatPageIs(facts, status) {
   const f = facts ?? {};
   const url = String(f.url ?? '');
   const head = `${f.title ?? ''}\n${String(f.text ?? '').slice(0, 4000)}`;
-  const product = Boolean(f.product?.name);
+  const product = Boolean(f.product?.name) || (Array.isArray(f.reviews) && f.reviews.length > 0);
   let path = '';
   try {
     path = new URL(url).pathname;

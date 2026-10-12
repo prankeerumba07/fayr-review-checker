@@ -1,7 +1,8 @@
 // Flipkart's own storage, only in data/flipkart/ (data/ is kept out of git and
 // never served as a file): the uploaded file (upload.xlsx or upload.csv), what
-// was read from it (rows.json), and the campaigns with what was read from
-// their products' Flipkart pages (campaigns.json). Nothing here writes
+// was read from it (rows.json), the campaigns with what was read from their
+// products' Flipkart pages (campaigns.json), and each product's public
+// reviews (reviews/<product ID>.json). Nothing here writes
 // anywhere else in data/. Copied from the Amazon store's way of writing
 // (amazon/store.js): a file is written whole under another name, then
 // renamed, readable only by this computer's user.
@@ -9,6 +10,7 @@
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
+import { ANY_PID } from './links.js';
 
 /** The largest file taken: the same as for Amazon. */
 export const MAX_SHEET_BYTES = 50 * 1024 * 1024;
@@ -111,6 +113,19 @@ export function createFlipkartStore(dataDir) {
         if (j < 0) return null;
         c.products[j] = product;
         return product;
+      });
+    },
+    /** A product's public reviews as last read (reviews.js), or null when none were read. */
+    async reviews(pid) {
+      return ANY_PID.test(String(pid ?? '')) ? readJson(join(dir, 'reviews', `${pid}.json`), null) : null;
+    },
+    /** Keeps a product's public reviews, as read, in data/flipkart/reviews/<product ID>.json, in place of the ones read before. */
+    saveReviews(pid, read) {
+      if (!ANY_PID.test(String(pid ?? ''))) return Promise.reject(new Error('Not a Flipkart product ID.'));
+      return locked(async () => {
+        await mkdir(join(dir, 'reviews'), { recursive: true, mode: 0o700 });
+        await writeWhole(join(dir, 'reviews', `${pid}.json`), JSON.stringify(read, null, 2));
+        return read;
       });
     },
     /** The saved file's name and tab, its column names and its rows: { sheet, headers, rows }, or null when no file was uploaded. */
