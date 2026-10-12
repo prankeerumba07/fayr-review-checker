@@ -4,12 +4,15 @@
 // CORS headers. The routes: /local/flipkart/status (the checker is not ready
 // yet), /local/flipkart/sheet (GET the uploaded file's rows, POST a file to
 // upload), /local/flipkart/campaigns (GET them; POST to add one, to change
-// one, or to end, delete or read again one) and /local/flipkart/account
-// (GET: the Google login, for the top bar). The file is read on this
+// one, or to end, delete or read again one), /local/flipkart/account (GET:
+// the Google login, for the top bar) and /local/flipkart/rows/… (GET a row's
+// page, with its last check, and its pictures; POST …/check to check it, as on
+// Amazon, the steps streamed as they run). The file is read on this
 // computer, its columns are found as on Amazon (or chosen on the screen when
 // a needed one cannot be found), and it is kept in data/flipkart/ with its
 // rows and the pictures placed in its cells; its links are only shown, never
-// opened, and nothing is downloaded. A campaign's products are read, after it
+// opened, and nothing is downloaded until a row is checked (check.js). A
+// campaign's products are read, after it
 // is saved, from their Flipkart pages in the Live Flipkart Browser
 // (browser.js), one page at a time; the window opens only then, never when
 // the dashboard starts, and it closes when the dashboard stops. The Google
@@ -20,14 +23,19 @@
 // window.
 
 import { openWorkbook, guessColumns, columnProblems, rememberedChoice, sheetRows, SheetError, FIELDS, RESULT_FIELDS, RESULT_HEADERS, columnLetter, resultColumns, dayFirst } from './workbook.js';
-import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS } from './store.js';
-import { cellLinks, linkLabel, linksIn } from './links.js';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS, ROW_ID } from './store.js';
+import { cellLinks, linkLabel, linksIn, isDriveLink, linkKey } from './links.js';
+import { createScreenshots, downloadable } from './screenshots.js';
+import { runCheck, PAUSE_SAYS } from './check.js';
 import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct } from './campaigns.js';
 import { FlipkartBrowser } from './browser.js';
 
 const TOO_BIG = `The file is larger than ${MAX_SHEET_BYTES / (1024 * 1024)} megabytes, so save a smaller copy (only the Flipkart tab, for example), then upload that.`;
 const MAX_JSON_BYTES = 64 * 1024;
 const READING_NOW = 'The products of a campaign are being read from Flipkart.';
+const CHECKING_NOW = 'A row is being checked.';
 const GONE = 'This campaign is no longer saved. Reload the page.';
 
 // Copied from the Amazon routes (amazon/routes.js): a refusal with its status, the request's bytes up to a limit, and a multipart form.
@@ -114,6 +122,33 @@ function refuse(res, status, message, extra = {}) {
   sendJson(res, status, { statusCode: status, message, ...extra });
 }
 
+// Copied from the Amazon routes: a kept picture as it is, and a check's lines streamed as they happen.
+async function sendFile(res, file, type) {
+  try {
+    const s = await stat(file);
+    if (!s.isFile()) throw new Error('not a file');
+  } catch {
+    return refuse(res, 404, 'Not found.');
+  }
+  res.statusCode = 200;
+  res.setHeader('Content-Type', type);
+  res.setHeader('Content-Disposition', 'inline');
+  createReadStream(file)
+    .on('error', () => res.destroy())
+    .pipe(res);
+}
+function streamTo(res) {
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+  res.flushHeaders();
+  return (e) => {
+    if (!res.writableEnded && !res.destroyed) res.write(`${JSON.stringify(e)}\n`);
+  };
+}
+function endStream(res) {
+  if (res.headersSent && !res.writableEnded) res.end();
+}
+
 // ---- the rows as the screen sees them (copied from the Amazon routes, amazon/routes.js, and changed for Flipkart) ----
 
 /** An amount as rupees, as the table shows it: ₹654, ₹851.95, ₹1,299. Null when there is none. */
@@ -123,13 +158,20 @@ export function rupees(value) {
   return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: Number.isInteger(n) ? 0 : 2, maximumFractionDigits: 2 })}`;
 }
 
+/** One of a cell's pictures as the screen sees it, as on Amazon: kept (ok, its type), or why it could not be had. */
+function pictureView(p, i) {
+  if (p?.file) return { i, ok: true, type: p.type, at: p.at ?? null, link: p.link ?? null };
+  return { i, ok: false, link: p?.link ?? null, problem: { kind: p?.problem?.kind ?? 'access', site: p?.problem?.site ?? null, says: p?.problem?.says ?? '' } };
+}
+
 /**
  * A row as the screen sees it, as on Amazon: its number on the dashboard
  * (from 1), its order ID, order date, amount and product, each picture or
  * link cell with a few words saying where each link goes (`words` are the
  * cell's own words when they are not a link themselves) and how a picture
- * was given ('cell' or 'floating'), the file's other columns, and the
- * Status, Type and Note the file already had. Pictures never come with it.
+ * was given ('cell' or 'floating') with each picture kept or why it could
+ * not be had, the file's other columns, and the Status, Type and Note the file
+ * already had. The pictures themselves never come with it.
  */
 export function rowView(r) {
   const shot = (which) => {
@@ -143,6 +185,7 @@ export function rowView(r) {
       words: links.length && !linksIn(s.text ?? '').length ? s.text ?? '' : '',
       mismatch: s.mismatch ?? null,
       how: s.picture ?? null,
+      pictures: (r.pictures?.[which] ?? []).map(pictureView),
     };
   };
   return {
@@ -235,11 +278,15 @@ export function sheetView(saved) {
  * google — the Amazon screen's Google login, handed over by serve.mjs: the
  * top bar shows its state (view), and screenshots.js says what else of it
  * the downloads use; tests give a pretend one.
+ * shotOptions — tests only: the downloads' own options (screenshots.js).
  * The answer is the routes' handler; its close() closes the Live Flipkart
  * Browser, when the dashboard stops.
  */
-export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = null, makeBrowser = () => new FlipkartBrowser({ dataDir }), now = () => new Date(), google = null }) {
+export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = null, makeBrowser = () => new FlipkartBrowser({ dataDir }), now = () => new Date(), google = null, shotOptions = {} }) {
   const store = createFlipkartStore(dataDir);
+  // A row's screenshots, downloaded when it is checked; the ones on Google Drive through the Amazon screen's Google login.
+  const screenshots = createScreenshots({ store, google, ...shotOptions });
+  let checking = null; // the row being checked: { rowId, stop }. One check at a time.
   let live = browser;
   let closing = false; // the dashboard is stopping: no window is made, and no product is read
   const liveBrowser = () => {
@@ -307,7 +354,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   }
 
   /** Why a campaign cannot be changed just now, naming the button to press later; null when it can. */
-  const campaignBusy = (button) => (job ? `${READING_NOW} Wait for it to finish, then press ${button}.` : null);
+  const campaignBusy = (button) => (job || checking ? `${job ? READING_NOW : CHECKING_NOW} Wait for it to finish, then press ${button}.` : null);
 
   /** A campaign from the screen's form: its brand, its name, live or ended, and its products, one per line. A product typed before keeps what was read for it. */
   function campaignFrom(body, old) {
@@ -456,6 +503,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
     const { fields, files } = await readForm(req);
     const file = files.file;
     if (!file) return refuse(res, 400, 'Choose the Flipkart file first.');
+    if (checking) return refuse(res, 409, `${CHECKING_NOW} Wait for it to finish, then upload the file again.`);
     if (file.data.length > MAX_SHEET_BYTES) return refuse(res, 413, TOO_BIG);
     const chosen = chosenColumns(fields.mapping);
     let book;
@@ -490,6 +538,86 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   /** The top bar: the Google login's one state ({ state, name, says, chrome }), read as it is, the same as on the Amazon screen; null when none was handed over. */
   const accountView = () => ({ google: google ? google.view() : null });
 
+  // ---- checking one row (copied from the Amazon routes, amazon/routes.js, and changed for Flipkart) ----
+
+  /** A row with a Google Drive picture still to be downloaded: it needs the Google login. */
+  function needsGoogle(row) {
+    return SHOTS.some((w) => {
+      const kept = row?.pictures?.[w] ?? [];
+      return (row?.shots?.[w]?.links ?? []).filter((l) => downloadable(w, l) && isDriveLink(l)).some((l) => !kept.some((p) => p.file && p.link && linkKey(p.link) === linkKey(l)));
+    });
+  }
+
+  /**
+   * "Check": one row's check, its steps streamed as they run, as on Amazon.
+   * One check at a time, never while a campaign's products are read. A row
+   * with a Google Drive screenshot to download while no one is logged in to
+   * Google pauses before it starts, as on Amazon. A paused or stopped check
+   * saves nothing for the row; a finished one keeps its steps with the row.
+   */
+  async function startCheck(req, res, id) {
+    await readBody(req, MAX_JSON_BYTES, 'That is too large to send here.');
+    if (closing) throw new HttpError(409, 'The dashboard is stopping.');
+    const row = await store.row(id);
+    if (!row) return refuse(res, 404, 'No row has that id.');
+    if (job) return refuse(res, 409, `${READING_NOW} Wait for it to finish, then press Check.`);
+    if (checking) return refuse(res, 409, `${CHECKING_NOW} Wait for it to finish, then press Check.`);
+    const run = (checking = { rowId: id, stop: new AbortController() });
+    res.on('close', () => {
+      if (!res.writableFinished) run.stop.abort();
+    });
+    const emit = streamTo(res);
+    try {
+      // The pause names the button there is for the row: Check (there is no "Carry on checking" yet).
+      const pause = (kind, says) => emit({ event: 'paused', kind, says: says.replace('"Carry on checking"', 'Check') });
+      if (needsGoogle(row) && accountView().google?.state !== 'in') return pause('google-out', PAUSE_SAYS['google-out']);
+      const mapping = (await store.sheet())?.sheet?.mapping ?? {};
+      const has = Object.fromEntries(['orderShot', 'deliveryShot', 'reviewShot', 'reviewLink'].map((k) => [k, Number.isInteger(mapping[k])]));
+      const result = await runCheck({ row, has, screenshots, emit, signal: run.stop.signal, now });
+      if (result.paused) pause(result.paused.kind, result.paused.says);
+      else if (!result.stopped) await store.saveCheck(id, result);
+    } catch (err) {
+      log(`Flipkart check failed: ${err?.name ?? 'Error'}`);
+      emit({ event: 'failed', says: 'Something went wrong on this computer part way through the check. Nothing was saved for it; press Check to try again.' });
+    } finally {
+      if (checking === run) checking = null;
+      endStream(res);
+    }
+  }
+
+  /** A row's routes: its page (GET), its check (POST …/check), and its pictures (GET …/picture/<cell>/<n>, or …/small/…, the same picture). */
+  async function rowRoute(req, res, method, parts) {
+    const id = parts[1];
+    if (parts.length === 2) {
+      if (method !== 'GET') {
+        res.setHeader('Allow', 'GET, HEAD');
+        return refuse(res, 405, 'Only GET and HEAD are answered here.');
+      }
+      const row = await store.row(id);
+      if (!row) return refuse(res, 404, 'No row has that id.');
+      return sendJson(res, 200, { row: rowView(row), result: row.check ?? null });
+    }
+    if (parts.length === 3 && parts[2] === 'check') {
+      if (method !== 'POST') {
+        res.setHeader('Allow', 'POST');
+        return refuse(res, 405, 'Only POST is answered here.');
+      }
+      return startCheck(req, res, id);
+    }
+    if (parts.length === 5 && ['picture', 'small'].includes(parts[2]) && SHOTS.includes(parts[3]) && /^[0-9]$/.test(parts[4])) {
+      if (method !== 'GET') {
+        res.setHeader('Allow', 'GET, HEAD');
+        return refuse(res, 405, 'Only GET and HEAD are answered here.');
+      }
+      const row = await store.row(id);
+      const i = Number(parts[4]);
+      const p = row?.pictures?.[parts[3]]?.[i];
+      if (!p?.file) return refuse(res, 404, 'This row has no such picture.');
+      return sendFile(res, store.pictureFile(row, parts[3], i), p.type);
+    }
+    return refuse(res, 404, 'Not found.');
+  }
+
   /** True when the path was one of these routes (answered or refused). */
   async function handle(req, res, url) {
     if (!url.pathname.startsWith('/local/flipkart/')) return false;
@@ -522,6 +650,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         return refuse(res, 405, 'Only GET, HEAD and POST are answered here.'), true;
       }
       const parts = path.split('/');
+      if (parts[0] === 'rows' && ROW_ID.test(parts[1] ?? '')) return (await rowRoute(req, res, method, parts)), true;
       if (parts[0] === 'campaigns' && parts.length <= 3) {
         if (method !== 'GET' && method !== 'POST') {
           res.setHeader('Allow', parts.length === 1 ? 'GET, HEAD, POST' : 'POST');
@@ -547,9 +676,10 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       return true;
     }
   }
-  /** Only when the dashboard stops: the Live Flipkart Browser is closed properly, when it was opened, and no product is read after that. */
+  /** Only when the dashboard stops: a check still running is stopped, the Live Flipkart Browser is closed properly, when it was opened, and no product is read after that. */
   handle.close = async () => {
     closing = true;
+    checking?.stop.abort();
     if (live) await live.close();
   };
   return handle;

@@ -1,7 +1,6 @@
 // Getting a Flipkart row's screenshots, the way the Amazon checker gets a
 // row's (amazon/routes.js: fetchOne and picturesFor), copied and changed for
-// Flipkart. Nothing on the screen gets screenshots yet: the checking step will,
-// when a row is checked, as on Amazon. A cell's links are downloaded one at a
+// Flipkart: a row's check gets them (check.js). A cell's links are downloaded one at a
 // time, a set time apart (pictures.js): a Google Drive file through the Live
 // Amazon Browser's own download, with the Amazon screen's Google login and
 // without opening a page in that window, the same way the Amazon checker
@@ -10,13 +9,15 @@
 // below, never with a login. Flipkart never changes that window or that login:
 // while the Amazon login or the Google login is using the window, a Google
 // Drive download is not made, and it stops there with a plain sentence
-// instead (pause). A PDF's pages become one picture and a picture over 10
-// megabytes is made smaller, on this computer (picture-fix.js). Every picture
-// is kept only in data/flipkart/pictures/ (store.js), and a screenshot that
-// cannot be had keeps its reason, as on Amazon: "no one is logged in to
-// Google", "no access", and the like. Google's login page, a robot check or a
-// block while downloading stops there too (pause), and nothing is got around;
-// Google's login page means the Google login has ended, so both screens say so.
+// instead (pause). With no one logged in to Google it stops there too, as on
+// Amazon, so a screenshot is never kept as missing only for that. A PDF's
+// pages become one picture and a picture over 10 megabytes is made smaller,
+// on this computer (picture-fix.js). Every picture is kept only in
+// data/flipkart/pictures/ (store.js), and a screenshot that cannot be had
+// keeps its reason, as on Amazon: "no access", and the like. Google's login
+// page, a robot check or a block while downloading stops there too (pause),
+// and nothing is got around; Google's login page means the Google login has
+// ended, so both screens say so.
 
 import { readFile } from 'node:fs/promises';
 import { downloadPicture, createPacer } from './pictures.js';
@@ -27,8 +28,8 @@ import { isDriveLink, isFlipkart, isShortLink, isAppStore, linkKey, parseUrl } f
 export const PICTURE_WEBSITES = ['storage.googleapis.com', 'tryboxs.in', 'www.tryboxs.in'];
 /** The time kept between two downloads, as on Amazon. */
 export const DOWNLOAD_GAP_MS = 1000;
-/** The reason kept with a Google Drive screenshot that was not downloaded because no one is logged in to Google: the Amazon checker's words. */
-export const NO_GOOGLE = { kind: 'drive', site: 'Google Drive', says: 'no one is logged in to Google, so it was not downloaded yet' };
+/** No Google login handed over (tests only): no one is logged in to Google. */
+const NOBODY = { view: () => ({ state: 'out', name: null, says: null, chrome: false }), busy: () => false, amazonLogin: () => ({ state: 'out', busy: false }), loggedOut: () => {} };
 /** What a Google Drive download stops with while a login is using the Live Amazon Browser, in plain words, as the Amazon screen says it when a button is pressed then. */
 export const BUSY_SAYS = {
   amazon: 'The Live Amazon Browser is busy with the Amazon login, so the Google Drive screenshots were not downloaded yet. Wait until that is done, then try again.',
@@ -60,7 +61,8 @@ export function downloadable(which, link) {
  * download, prepare — tests may give their own
  * -> { forCell(rowId, which, { signal }), fetchOne(link, signal) }
  */
-export function createScreenshots({ store, google, download = downloadPicture, prepare = preparePicture, allowed = PICTURE_WEBSITES, gapMs = DOWNLOAD_GAP_MS }) {
+export function createScreenshots({ store, google: given = null, download = downloadPicture, prepare = preparePicture, allowed = PICTURE_WEBSITES, gapMs = DOWNLOAD_GAP_MS }) {
+  const google = given ?? NOBODY;
   const pacer = createPacer(gapMs);
   /** The Google login is in use: a Google Drive file can be downloaded. */
   const googleIn = () => google.view().state === 'in';
@@ -100,7 +102,7 @@ export function createScreenshots({ store, google, download = downloadPicture, p
         // Asked again just before the download: the logins may have moved on while it waited its turn.
         const busy = busyNow();
         if (busy) return { pause: 'login-busy', says: busy };
-        if (!googleIn()) return { ok: false, ...NO_GOOGLE };
+        if (!googleIn()) return { pause: 'google-out' };
         try {
           await google.begin();
         } catch {
@@ -116,10 +118,10 @@ export function createScreenshots({ store, google, download = downloadPicture, p
   /**
    * A cell's pictures, for a check: the ones kept, and those that could not
    * be had downloaded once more (the owner may have opened them since). A
-   * Google Drive file while no one is logged in to Google is not downloaded:
-   * it keeps that reason. While a login is using the Live Amazon Browser, or
-   * when Google answers a download with its login page, a robot check or a
-   * block, it stops there: { pause, says? }, with nothing saved for the cell.
+   * Google Drive file while no one is logged in to Google, or while a login
+   * is using the Live Amazon Browser, or when Google answers a download with
+   * its login page, a robot check or a block, stops it there: { pause, says? },
+   * with nothing saved for the cell.
    * -> { files, problems, types, records } or { pause, … }.
    */
   async function forCell(rowId, which, { signal = null } = {}) {
@@ -138,10 +140,7 @@ export function createScreenshots({ store, google, download = downloadPicture, p
         if (isDriveLink(link)) {
           const busy = busyNow();
           if (busy) return stop({ pause: 'login-busy', says: busy });
-          if (!googleIn()) {
-            list.push({ link, problem: { ...NO_GOOGLE } });
-            continue;
-          }
+          if (!googleIn()) return stop({ pause: 'google-out' });
         }
         const out = noteDownload(await fetchOne(link, signal));
         if (out.pause) return stop(out);

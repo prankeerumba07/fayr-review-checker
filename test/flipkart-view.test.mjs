@@ -1,6 +1,6 @@
 // The Flipkart screen, drawn the way app.js draws it, with a fake ctx and a
-// fake client shaped like the local server's answers. No browser, no server
-// and no website. Made-up rows only.
+// fake client shaped like the local server's answers (a check's lines too).
+// No browser, no server and no website. Made-up rows only.
 // Run: node test/flipkart-view.test.mjs
 
 import { test } from 'node:test';
@@ -11,8 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { h, textOf, findAll, byId } from '../lib/vdom.js';
 import { ApiError } from '../lib/api.js';
 import * as words from '../lib/words.js';
-import flipkart, { SHEET_ACCEPT, GOOGLE_WORDS, LOGIN_POLL_MS } from '../views/flipkart.js';
-import amazon, { GOOGLE_WORDS as AMAZON_GOOGLE_WORDS, LOGIN_POLL_MS as AMAZON_LOGIN_POLL_MS } from '../views/amazon.js';
+import flipkart, { SHEET_ACCEPT, GOOGLE_WORDS, LOGIN_POLL_MS, STEP_NAMES, MARKS, FINAL_NONE } from '../views/flipkart.js';
+import amazon, { GOOGLE_WORDS as AMAZON_GOOGLE_WORDS, LOGIN_POLL_MS as AMAZON_LOGIN_POLL_MS, MARKS as AMAZON_MARKS } from '../views/amazon.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tick = () => new Promise((r) => setImmediate(r));
@@ -132,13 +132,21 @@ const aFile = (name = 'flipkart-orders.xlsx') => new File([Buffer.from('made-up 
 /** The Google login as the server says it, one state at a time. */
 const GOOGLE_OUT = { state: 'out', name: null, says: null, chrome: false };
 
-function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT, press = null } = {}) {
+function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT, press = null, pages = {} } = {}) {
   const calls = [];
   const local = {
     calls,
     google,
+    revoked: [],
+    // A check's lines, as the server streams them: (onEvent, signal) -> what lib/api.js stream() answers.
+    checking: null,
     api: async (method, path, body) => {
       calls.push({ method, path, body });
+      const page = /^\/local\/flipkart\/rows\/([^/]+)$/.exec(path);
+      if (method === 'GET' && page) {
+        if (!pages[page[1]]) throw new ApiError(404, 'No row has that id.');
+        return structuredClone(pages[page[1]]);
+      }
       if (method === 'GET' && path === '/local/flipkart/sheet') return structuredClone(saved);
       if (method === 'GET' && path === '/local/flipkart/campaigns') return { campaigns: [], reading: false };
       if (method === 'GET' && path === '/local/flipkart/account') return structuredClone({ google: local.google });
@@ -153,6 +161,12 @@ function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT,
       calls.push({ method: 'POST', path, form: fd });
       return structuredClone(await answer(fd, calls.length));
     },
+    stream: async (method, path, body, onEvent, signal) => {
+      calls.push({ method, path, body, stream: true });
+      return local.checking ? local.checking(onEvent, signal) : { ok: true };
+    },
+    image: async (path) => `blob:${path}`,
+    revoke: (url) => local.revoked.push(url),
   };
   return local;
 }
@@ -197,10 +211,10 @@ async function choose(s, file = aFile()) {
 const rowsOf = (tree) => findAll(byId(tree, 'rows-table'), (n) => n.tag === 'tr').map((tr) => findAll(tr, (n) => n.tag === 'td' || n.tag === 'th').map(textOf));
 /** The table of the kept file, as the screen shows it: the column names with their letters, then each row. */
 const TABLE = [
-  ['Row', 'A: Reviewer Name', 'B: Order ID', 'C: Amount', 'D: Product Ordered', 'E: Order Screenshot', 'F: Delivery Screenshot', 'G: Review Screenshot', 'H: Review Link', 'I: Status', 'J: Type', 'K: Note'],
-  ['1', 'Test Person Two', 'OD100000000000000002', '₹349', 'Test Brand Steel Bottle', 'Google DriveScreenshot', 'Google Drive', 'Picture in the cell', 'Flipkart review', 'Empty', 'Empty', 'Empty'],
-  ['2', 'Test Person Three', 'OD100000000000000003', '₹499', 'Test Brand Lunch Box', 'Picture in the cell', 'Picture over the cell', 'Google Drive', 'Empty', 'Empty', 'Empty', 'Empty'],
-  ['3', 'Empty', 'Empty', 'Empty', 'Empty', 'Link', 'Delivered\nLeft at the door', 'Empty', 'Google DriveThe written link is different', 'Empty', 'Empty', 'Empty'],
+  ['Row', 'A: Reviewer Name', 'B: Order ID', 'C: Amount', 'D: Product Ordered', 'E: Order Screenshot', 'F: Delivery Screenshot', 'G: Review Screenshot', 'H: Review Link', 'I: Status', 'J: Type', 'K: Note', 'Check'],
+  ['1', 'Test Person Two', 'OD100000000000000002', '₹349', 'Test Brand Steel Bottle', 'Google DriveScreenshot', 'Google Drive', 'Picture in the cell', 'Flipkart review', 'Empty', 'Empty', 'Empty', 'Check'],
+  ['2', 'Test Person Three', 'OD100000000000000003', '₹499', 'Test Brand Lunch Box', 'Picture in the cell', 'Picture over the cell', 'Google Drive', 'Empty', 'Empty', 'Empty', 'Empty', 'Check'],
+  ['3', 'Empty', 'Empty', 'Empty', 'Empty', 'Link', 'Delivered\nLeft at the door', 'Empty', 'Google DriveThe written link is different', 'Empty', 'Empty', 'Empty', 'Check'],
 ];
 
 test('before a file is in: the tabs, and an upload area like the Amazon one for an .xlsx or .csv file; no table and no login lines', async () => {
@@ -212,7 +226,7 @@ test('before a file is in: the tabs, and an upload area like the Amazon one for 
   assert.equal(byId(tree, 'market-flipkart').attrs['aria-selected'], 'true');
   const area = byId(tree, 'drop');
   assert.match(area.attrs.class, /\bfk-drop\b/);
-  assert.deepEqual(findAll(area, (n) => n.tag === 'p').map(textOf), ['Upload the Flipkart file: drop it anywhere on this page, or choose it', 'An .xlsx or .csv file, up to 50 megabytes. The tab named "Flipkart" is read, or the file\'s only tab. Nothing is checked yet.']);
+  assert.deepEqual(findAll(area, (n) => n.tag === 'p').map(textOf), ['Upload the Flipkart file: drop it anywhere on this page, or choose it', 'An .xlsx or .csv file, up to 50 megabytes. The tab named "Flipkart" is read, or the file\'s only tab.']);
   const input = byId(tree, 'sheet-file');
   assert.deepEqual([input.tag, input.attrs.type, input.attrs.id], ['input', 'file', 'fk-file']);
   assert.deepEqual(input.attrs.accept.split(',').filter((a) => a.startsWith('.')), ['.xlsx', '.csv'], 'only .xlsx and .csv files are offered');
@@ -245,7 +259,7 @@ test('choosing a file uploads it at once: its name, its tab and how many rows in
   assert.equal(s.local.calls.filter((c) => c.method === 'POST').length, 2);
 });
 
-test('as on Amazon: each link a small label saying where it goes, opening in a new tab; a link that is not a web link opens nothing; a picture in a cell or over it said so; Status, Type and Note empty; no Check button and no Status cards', async () => {
+test('as on Amazon: each link a small label saying where it goes, opening in a new tab; a link that is not a web link opens nothing; a picture in a cell or over it said so; Status, Type and Note empty; a Check button at the end of each row; no Status cards', async () => {
   const s = await opened(fakeLocal({ saved: SAVED }));
   const table = byId(s.page(), 'rows-table');
   const links = findAll(table, (n) => n.tag === 'a');
@@ -264,13 +278,12 @@ test('as on Amazon: each link a small label saying where it goes, opening in a n
   assert.deepEqual(findAll(table, (n) => /\bfk-link-warning\b/.test(n.attrs?.class ?? '')).map(textOf), ['The written link is different']);
   assert.deepEqual(findAll(table, (n) => n.attrs?.['data-cell'] === 'status').map(textOf), ['Empty', 'Empty', 'Empty']);
   assert.equal(findAll(table, (n) => /\bfk-empty-cell\b/.test(n.attrs?.class ?? '')).length, 15, 'each "Empty" in the table above');
-  assert.deepEqual(findAll(table, (n) => n.tag === 'th').map((n) => n.attrs['data-col'] ?? null), [null, ...KEYS, 'status', 'type', 'note']);
+  assert.deepEqual(findAll(table, (n) => n.tag === 'th').map((n) => n.attrs['data-col'] ?? null), [null, ...KEYS, 'status', 'type', 'note', null], 'and the Check column, last');
   assert.deepEqual(findAll(table, (n) => /\bfk-col-letter\b/.test(n.attrs?.class ?? '')).map(textOf), [...LETTERS]);
   const page = s.page();
-  assert.equal(findAll(page, (n) => n.tag === 'button' && /^(Check|Check again|Start checking)$/.test(textOf(n))).length, 0, 'no Check button');
+  assert.deepEqual(findAll(page, (n) => n.tag === 'button' && /^(Check|Check again|Start checking)$/.test(textOf(n))).map((n) => n.attrs['data-id']), ['check-r000000000001', 'check-r000000000002', 'check-r000000000003'], 'a Check button for each row, and no "Start checking"');
   assert.doesNotMatch(textOf(page), /Needs Manual|Not checked yet|Start checking/, 'no Status cards');
-  assert.equal(findAll(table, (n) => n.tag === 'img').length, 0, 'no picture is shown or fetched');
-  assert.equal(findAll(table, (n) => n.attrs?.onclick).length, 0, 'a row opens nothing: there is no row page yet');
+  assert.equal(findAll(table, (n) => n.tag === 'img').length, 0, 'no picture is shown or fetched in the table');
   assert.deepEqual(s.local.calls.map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/sheet', 'GET /local/flipkart/campaigns', 'GET /local/flipkart/account'], 'a link is only opened when it is pressed');
 });
 
@@ -461,6 +474,125 @@ test("the Google login in the top bar is the Amazon screen's own: the same state
   assert.match(textOf(byId(bar(lost), 'google-help')), /Something went wrong on this computer\./);
 });
 
+/** A row's page as the server shows it: the row, with each picture kept or why it could not be had (in the Amazon words). */
+const PICTURED = {
+  ...SAVED.rows[0],
+  shots: {
+    order: { ...SAVED.rows[0].shots.order, pictures: [{ i: 0, ok: true, type: 'image/png', at: '2026-10-12T12:30:00.000Z', link: ORDER_SHOT }] },
+    delivery: { ...SAVED.rows[0].shots.delivery, pictures: [{ i: 0, ok: false, link: DELIVERY_SHOT, problem: { kind: 'drive', site: 'Google Drive', says: 'the Google account logged in to the dashboard has no access to the file' } }] },
+    review: { ...SAVED.rows[0].shots.review, pictures: [] },
+    reviewShot: { ...SAVED.rows[0].shots.reviewShot, pictures: [{ i: 0, ok: true, type: 'image/png', at: '2026-10-12T12:00:00.000Z', link: null }] },
+  },
+};
+/** A check's steps as the server keeps them: the screenshots opened (one could not be had), every other step coming in a later step. */
+const STEPS_DONE = STEP_NAMES.map((name, i) => ({ n: i + 1, name, state: i === 0 || i === 4 ? 'pass' : i === 2 ? 'fail' : 'later', detail: ['Opened the purchase screenshot.', null, 'The delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.', null, 'Opened the review screenshot.'][i] ?? null }));
+const LAST_CHECK = { checkId: 'c20261012123000abcdef', startedAt: '2026-10-12T12:29:58.000Z', finishedAt: '2026-10-12T12:30:00.000Z', seconds: 2, steps: STEPS_DONE };
+const stepsOf = (tree) => findAll(byId(tree, 'activity'), (n) => n.tag === 'li');
+/** A screen showing one row's page. */
+async function rowScreen(local, id = 'r000000000001') {
+  const s = screen(flipkart, local);
+  s.ctx.route = id;
+  await flipkart.enter(s.ctx);
+  await settle();
+  return s;
+}
+
+test('each row has a Check button at its end, as on Amazon: it opens the row\'s page and checks the row; clicking a row opens its page', async () => {
+  const s = await opened(fakeLocal({ saved: SAVED }));
+  assert.equal(byId(s.page(), 'row-2').attrs.class, 'clickable');
+  byId(s.page(), 'row-2').attrs.onclick();
+  assert.deepEqual(s.went, ['flipkart/r000000000002'], "a row clicked opens its page: #/flipkart/<the row's id>");
+  const button = byId(s.page(), 'check-r000000000001');
+  assert.equal(textOf(button), 'Check');
+  button.attrs.onclick({ stopPropagation() {} });
+  await settle();
+  assert.equal(s.went.at(-1), 'flipkart/r000000000001');
+  assert.deepEqual(s.local.calls.filter((c) => c.stream), [{ method: 'POST', path: '/local/flipkart/rows/r000000000001/check', body: {}, stream: true }]);
+});
+
+test("a row's page, as on Amazon: its details from the sheet, its screenshots as small pictures that open large when clicked, why one could not be had in the Amazon words, and its last check's steps after a reload", async () => {
+  const s = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK } } }));
+  const page = s.page();
+  assert.equal(textOf(byId(page, 'back')), 'All rows');
+  assert.equal(textOf(findAll(page, (n) => n.tag === 'h1')[0]), 'Row 1: order ID OD100000000000000002');
+  assert.deepEqual([textOf(byId(page, 'check')), textOf(byId(page, 'final-word')), textOf(byId(page, 'final-says'))], ['Check', FINAL_NONE, 'Not checked yet.'], 'no Status: Not checked yet');
+  assert.equal(textOf(byId(page, 'card-result')), 'Type and NoteNot checked yet.');
+  const details = byId(page, 'row-details');
+  assert.match(textOf(details), /Delivery ScreenshotGoogle Drive\. Not opened, because the Google account logged in to the dashboard has no access to the file\./);
+  const thumbs = findAll(details, (n) => n.tag === 'button');
+  assert.deepEqual(thumbs.map((b) => b.attrs['data-id']), ['row-thumb-order-r000000000001-0', 'row-thumb-reviewShot-r000000000001-0'], 'the pictures kept; the one that could not be had has none');
+  assert.deepEqual(findAll(details, (n) => n.attrs?.class === 'label').map(textOf), ['Order Screenshot', 'Review Screenshot'], "under the file's own column names");
+  assert.deepEqual(findAll(details, (n) => n.tag === 'img').map((i) => i.attrs.src), ['blob:/local/flipkart/rows/r000000000001/small/order/0', 'blob:/local/flipkart/rows/r000000000001/small/reviewShot/0']);
+  thumbs[0].attrs.onclick({ stopPropagation() {} });
+  await settle();
+  const big = byId(s.page(), 'big');
+  assert.deepEqual([big.attrs['aria-label'], byId(big, 'big-img').attrs.src], ['Purchase screenshot of Row 1', 'blob:/local/flipkart/rows/r000000000001/picture/order/0'], 'opened large');
+  byId(big, 'close-big').attrs.onclick();
+  assert.deepEqual([byId(s.page(), 'big'), s.local.revoked.includes('blob:/local/flipkart/rows/r000000000001/picture/order/0')], [null, true]);
+  assert.deepEqual(stepsOf(s.page()).map(textOf), [
+    '✓1. Opening the purchase screenshot passedOpened the purchase screenshot.',
+    '–2. Reading the purchase screenshot and comparing it with the sheet comes in a later step',
+    '✗3. Opening the delivery screenshot failedThe delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.',
+    '–4. Reading the delivery screenshot and comparing it comes in a later step',
+    '✓5. Opening the review screenshot passedOpened the review screenshot.',
+    "–6. Reading the reviewer's name and the review's words comes in a later step",
+    "–7. Finding the review among Flipkart's public reviews comes in a later step",
+    "–8. Comparing the reviewer's name and the review's words comes in a later step",
+    '–9. Status, Type and Note comes in a later step',
+  ]);
+  assert.equal(textOf(byId(s.page(), 'current-action')), `Last check finished ${words.ist(LAST_CHECK.finishedAt)}.`);
+  // The same marks and words as on Amazon, and one more for a step that comes in a later step.
+  for (const [k, m] of Object.entries(AMAZON_MARKS)) assert.deepEqual(MARKS[k], m, k);
+  assert.deepEqual(MARKS.later, { mark: '–', label: 'comes in a later step', tone: 'quiet' });
+  byId(s.page(), 'back').attrs.onclick();
+  assert.deepEqual(s.went, ['flipkart']);
+  const gone = await rowScreen(fakeLocal({ saved: SAVED }), 'r000000000009');
+  assert.match(textOf(gone.page()), /All rowsNo row has that id\./);
+});
+
+test("Check on a row's page: each step shown live as it runs, with the same marks and words as on Amazon; Stop; a pause says what to do; the row stays Not checked yet", async () => {
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const local = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: null } } });
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
+    onEvent({ event: 'step', step: { n: 1, name: STEP_NAMES[0], state: 'running', detail: null } });
+    onEvent({ event: 'action', says: 'Opening the purchase screenshot' });
+    await gate;
+    for (const st of STEPS_DONE) onEvent({ event: 'step', step: st });
+    onEvent({ event: 'done', result: LAST_CHECK });
+    return { ok: true };
+  };
+  const s = await rowScreen(local);
+  assert.equal(textOf(stepsOf(s.page())[0]), '·1. Opening the purchase screenshot waiting', 'before any check, every step is waiting');
+  byId(s.page(), 'check').attrs.onclick();
+  await settle();
+  let page = s.page();
+  assert.deepEqual([textOf(byId(page, 'check')), byId(page, 'check').attrs.disabled, textOf(byId(page, 'stop'))], ['Checking…', true, 'Stop']);
+  assert.deepEqual([textOf(byId(page, 'final-word')), textOf(byId(page, 'final-says')), textOf(byId(page, 'current-action'))], ['Checking…', 'This row is being checked now.', 'Opening the purchase screenshot']);
+  assert.equal(textOf(stepsOf(page)[0]), '…1. Opening the purchase screenshot running', 'shown live, as it runs');
+  release();
+  await settle();
+  page = s.page();
+  assert.deepEqual(stepsOf(page).map((li) => li.attrs.class), ['fk-step fk-step-good', 'fk-step', 'fk-step fk-step-bad', 'fk-step', 'fk-step fk-step-good', 'fk-step', 'fk-step', 'fk-step', 'fk-step']);
+  assert.deepEqual([textOf(byId(page, 'final-word')), byId(page, 'stop'), textOf(byId(page, 'check'))], [FINAL_NONE, null, 'Check'], 'no Status: the row stays Not checked yet');
+  assert.ok(local.calls.filter((c) => c.path === '/local/flipkart/rows/r000000000001').length >= 2 && local.calls.filter((c) => c.path === '/local/flipkart/sheet').length >= 2, 'the page and the table are fetched again, to show what was kept');
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'paused', kind: 'google-out', says: 'No one is logged in to Google, so the screenshots on Google Drive cannot be downloaded. Press "Log in to Google" in the top bar and log in there, then press Check.' });
+    return { ok: true };
+  };
+  byId(s.page(), 'check').attrs.onclick();
+  await settle();
+  assert.match(textOf(s.page()), /The check paused, and nothing was saved for this row\. No one is logged in to Google, so the screenshots on Google Drive cannot be downloaded\. Press "Log in to Google" in the top bar and log in there, then press Check\./);
+  local.checking = (onEvent, signal) => new Promise((resolve) => signal.addEventListener('abort', () => resolve({ ok: false, aborted: true })));
+  byId(s.page(), 'check').attrs.onclick();
+  await settle();
+  byId(s.page(), 'stop').attrs.onclick();
+  await settle();
+  assert.match(textOf(s.page()), /The check was stopped, and nothing was saved for it\. Press Check to check this row again\./);
+  assert.equal(STEP_NAMES.length, 9);
+});
+
 test('the tabs go to the right screen: Amazon to #/amazon from the Flipkart screen, Flipkart to #/flipkart from the Amazon screen', () => {
   const s = screen(flipkart);
   byId(s.draw(), 'market-amazon').attrs.onclick({ stopPropagation() {} });
@@ -483,7 +615,8 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   const shared = readFileSync(join(ROOT, 'styles.css'), 'utf8');
   const selectors = [...css.matchAll(/([^{}]+)\{[^}]*\}/g)].flatMap((m) => m[1].split(',')).map((x) => x.trim());
   assert.ok(selectors.length >= 20, selectors.join(' | '));
-  for (const sel of selectors) assert.match(sel, /^\.fk-/, `${sel}: only Flipkart's own names`);
+  // Only Flipkart's own names; the only at-rules are for narrower windows and Flipkart's own fading in.
+  for (const sel of selectors) assert.match(sel, /^(?:\.fk-|@media \(max-width: \d+px\)$|@keyframes fk-)/, `${sel}: only Flipkart's own names`);
   // Every state the screen draws: opening, no file, a file held over the page, uploading, tabs to choose, columns to choose, a file in, a link, a picture, a picture not used, no rows, an error, a file to upload again.
   const used = new Set(classesOf(screen(flipkart).draw()));
   const add = (s) => classesOf(s.draw()).forEach((c) => used.add(c));
@@ -509,6 +642,20 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   add(await opened(fakeLocal({ saved: { ...SAVED, rows: [] } })));
   add(await opened(fakeLocal({ saved: { sheet: null, rows: [], uploadAgain: true } })));
   for (const google of [{ state: 'in', name: 'Test Person' }, { state: 'waiting', chrome: false }, { state: 'waiting', chrome: true }, { state: 'problem', says: 'Made-up problem.' }]) add(await opened(fakeLocal({ google })));
+  // A row's page: its details with small pictures, one opened large, its last check's steps, and a check running.
+  const pageLocal = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK } } });
+  const rowPage = await rowScreen(pageLocal);
+  add(rowPage);
+  byId(rowPage.page(), 'row-thumb-order-r000000000001-0').attrs.onclick({ stopPropagation() {} });
+  await settle();
+  add(rowPage);
+  pageLocal.checking = (onEvent) => {
+    onEvent({ event: 'step', step: { n: 1, name: STEP_NAMES[0], state: 'running', detail: null } });
+    return new Promise(() => {});
+  };
+  byId(rowPage.page(), 'check').attrs.onclick();
+  await settle();
+  add(rowPage);
   for (const cls of used) {
     const from = cls.startsWith('fk-') ? css : shared;
     assert.match(from, new RegExp(`\\.${cls}\\b`), `${cls}: from ${cls.startsWith('fk-') ? 'views/flipkart.css' : 'styles.css'}`);
@@ -522,6 +669,26 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
     assert.equal(rule(css, mine), rule(amazonCss, theirs), `${mine} is the same as ${theirs}`);
   }
   for (const cls of ['fk-account', 'fk-account-in', 'fk-account-out', 'fk-account-waiting', 'fk-account-problem', 'fk-account-line', 'fk-bar-help', 'fk-bar-offer']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
+  // A row's page looks like the Amazon one: each of its rules is the Amazon rule, under Flipkart's own names.
+  for (const [mine, theirs] of [
+    ['.fk-rows-table tbody tr.clickable:hover > td', '.rows-table tbody tr.clickable:hover > td'],
+    ['.fk-row-head', '.row-head'], ['.fk-row-title', '.row-title'], ['.fk-row-head .actions', '.row-head .actions'], ['.fk-back', '.back'],
+    ['.fk-final-banner', '.final-banner'], ['.fk-final-big', '.final-big'], ['.fk-final-big .icon', '.final-big .icon'], ['.fk-final-banner-none .fk-final-big', '.final-banner-none .final-big'], ['.fk-final-says', '.final-says'],
+    ['.fk-page', '.amazon-page'], ['.fk-left, .fk-right', '.amazon-left, .amazon-right'], ['.fk-right', '.amazon-right'], ['.fk-page h3', '.amazon-page h3'],
+    ['.fk-result-card .fk-row-status', '.result-card .row-status'], ['.fk-note-text', '.note-text'], ['.fk-user-shots', '.user-shots'], ['.fk-user-shot .label', '.user-shot .label'],
+    ['.fk-thumb', '.thumb'], ['.fk-thumb:hover', '.thumb:hover'], ['.fk-thumb img', '.thumb img'], ['.fk-thumb-large', '.thumb-large'], ['.fk-missing-word', '.missing-word'],
+    ['.fk-live h3, .fk-steps h3', '.live h3, .steps h3'], ['.fk-action', '.action'], ['.fk-live-empty', '.live-empty'], ['.fk-activity', '.activity'], ['.fk-step', '.step'], ['.fk-step-mark', '.step-mark'],
+    ['.fk-step-good .fk-step-mark', '.step-good .step-mark'], ['.fk-step-bad .fk-step-mark', '.step-bad .step-mark'], ['.fk-step-info .fk-step-mark', '.step-info .step-mark'],
+    ['.fk-step-body', '.step-body'], ['.fk-step-name', '.step-name'], ['.fk-step-state', '.step-state'], ['.fk-step-detail', '.step-detail'],
+    ['.fk-big-inner', '.big-inner'], ['.fk-big-inner figcaption', '.big-inner figcaption'], ['.fk-big-inner img', '.big-inner img'], ['@keyframes fk-fade-in', '@keyframes fade-in'],
+  ]) {
+    assert.ok(rule(amazonCss, theirs), `${theirs} is an Amazon rule`);
+    assert.equal(rule(css, mine), rule(amazonCss, theirs), `${mine} is the same as ${theirs}`);
+  }
+  assert.equal(rule(css, '.fk-big'), rule(amazonCss, '.big').replace('fade-in', 'fk-fade-in'), 'the enlarged picture, fading in the same way');
+  const narrow = (src) => src.match(/@media \(max-width: 1000px\) \{([^]*?)\n\}/)?.[1] ?? null;
+  assert.equal(narrow(css), narrow(amazonCss).replaceAll('.amazon-page', '.fk-page').replaceAll('.amazon-right', '.fk-right'), 'in a narrow window, one column, as on Amazon');
+  for (const cls of ['clickable', 'linkish', 'fk-row-head', 'fk-row-title', 'fk-back', 'fk-final-banner', 'fk-final-banner-none', 'fk-final-big', 'fk-final-says', 'fk-page', 'fk-left', 'fk-right', 'fk-result-card', 'fk-user-shots', 'fk-user-shot', 'fk-thumb', 'fk-thumb-large', 'fk-missing-word', 'fk-live', 'fk-action', 'fk-live-empty', 'fk-steps', 'fk-activity', 'fk-step', 'fk-step-good', 'fk-step-bad', 'fk-step-info', 'fk-step-mark', 'fk-step-body', 'fk-step-name', 'fk-step-state', 'fk-step-detail', 'fk-big', 'fk-big-inner']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
   for (const name of ['about-file', 'columns', 'column-grid', 'req', 'opt', 'col-letter', 'row-cell', 'strong-cell', 'product-cell', 'status-cell', 'type-cell', 'note-cell', 'cell-words', 'link-cell', 'other-cell', 'link-label', 'nolink', 'link-warning', 'empty-cell', 'empty-state', 'rows-wrap', 'rows-count']) {
     assert.ok(rule(amazonCss, `.${name}`), `.${name} is an Amazon rule`);
     assert.equal(rule(css, `.fk-${name}`), rule(amazonCss, `.${name}`), `.fk-${name} is the same as .${name}`);

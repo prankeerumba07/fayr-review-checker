@@ -5,8 +5,8 @@
 // Drive), pretend picture websites, and made-up pictures, so nothing reaches
 // Google or any other website. Each picture kept only in
 // data/flipkart/pictures/; a screenshot that cannot be had keeps its reason
-// ("no one is logged in to Google", "no access", …); Google's login page, or a
-// login using the Live Amazon Browser, stops there.
+// ("no access", …); no one logged in to Google, Google's login page, or a
+// login using the Live Amazon Browser stops there, as on Amazon.
 // Run: node test/flipkart-screenshots.test.mjs
 
 import { test, after } from 'node:test';
@@ -16,7 +16,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import ExcelJS from 'exceljs';
-import { createScreenshots, downloadable, NO_GOOGLE, BUSY_SAYS, PICTURE_WEBSITES } from '../flipkart/screenshots.js';
+import { createScreenshots, downloadable, BUSY_SAYS, PICTURE_WEBSITES } from '../flipkart/screenshots.js';
 import { downloadPicture, driveDownloadUrl, drivePreviewUrl } from '../flipkart/pictures.js';
 import { createFlipkartStore, StoreError } from '../flipkart/store.js';
 import { openWorkbook, guessColumns, sheetRows } from '../flipkart/workbook.js';
@@ -148,7 +148,7 @@ test("a row's screenshots: a Google Drive file through the Live Amazon Browser's
   assert.deepEqual(filesIn(dataDir).filter((p) => p.startsWith('flipkart/pictures/')).length, 4, 'the file\'s picture, two from Google Drive, one from tryboxs');
 });
 
-test('a screenshot that cannot be had keeps its reason, as on Amazon: no access, a website not on the list, no one logged in to Google; Google\'s login page stops there', { timeout: 120_000 }, async () => {
+test('a screenshot that cannot be had keeps its reason, as on Amazon: no access, a website not on the list; no one logged in to Google, or Google\'s login page, stops there and keeps nothing', { timeout: 120_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'arc-flipkart-shots-'));
   dirs.push(dataDir);
   const { store, rows } = await keptRows(dataDir);
@@ -167,12 +167,11 @@ test('a screenshot that cannot be had keeps its reason, as on Amazon: no access,
   const login = await shots.forCell(two.id, 'reviewShot');
   assert.deepEqual([login.pause, google.outs, google.state], ['google-signin', 1, 'out']);
   assert.deepEqual((await store.row(two.id)).pictures.reviewShot, [], 'nothing saved for the cell');
-  // No one logged in to Google: a Google Drive screenshot keeps that reason, and the Live Amazon Browser is not even asked.
+  // No one logged in to Google: it stops there, as on Amazon, and the Live Amazon Browser is not even asked.
   const begun = google.begun;
   const fetched = google.fetched.length;
-  const out = await shots.forCell(three.id, 'delivery');
-  assert.deepEqual(out.problems, [{ link: drive(FILES.later), ...NO_GOOGLE }]);
-  assert.equal(NO_GOOGLE.says, 'no one is logged in to Google, so it was not downloaded yet');
+  assert.deepEqual(await shots.forCell(three.id, 'delivery'), { pause: 'google-out', files: [], problems: [], types: [], records: [] });
+  assert.deepEqual((await store.row(three.id)).pictures.delivery, [], 'never kept as missing only because no one was logged in to Google');
   assert.deepEqual([google.begun, google.fetched.length], [begun, fetched], 'nothing fetched, no window opened');
   // Logged in again: a screenshot that could not be had is tried once more.
   google.state = 'in';
@@ -211,14 +210,14 @@ test('while the Amazon login or the Google login is using the Live Amazon Browse
   }
   assert.equal(BUSY_SAYS.amazon, 'The Live Amazon Browser is busy with the Amazon login, so the Google Drive screenshots were not downloaded yet. Wait until that is done, then try again.');
   assert.deepEqual([google.begun, google.fetched, (await store.row(one.id)).pictures.order], [0, [], []], 'the window was not opened, nothing was downloaded, nothing was kept for the cell');
-  // With no one logged in to Google, nothing would be downloaded, so the window is not needed: the reason is kept.
+  // With no one logged in to Google, it stops there as on Amazon (the window is not needed): nothing is kept as missing.
   google.state = 'out';
-  assert.deepEqual((await shots.forCell(one.id, 'order')).problems, [{ link: drive(FILES.open), ...NO_GOOGLE }]);
+  assert.deepEqual(await shots.forCell(one.id, 'order'), { pause: 'google-out', files: [], problems: [], types: [], records: [] });
   // Asked again just before each download, in its turn.
   google.state = 'waiting';
   assert.deepEqual(await shots.fetchOne(drive(FILES.open)), { pause: 'login-busy', says: BUSY_SAYS.waiting });
   google.state = 'out';
-  assert.deepEqual(await shots.fetchOne(drive(FILES.open)), { ok: false, ...NO_GOOGLE });
+  assert.deepEqual(await shots.fetchOne(drive(FILES.open)), { pause: 'google-out' });
   // The logins done: downloaded through the Live Amazon Browser.
   google.state = 'in';
   google.amazon = { state: 'in', busy: false };

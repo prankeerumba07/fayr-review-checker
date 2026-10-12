@@ -21,11 +21,18 @@
 // its letter, the rows numbered from 1, each link as a small label saying
 // where it goes ("Google Drive"), a picture in a cell as "Picture in the
 // cell", and Status, Type and Note at the end, empty until rows are checked.
-// Nothing is checked yet: no Check button and no Status cards. The local
-// server reads and keeps the file and the campaigns, and runs the Google
-// login; this screen only shows them.
+// Each row has a Check button at its end, and clicking a row opens its page,
+// as on Amazon: the row's details, with its screenshots as small pictures
+// that open large when clicked (or why one could not be had, in the Amazon
+// words), and a check's steps, shown live as each one runs and still shown
+// after a reload. For now a check only gets the screenshots: every other step
+// comes in a later step, and no row gets a Status yet. No "Start checking"
+// and no Status cards yet. The local server reads and keeps the file and the
+// campaigns, and runs the checks and the Google login; this screen only shows
+// them.
 
 const BASE = '/local/flipkart';
+const ROWS = `${BASE}/rows`;
 /** The Google login's buttons are the Amazon screen's own routes: it is the same login. */
 const GOOGLE_BUTTONS_BASE = '/local/amazon';
 /** How often the screen looks again while a campaign's products are read from Flipkart, and how often the top bar asks the server about the Google login. */
@@ -55,6 +62,37 @@ export const GOOGLE_WORDS = {
   chromeOffer: 'If Google will not let you log in there, use a normal Chrome window instead:',
 };
 
+/** A check's steps: the Amazon check's, in the same order, changed to the Flipkart way of checking (flipkart/check.js). */
+export const STEP_NAMES = [
+  'Opening the purchase screenshot',
+  'Reading the purchase screenshot and comparing it with the sheet',
+  'Opening the delivery screenshot',
+  'Reading the delivery screenshot and comparing it',
+  'Opening the review screenshot',
+  "Reading the reviewer's name and the review's words",
+  "Finding the review among Flipkart's public reviews",
+  "Comparing the reviewer's name and the review's words",
+  'Status, Type and Note',
+];
+/** Each step's mark and words: the Amazon screen's, and one more for a step that comes in a later step. */
+export const MARKS = {
+  pass: { mark: '✓', label: 'passed', tone: 'good' },
+  fail: { mark: '✗', label: 'failed', tone: 'bad' },
+  'not-reached': { mark: '–', label: 'not reached', tone: 'quiet' },
+  'not-needed': { mark: '○', label: 'not needed', tone: 'quiet' },
+  running: { mark: '…', label: 'running', tone: 'info' },
+  waiting: { mark: '·', label: 'waiting', tone: 'quiet' },
+  later: { mark: '–', label: 'comes in a later step', tone: 'quiet' },
+};
+/** A row with no Status, as on Amazon: no Flipkart row has one yet. */
+export const FINAL_NONE = 'Not checked yet';
+const PICTURE_KEYS = ['order', 'delivery', 'review', 'reviewShot'];
+const WHAT = { order: 'Purchase screenshot', delivery: 'Delivery screenshot', review: 'Review screenshot', reviewShot: 'Review screenshot' };
+/** The file's column each picture cell is. */
+const CELL_COLUMN = { order: 'orderShot', delivery: 'deliveryShot', review: 'reviewLink', reviewShot: 'reviewShot' };
+const freshSteps = () => STEP_NAMES.map((name, i) => ({ n: i + 1, name, state: 'waiting', detail: null }));
+const newView = () => ({ steps: freshSteps(), action: null, result: null, done: false, failed: null, paused: null });
+
 /** The kinds of file the file chooser offers: Excel files (.xlsx) and CSV files. */
 export const SHEET_ACCEPT = '.xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv';
 
@@ -81,6 +119,11 @@ function initial() {
     campaigns: { list: [], loaded: false, loadError: null, reading: false, gen: 0, editing: null, values: blankCampaign(), busy: false, error: null, notice: null, readingNotice: false, fold: null },
     // The Google login, as the server says it (data.google); error: a button's; lost: the server could not be asked; seq: newer answers win.
     account: { data: null, error: null, lost: null, busy: false, seq: 0 },
+    open: null, // the row whose page is open: { id, loading, error, row, result }
+    check: null, // the row being checked: { rowId, running, controller, view, notice }
+    thumbs: {}, // `${id}:${which}:${i}:${at}` -> object URL
+    big: null, // the picture opened large: { title, url, loading, error }
+    seq: { open: 0, big: 0, thumbs: 0 },
     poll: null,
   };
 }
@@ -323,13 +366,25 @@ function enter(ctx) {
   const sheet = loadSaved(ctx);
   loadCampaigns(ctx);
   loadAccount(ctx);
+  // #/flipkart/<row's id> is that row's page.
+  const id = ctx.route;
+  if (id && ctx.state.open?.id !== id) openRow(ctx, id);
+  else if (!id && ctx.state.open) closeRow(ctx);
   return sheet;
 }
 
 /** A fresh session: what was on its way is left, and the screen loads again when it shows. */
 function reset(ctx) {
   if (typeof ctx.state.poll === 'function') ctx.state.poll();
+  ctx.state.check?.controller?.abort();
+  for (const url of Object.values(ctx.state.thumbs)) ctx.local.revoke(url);
+  if (ctx.state.big?.url) ctx.local.revoke(ctx.state.big.url);
   ctx.update((st) => {
+    st.check = null;
+    st.thumbs = {};
+    st.big = null;
+    if (st.open) st.open.loading = false;
+    for (const k of Object.keys(st.seq)) st.seq[k] += 1;
     st.poll = null;
     st.upload = { ...initial().upload, gen: st.upload.gen + 1 };
     st.columns = freshColumns();
@@ -532,7 +587,7 @@ function uploadCard(ctx) {
             ? [h('p', { class: 'fk-drop-name', key: 'chosen' }, name), h('p', { class: 'fk-drop-sub', key: 'sub' }, 'Choose its tab below.')]
             : waiting
               ? [h('p', { class: 'fk-drop-name', key: 'chosen' }, name), h('p', { class: 'fk-drop-sub', key: 'sub' }, 'Choose the columns below.')]
-              : [h('p', { class: 'fk-drop-name', key: 'none' }, 'Upload the Flipkart file: drop it anywhere on this page, or choose it'), h('p', { class: 'fk-drop-sub', key: 'sub' }, 'An .xlsx or .csv file, up to 50 megabytes. The tab named "Flipkart" is read, or the file\'s only tab. Nothing is checked yet.')],
+              : [h('p', { class: 'fk-drop-name', key: 'none' }, 'Upload the Flipkart file: drop it anywhere on this page, or choose it'), h('p', { class: 'fk-drop-sub', key: 'sub' }, 'An .xlsx or .csv file, up to 50 megabytes. The tab named "Flipkart" is read, or the file\'s only tab.')],
       ),
       h('div', { class: 'fk-drop-actions' }, input, h('label', { for: 'fk-file', class: 'btn btn-primary', 'data-id': 'choose-file' }, icon(h, 'file'), 'Choose file'), cancel),
     ),
@@ -593,9 +648,9 @@ function otherCell(ctx, r, col) {
 /** A column's name with its letter kept small in front ("A: Order ID" to a screen reader). */
 const columnHead = (h, c) => (c.letter ? [h('span', { class: 'fk-col-letter', key: 'l' }, c.letter), h('span', { class: 'sr-only', key: 's' }, ': '), c.name] : c.name);
 
-/** One row of the table, its cells in the columns' order. */
+/** One row of the table, its cells in the columns' order, and its Check button; clicking it opens its page. */
 function tableRow(ctx, r, columns) {
-  const { h } = ctx;
+  const { h, state } = ctx;
   const plain = (key, v, cls = 'nowrap') => h('td', { key, class: cls }, v || emptyCell(h));
   const results = resultCells(ctx, r);
   const cell = {
@@ -613,7 +668,17 @@ function tableRow(ctx, r, columns) {
   };
   // A column only shown (the reviewer's name, or any other), as it is in the file.
   const cellOf = (c) => (cell[c.key] && c.key !== 'reviewer' ? cell[c.key]() : otherCell(ctx, r, c.col));
-  return h('tr', { key: r?.id ?? `n${r?.n}`, 'data-id': `row-${r?.n}` }, h('td', { class: 'nowrap fk-row-cell' }, String(r?.n ?? '')), columns.map(cellOf));
+  const go = (e) => {
+    e?.stopPropagation?.();
+    ctx.go(`flipkart/${r.id}`);
+  };
+  return h(
+    'tr',
+    { key: r?.id ?? `n${r?.n}`, class: 'clickable', onclick: () => ctx.go(`flipkart/${r.id}`), 'data-id': `row-${r?.n}` },
+    h('td', { class: 'nowrap fk-row-cell' }, h('button', { type: 'button', class: 'linkish', onclick: go }, String(r?.n ?? ''))),
+    columns.map(cellOf),
+    h('td', { class: 'nowrap' }, h('button', { type: 'button', class: 'btn btn-small', disabled: busy(state), onclick: (e) => { go(e); startCheck(ctx, r.id); }, 'data-id': `check-${r?.id}` }, icon(h, 'play'), 'Check')),
+  );
 }
 
 /** The table of rows, like the Amazon one: every column of the file in its order, numbered from 1, then Status, Type and Note. */
@@ -635,7 +700,7 @@ function rowsCard(ctx) {
       h(
         'table',
         { class: 'fk-rows-table' },
-        h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Row'), columns.map((c) => h('th', { scope: 'col', key: c.key ?? `c${c.col}`, 'data-col': c.key ?? 'other' }, columnHead(h, c))))),
+        h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Row'), columns.map((c) => h('th', { scope: 'col', key: c.key ?? `c${c.col}`, 'data-col': c.key ?? 'other' }, columnHead(h, c))), h('th', { scope: 'col' }, h('span', { class: 'sr-only' }, 'Check')))),
         h('tbody', null, rows.map((r) => tableRow(ctx, r, columns))),
       ),
     );
@@ -776,8 +841,333 @@ function campaignsCard(ctx) {
   );
 }
 
+// ---- one row's page (copied from the Amazon screen, views/amazon.js, and changed for Flipkart) ----
+
+const thumbKey = (r, which, p) => `${r.id}:${which}:${p.i}:${p.at ?? ''}`;
+
+/** The small pictures of the row whose page is open. */
+async function loadThumbs(ctx) {
+  const s = ctx.state;
+  const n = ++s.seq.thumbs;
+  const wanted = [];
+  const open = s.open?.row;
+  if (open?.id) for (const w of PICTURE_KEYS) for (const p of arr(open.shots?.[w]?.pictures)) if (p?.ok) wanted.push([open, w, p]);
+  const keys = new Set(wanted.map(([r, w, p]) => thumbKey(r, w, p)));
+  for (const [k, url] of Object.entries(s.thumbs)) {
+    if (!keys.has(k)) {
+      ctx.local.revoke(url);
+      delete s.thumbs[k];
+    }
+  }
+  for (const [r, w, p] of wanted) {
+    const k = thumbKey(r, w, p);
+    if (s.thumbs[k]) continue;
+    try {
+      const url = await ctx.local.image(`${ROWS}/${encodeURIComponent(r.id)}/small/${w}/${p.i}`);
+      if (n !== s.seq.thumbs) {
+        ctx.local.revoke(url);
+        return;
+      }
+      s.thumbs[k] = url;
+      ctx.update();
+    } catch {
+      // that small picture could not be fetched; its button says "Picture"
+    }
+  }
+}
+
+async function openBig(ctx, r, which, p) {
+  const s = ctx.state;
+  closeBig(ctx);
+  const n = ++s.seq.big;
+  const title = `${WHAT[which]} of ${r.label ?? 'this row'}${arr(r.shots?.[which]?.pictures).length > 1 ? `, picture ${p.i + 1}` : ''}`;
+  ctx.update((st) => (st.big = { title, url: null, loading: true, error: null }));
+  try {
+    const url = await ctx.local.image(`${ROWS}/${encodeURIComponent(r.id)}/picture/${which}/${p.i}`);
+    if (n !== s.seq.big) {
+      ctx.local.revoke(url);
+      return;
+    }
+    ctx.update((st) => (st.big = { title, url, loading: false, error: null }));
+  } catch (err) {
+    if (n !== s.seq.big) return;
+    ctx.update((st) => (st.big = { title, url: null, loading: false, error: err.message }));
+  }
+}
+
+function closeBig(ctx) {
+  const s = ctx.state;
+  if (s.big?.url) ctx.local.revoke(s.big.url);
+  s.big = null;
+  s.seq.big++;
+  ctx.update();
+}
+
+function closeRow(ctx) {
+  const s = ctx.state;
+  s.open = null;
+  s.seq.open++;
+  ctx.update();
+}
+
+/** A row's page: the row, with each picture kept or why it could not be had, and its last check's steps. keep: the page stays while it is fetched again. */
+async function openRow(ctx, id, { keep = false } = {}) {
+  const s = ctx.state;
+  if (!keep) closeRow(ctx);
+  const n = ++s.seq.open;
+  ctx.update((st) => {
+    if (!keep || !st.open) st.open = { id, loading: true, error: null, row: null, result: null };
+    else st.open.loading = true;
+  });
+  try {
+    const out = await ctx.local.api('GET', `${ROWS}/${encodeURIComponent(id)}`);
+    if (n !== s.seq.open || s.open?.id !== id) return;
+    ctx.update((st) => Object.assign(st.open, { loading: false, row: out?.row ?? null, result: out?.result ?? null }));
+    loadThumbs(ctx);
+  } catch (err) {
+    if (n !== s.seq.open || s.open?.id !== id) return;
+    ctx.update((st) => Object.assign(st.open, { loading: false, error: err.message }));
+  }
+}
+
+// ---- checking one row (copied from the Amazon screen) ----
+
+const busy = (s) => Boolean(s.check?.running || s.upload.busy);
+
+/** One check's line, onto its view: started, action, step, done, paused, failed. */
+function applyCheckEvent(view, e) {
+  if (e?.event === 'started') {
+    view.steps = arr(e.steps).length ? arr(e.steps).map((name, i) => ({ n: i + 1, name, state: 'waiting', detail: null })) : freshSteps();
+  } else if (e?.event === 'action') {
+    view.action = typeof e.says === 'string' ? e.says : view.action;
+  } else if (e?.event === 'step' && e.step && Number.isInteger(e.step.n)) {
+    const i = e.step.n - 1;
+    if (i >= 0 && i < STEP_NAMES.length) view.steps[i] = { ...view.steps[i], ...e.step };
+  } else if (e?.event === 'done') {
+    view.result = e.result ?? view.result;
+    view.done = true;
+  } else if (e?.event === 'paused') {
+    view.paused = { kind: e.kind, says: e.says };
+  } else if (e?.event === 'failed') {
+    // Nothing was saved, even when a result line came first.
+    view.failed = typeof e.says === 'string' ? e.says : 'The check stopped part way.';
+    view.done = false;
+  }
+}
+
+/** "Check": the server checks the row, and its page shows each step as it runs. */
+async function startCheck(ctx, id) {
+  const s = ctx.state;
+  if (busy(s)) return;
+  const run = { rowId: id, running: true, controller: new AbortController(), view: { ...newView(), action: 'Starting the check…' }, notice: null };
+  ctx.update((st) => (st.check = run));
+  const isCurrent = () => s.check === run;
+  const out = await ctx.local.stream('POST', `${ROWS}/${encodeURIComponent(id)}/check`, {}, (e) => {
+    if (!isCurrent()) return;
+    applyCheckEvent(run.view, e);
+    ctx.update();
+  }, run.controller.signal);
+  if (!isCurrent()) return;
+  ctx.update(() => {
+    run.running = false;
+    run.controller = null;
+    run.view.action = null;
+    const r = run.view.result;
+    if (!out.ok && !out.aborted) run.notice = { tone: 'error', text: out.message };
+    else if (out.aborted) run.notice = { tone: 'warn', text: 'The check was stopped, and nothing was saved for it. Press Check to check this row again.' };
+    else if (run.view.failed) run.notice = { tone: 'error', text: run.view.failed };
+    else if (run.view.paused || r?.paused) run.notice = { tone: 'warn', text: `The check paused, and nothing was saved for this row. ${run.view.paused?.says ?? r.paused.says}` };
+    else if (!run.view.done) run.notice = { tone: 'warn', text: 'The check stopped part way, and nothing was saved for it. Press Check to try again.' };
+  });
+  loadSaved(ctx);
+  if (s.open?.id === id) openRow(ctx, id, { keep: true });
+}
+
+function stopCheck(ctx) {
+  ctx.state.check?.controller?.abort();
+}
+
+// ---- drawing one row's page ----
+
+function thumbButton(ctx, r, which, p, large = false) {
+  const { h, state } = ctx;
+  const url = state.thumbs[thumbKey(r, which, p)];
+  return h(
+    'button',
+    { type: 'button', class: `fk-thumb${large ? ' fk-thumb-large' : ''}`, key: `${which}-${p.i}`, onclick: (e) => { e.stopPropagation(); openBig(ctx, r, which, p); }, 'aria-label': `Enlarge the ${WHAT[which].toLowerCase()} of ${r.label ?? 'this row'}`, 'data-id': `${large ? 'row-' : ''}thumb-${which}-${r.id}-${p.i}` },
+    url ? h('img', { src: url, alt: '' }) : h('span', { class: 'muted small' }, 'Picture'),
+  );
+}
+
+function bigPicture(ctx) {
+  const { h, words, state } = ctx;
+  const b = state.big;
+  if (!b) return null;
+  return h(
+    'div',
+    { class: 'fk-big', role: 'dialog', 'aria-modal': 'true', 'aria-label': b.title, 'data-id': 'big', onclick: () => closeBig(ctx) },
+    h(
+      'figure',
+      { class: 'fk-big-inner', onclick: (e) => e.stopPropagation() },
+      h('div', { class: 'card-head' }, h('figcaption', null, b.title), h('button', { type: 'button', class: 'btn btn-small', onclick: () => closeBig(ctx), 'data-id': 'close-big' }, icon(h, 'close'), 'Close')),
+      b.url ? h('img', { src: b.url, alt: b.title, 'data-id': 'big-img' }) : b.loading ? h('p', { class: 'muted', role: 'status' }, 'Fetching…') : null,
+      words.notice(h, 'error', b.error),
+    ),
+  );
+}
+
+/** A picture or link cell on the row's page: where each link goes, and why a picture could not be had, in the Amazon checker's words. */
+function cellSaid(ctx, r, which) {
+  const { h, words } = ctx;
+  const s = obj(r.shots?.[which]);
+  const pics = arr(s.pictures);
+  const parts = [];
+  if (s.mismatch) parts.push(h('p', { key: 'mm', class: 'fk-missing-word' }, 'The link written in this cell is different from the link that opens when you click it. The dashboard checks the link that opens when clicked.'));
+  if (s.how === 'cell' || s.how === 'floating') parts.push(h('p', { key: 'how' }, s.how === 'cell' ? 'A picture placed in the cell.' : 'A picture over the cell.'));
+  arr(s.links).forEach((l, i) => {
+    const p = pics.find((x) => x?.link === l) ?? null;
+    const label = arr(s.labels).find((x) => x?.link === l)?.label ?? 'Open the link';
+    parts.push(h('p', { key: `l${i}` }, words.link(h, l, label), p && !p.ok ? h('span', { class: 'fk-missing-word' }, `. Not opened, because ${p.problem?.says || 'it could not be opened'}.`) : null));
+  });
+  if (!parts.length) parts.push(h('p', { key: 'w' }, s.text ? `Words: "${s.text}"` : 'Empty.'));
+  return parts;
+}
+
+/** One of the file's other columns on the row's page: its words, and each link. */
+function otherSaid(ctx, r, col) {
+  const { h, words } = ctx;
+  const v = obj(r.values?.[col]);
+  const labels = arr(v.labels);
+  if (labels.length) return labels.map((x, i) => h('p', { key: `l${i}` }, words.link(h, x.link, x.label || 'Open the link')));
+  return v.text || null;
+}
+
+/** What the row holds, under the file's own column names and in its order, and the pictures of its picture columns as small pictures that open large. */
+function detailsCard(ctx, r) {
+  const { h, words, state } = ctx;
+  const field = {
+    orderId: () => r.orderId || null,
+    orderDate: () => (r.orderDate ? `${r.orderDate}${r.orderDateRead ? '' : ' (not read as a date)'}` : null),
+    amount: () => (r.amount ? `${r.amount}${r.amountRead ? '' : ' (not read as an amount)'}` : null),
+    product: () => r.product || null,
+    orderShot: () => cellSaid(ctx, r, 'order'),
+    deliveryShot: () => cellSaid(ctx, r, 'delivery'),
+    reviewShot: () => cellSaid(ctx, r, 'reviewShot'),
+    reviewLink: () => cellSaid(ctx, r, 'review'),
+  };
+  const columns = arr(state.saved?.sheet?.columns).filter((c) => !['status', 'type', 'note'].includes(c?.key));
+  const named = Object.fromEntries(columns.filter((c) => c.key).map((c) => [c.key, c.name]));
+  const pictureCells = PICTURE_KEYS.filter((w) => !columns.length || named[CELL_COLUMN[w]]);
+  return h(
+    'section',
+    { class: 'card', 'data-id': 'row-details' },
+    h('h3', null, 'From the sheet'),
+    words.fields(h, [['Row', r.label], ...columns.map((c) => [c.name, field[c.key] && c.key !== 'reviewer' ? field[c.key]() : otherSaid(ctx, r, c.col)])]),
+    h(
+      'div',
+      { class: 'fk-user-shots' },
+      pictureCells.flatMap((w) => arr(r.shots?.[w]?.pictures).filter((p) => p?.ok).map((p) => h('div', { key: `${w}-${p.i}`, class: 'fk-user-shot' }, h('p', { class: 'label' }, named[CELL_COLUMN[w]] ?? WHAT[w]), thumbButton(ctx, r, w, p, true)))),
+    ),
+    r.prev ? h('p', { class: 'muted small' }, `In the file before: ${[r.prev.status, r.prev.type].filter(Boolean).join(', ') || 'nothing'}${r.prev.note ? `. ${r.prev.note}` : ''}`) : null,
+    state.open?.loading ? h('p', { class: 'muted small', role: 'status' }, 'Updating…') : null,
+  );
+}
+
+/** The Type and the Note: none yet for a Flipkart row (the Status comes in a later step), but those the file already had. */
+function resultCard(ctx, r) {
+  const { h } = ctx;
+  return h(
+    'section',
+    { class: 'card fk-result-card', 'data-id': 'card-result' },
+    h('h3', null, 'Type and Note'),
+    r?.prev ? h('div', null, h('p', { class: 'fk-row-status' }, h('span', { class: 'tag' }, r.prev.type || 'No Type'), ' ', h('span', { class: 'muted small' }, 'From the file')), h('p', { class: 'fk-note-text' }, r.prev.note)) : h('p', { class: 'muted' }, 'Not checked yet.'),
+  );
+}
+
+/** At the top of a row's page: its Status, large, and the reason; a Flipkart row has none yet. */
+function finalBanner(ctx, single) {
+  const { h } = ctx;
+  const now = Boolean(single?.running);
+  return h(
+    'section',
+    { class: 'fk-final-banner fk-final-banner-none', key: 'final', 'data-id': 'final-banner' },
+    h('p', { class: 'fk-final-big', 'data-id': 'final-word' }, now ? icon(h, 'spinner', 'icon-spin') : icon(h, 'clock'), now ? 'Checking…' : FINAL_NONE),
+    h('p', { class: 'fk-final-says', 'data-id': 'final-says' }, now ? 'This row is being checked now.' : 'Not checked yet.'),
+  );
+}
+
+/** What the check is doing now. The Live Flipkart Browser is not used by the steps that run now: they only open the screenshots. */
+function liveCard(ctx, view) {
+  const { h } = ctx;
+  return h(
+    'section',
+    { class: 'card fk-live', key: 'live', 'data-id': 'live' },
+    h('h3', null, icon(h, 'browser'), 'Live Flipkart Browser'),
+    h('p', { class: 'card-sub' }, 'The Chrome window named "Live Flipkart Browser" shows each Flipkart page as it opens. The steps that run now only open the screenshots, so it is not used yet.'),
+    h('p', { class: 'fk-action', role: 'status', 'aria-live': 'polite', 'data-id': 'current-action' }, view.action ?? (view.running ? 'Working…' : 'Not running.')),
+    h('p', { class: 'fk-live-empty' }, icon(h, 'image'), 'No picture yet. Flipkart pages open in a later step.'),
+  );
+}
+
+/** A check's steps, each marked as it happens. */
+function activityCard(ctx, view) {
+  const { h } = ctx;
+  const steps = arr(view.steps).length ? view.steps : freshSteps();
+  return h(
+    'section',
+    { class: 'card fk-steps', key: 'activity', 'data-id': 'activity' },
+    h('h3', null, icon(h, 'steps'), 'Steps'),
+    h(
+      'ol',
+      { class: 'fk-activity' },
+      steps.map((st) => {
+        const m = MARKS[st?.state] ?? MARKS.waiting;
+        return h(
+          'li',
+          // A quiet step has the plain look (the Amazon screen's quiet class has no look of its own either).
+          { key: `a${st?.n}`, class: m.tone === 'quiet' ? 'fk-step' : `fk-step fk-step-${m.tone}`, 'data-id': `step-${st?.n}` },
+          h('span', { class: 'fk-step-mark', 'aria-hidden': 'true' }, m.mark),
+          h('div', { class: 'fk-step-body' }, h('span', { class: 'fk-step-name' }, `${st?.n}. ${st?.name ?? ''}`), ' ', h('span', { class: `fk-step-state tone-${m.tone}` }, m.label), st?.detail ? h('p', { class: 'fk-step-detail' }, st.detail) : null),
+        );
+      }),
+    ),
+  );
+}
+
+function rowPage(ctx) {
+  const { h, words, state } = ctx;
+  const o = state.open;
+  const back = h('button', { type: 'button', class: 'btn btn-quiet fk-back', onclick: () => ctx.go('flipkart'), 'data-id': 'back' }, icon(h, 'back'), 'All rows');
+  if (!o || (o.loading && !o.row)) return h('div', { key: 'row-page' }, h('div', { class: 'actions' }, back), h('p', { class: 'muted', role: 'status' }, 'Opening the row…'));
+  if (o.error && !o.row) return h('div', { key: 'row-page' }, h('div', { class: 'actions' }, back), words.notice(h, 'error', o.error));
+  const r = obj(o.row);
+  const single = r.id && state.check && state.check.rowId === r.id ? state.check : null;
+  const view = single ? { ...single.view, running: single.running } : { running: false, steps: arr(o.result?.steps), action: o.result?.finishedAt ? `Last check finished ${words.ist(o.result.finishedAt)}.` : null };
+  return h(
+    'div',
+    { key: 'row-page', 'data-id': 'row-page' },
+    h(
+      'div',
+      { class: 'fk-row-head', key: 'head' },
+      back,
+      h('h1', { class: 'fk-row-title' }, `${r.label ?? 'Row'}${r.orderId ? `: order ID ${r.orderId}` : ''}`),
+      h(
+        'div',
+        { class: 'actions' },
+        h('button', { type: 'button', class: 'btn btn-primary', disabled: busy(state), onclick: () => startCheck(ctx, r.id), 'data-id': 'check' }, icon(h, single?.running ? 'spinner' : 'play', single?.running ? 'icon-spin' : ''), single?.running ? 'Checking…' : 'Check'),
+        single?.running ? h('button', { type: 'button', class: 'btn btn-danger', onclick: () => stopCheck(ctx), 'data-id': 'stop' }, icon(h, 'stop'), 'Stop') : null,
+      ),
+    ),
+    finalBanner(ctx, single),
+    single?.notice ? words.notice(h, single.notice.tone, single.notice.text) : null,
+    h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, r), detailsCard(ctx, r)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
+    bigPicture(ctx),
+  );
+}
+
 function renderScreen(ctx) {
   const { h, words, state } = ctx;
+  if (ctx.route) return rowPage(ctx);
   if (!state.loaded) return h('p', { class: 'muted', key: 'opening', role: 'status', 'data-id': 'opening' }, 'Opening the Flipkart rows…');
   return [uploadCard(ctx), words.notice(h, 'error', state.loadError), campaignsCard(ctx), state.saved?.sheet || state.columns.need ? rowsCard(ctx) : null];
 }

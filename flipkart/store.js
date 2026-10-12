@@ -1,8 +1,9 @@
 // Flipkart's own storage, only in data/flipkart/ (data/ is kept out of git and
 // never served as a file): the uploaded file (upload.xlsx or upload.csv), the
-// rows made from it with the columns found (rows.json), the pictures placed
-// in its cells and the screenshots got for a row (pictures/), Flipkart's own
-// settings with the columns chosen last (settings.json), the campaigns with what was read from their products'
+// rows made from it with the columns found, each with its last check's steps
+// (rows.json), the pictures placed in its cells and the screenshots got for a
+// row (pictures/), Flipkart's own settings with the columns chosen last
+// (settings.json), the campaigns with what was read from their products'
 // Flipkart pages (campaigns.json), and each product's public reviews
 // (reviews/<product ID>.json). Nothing here writes anywhere else in data/.
 // Copied from the Amazon store's way of writing (amazon/store.js): a file is
@@ -24,6 +25,11 @@ export const MAX_PICTURES_PER_CELL = 5;
 export const SHOT_LABELS = { order: 'purchase screenshot', delivery: 'delivery screenshot', review: 'review picture', reviewShot: 'review screenshot' };
 /** A row's own id, given when its file is uploaded. */
 export const ROW_ID = /^r[0-9a-f]{12}$/;
+/** A check's id, as the Amazon store's (check.js newCheckId). */
+export const CHECK_ID = /^c[0-9]{14}[0-9a-f]{6}$/;
+/** The ways a check's step can end, as on Amazon, and "comes in a later step". */
+const STEP_STATES = new Set(['pass', 'fail', 'not-reached', 'not-needed', 'running', 'waiting', 'later']);
+const timeOrNull = (t) => (typeof t === 'string' && t.length <= 40 && !Number.isNaN(Date.parse(t)) ? t : null);
 
 /** A problem with what was asked of the store, with the HTTP status that says so. Copied from the Amazon store. */
 export class StoreError extends Error {
@@ -306,6 +312,27 @@ export function createFlipkartStore(dataDir) {
           else kept.push({ link: item.link ?? null, problem: { kind: String(item.problem?.kind ?? 'access'), site: item.problem?.site ? String(item.problem.site).slice(0, 200) : null, says: cleanText(item.problem?.says, 500), ...(item.problem?.noAccess ? { noAccess: true } : {}) } });
         }
         row.pictures = { ...Object.fromEntries(SHOTS.map((w) => [w, []])), ...(row.pictures ?? {}), [which]: kept };
+        await writeWhole(rowsFile, JSON.stringify(d));
+        return row;
+      });
+    },
+    /**
+     * A row's last check, kept with the row, so its page shows the check's
+     * steps after a reload too: { checkId, startedAt, finishedAt, seconds,
+     * steps: [{ n, name, state, detail }] }. The check before goes.
+     */
+    saveCheck(id, result) {
+      return locked(async () => {
+        const d = await savedRows();
+        const row = d?.rows.find((r) => r.id === id);
+        if (!row) throw new StoreError(404, 'No row has that id.');
+        row.check = {
+          checkId: CHECK_ID.test(String(result?.checkId ?? '')) ? result.checkId : null,
+          startedAt: timeOrNull(result?.startedAt),
+          finishedAt: timeOrNull(result?.finishedAt),
+          seconds: Number.isFinite(result?.seconds) && result.seconds >= 0 ? Math.round(result.seconds) : null,
+          steps: (Array.isArray(result?.steps) ? result.steps : []).slice(0, 20).map((s, i) => ({ n: i + 1, name: cleanText(s?.name, 200), state: STEP_STATES.has(s?.state) ? s.state : 'waiting', detail: s?.detail ? cleanText(s.detail) : null })),
+        };
         await writeWhole(rowsFile, JSON.stringify(d));
         return row;
       });
