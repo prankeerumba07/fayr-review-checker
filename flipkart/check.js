@@ -5,17 +5,29 @@
 // delivery screenshot, the review screenshot (the main proof on Flipkart,
 // where many rows have no review link), finding the review among Flipkart's
 // public reviews, comparing the reviewer's name and the review's words, and
-// the Status, Type and Note. For now only the steps that get the screenshots
-// run (screenshots.js): each one's pictures are downloaded, or kept with the
-// reason they could not be had, said in the Amazon checker's words. Every
-// other step says it comes in a later step, and the row gets no Status: it
-// stays "Not checked yet". No one logged in to Google, a login using the Live
-// Amazon Browser, Google's login page, a robot check or a block pauses the
-// check, as on Amazon: the row gets no result, nothing is got around, and the
-// row can be checked again later.
+// the Status, Type and Note. For now these steps run: the steps that get the
+// screenshots (screenshots.js), each one's pictures downloaded or kept with
+// the reason they could not be had, said in the Amazon checker's words; and
+// step 2, which reads the purchase screenshot on this computer (shot-read.js)
+// and compares it with the sheet, as the Amazon checker's step 3 does: the
+// order ID, the order date (only when the file has that column), the amount
+// and the product are each the same, different or not shown. The product is
+// compared by its name with the products of the live campaigns the row uses,
+// by their real names read from Flipkart, or, with no live campaign, with its
+// product name in the sheet. A detail that is not shown, or could not be
+// read, is never called different and never passes. Every other step says it
+// comes in a later step, and the row gets no Status: it stays "Not checked
+// yet". No one logged in to Google, a login using the Live Amazon Browser,
+// Google's login page, a robot check or a block pauses the check, as on
+// Amazon: the row gets no result, nothing is got around, and the row can be
+// checked again later.
 
 import { randomBytes } from 'node:crypto';
 import { downloadable } from './screenshots.js';
+import { readOrderShot } from './shot-read.js';
+import { DEFAULT_MARKS } from './settings.js';
+import { wordsOf, productWords } from './text.js';
+import { sameDay, amountMatch, totalRead, priceDetailsShown, partialOrderId, rupees, productShown, dayFirst, nameStartShown, enoughOfName, nameLineStarting, brandWordsAtStart, nameCouldBe } from './screen-text.js';
 
 export const STEP_NAMES = [
   'Opening the purchase screenshot',
@@ -28,7 +40,7 @@ export const STEP_NAMES = [
   "Comparing the reviewer's name and the review's words",
   'Status, Type and Note',
 ];
-/** The steps that run now, with the cell whose screenshots each one opens; every other step comes in a later step. */
+/** The steps that open a screenshot, with its cell; step 2 reads the purchase screenshot; every other step comes in a later step. */
 const OPENS = { 1: 'order', 3: 'delivery', 5: 'reviewShot' };
 /** What each step was doing, for "Something went wrong on this computer while …". */
 const STEP_DOING = ['opening the purchase screenshot', 'reading the purchase screenshot', 'opening the delivery screenshot', 'reading the delivery screenshot', 'opening the review screenshot', 'reading the review screenshot', "finding the review among Flipkart's public reviews", "comparing the reviewer's name and the review's words", 'writing the Status, Type and Note'];
@@ -53,6 +65,47 @@ function excerpt(text, n = 160) {
 }
 const oneSentence = (text) => String(text ?? '').replace(/([.!?])+\s+(?=\S)/g, '; ');
 const quoted = (text, n) => `"${oneSentence(excerpt(text, n))}"`;
+
+// ---- reading the purchase screenshot (copied from amazon/check.js, its step 3, and changed for Flipkart) ----
+
+/** The four details compared on the purchase screenshot, and what a step's line calls them. */
+const DETAILS = ['orderId', 'orderDate', 'amount', 'product'];
+const NOUN = { orderId: 'order ID', orderDate: 'order date', amount: 'amount', product: 'product' };
+const NOT_SHOWN = 'not shown';
+/** A detail not compared, because the file has no column for it. */
+const SKIP = 'skip';
+/** How each state of a detail is said ("shown": the sheet has nothing to compare it with). */
+const STATE_SAID = { same: 'the same', different: 'different', [NOT_SHOWN]: 'not shown', shown: 'not compared, because the sheet has none' };
+const cap = (t) => String(t ?? '').charAt(0).toUpperCase() + String(t ?? '').slice(1);
+/** A date read from a screenshot, day first: 20-07-2026, or 20-07 when it shows no year. */
+const dateWords = (d) => (d?.day ? dayFirst(d.day) : d ? `${String(d.date).padStart(2, '0')}-${String(d.month).padStart(2, '0')}, with no year shown` : '');
+/** What an amount on a screenshot is, in plain words: "the total amount", "the selling price", "the amount paid". */
+const amountLabel = (l) => (!l ? '' : /mrp/i.test(l) ? 'the printed price' : /sub-?total/i.test(l) ? 'the subtotal' : l === 'paid' ? 'the amount paid' : `the ${String(l).toLowerCase()}`);
+/** Amounts that can be the order's: never a fee, money taken off, Flipkart's listing price (the price before the discount) or a printed price, nor a number alone on a line (it counts only when it is the sheet's). */
+const usableAmounts = (amounts) => (amounts ?? []).filter((a) => !a.skip && !a.lone && a.label !== 'mrp' && a.label !== 'listing price');
+/** The amount to name when none is the sheet's: a total first, then a price, then a subtotal. */
+function amountToName(list) {
+  const rank = (l) => (!l ? 4 : /grand total|order total|total amount|amount paid|you paid/.test(l) ? 0 : /sub/.test(l) ? 3 : /total|paid/.test(l) ? 1 : /price/.test(l) ? 2 : 4);
+  return [...list].sort((a, b) => rank(a.label) - rank(b.label))[0];
+}
+/** The dates on the purchase screenshot that can be the order's: those marked as the order's, else any not about the delivery. */
+function orderDates(dates) {
+  const all = dates ?? [];
+  const marked = all.filter((d) => d.labelled);
+  return marked.length ? marked : all.filter((d) => !d.delivery);
+}
+/** A product's name cut short on the screen: "Test Brand Steel Bottle 1 L Bla...". */
+const cutShort = (t) => /\.\.\.|…/.test(String(t ?? ''));
+// Copied from amazon/final.js: two numbers one digit apart (one digit different, or one left out or read in), as a reading slip makes them.
+function oneDigitOff(a, b) {
+  const x = String(a ?? '').replace(/\D/g, '');
+  const y = String(b ?? '').replace(/\D/g, '');
+  if (!x || !y || x === y || Math.abs(x.length - y.length) > 1) return false;
+  if (x.length === y.length) return [...x].filter((c, i) => c !== y[i]).length === 1;
+  const [short, long] = x.length < y.length ? [x, y] : [y, x];
+  return [...long].some((_, i) => long.slice(0, i) + long.slice(i + 1) === short);
+}
+const amountOneDigitOff = (v, sheetAmount) => Number.isFinite(v) && Number.isFinite(sheetAmount) && oneDigitOff(Math.round(v), Math.round(sheetAmount));
 
 /** A check's id, as the Amazon checker makes them (amazon/store.js): when it started, and six letters and digits. */
 export function newCheckId(date = new Date()) {
@@ -93,13 +146,16 @@ class Paused extends Error {
 /**
  * Run one row's check.
  *   row — the row as kept (store.js)
- *   has — the columns the file has: { orderShot, deliveryShot, reviewShot, reviewLink }, each true unless false
+ *   has — the columns the file has: { orderDate, amount, product, orderShot, deliveryShot, reviewShot, reviewLink }, each true unless false
  *   screenshots — screenshots.js: forCell(rowId, which, { signal })
- *   emit(event) — started, action, step and done lines for the screen
- * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, steps, paused, stopped }
+ *   marks — Flipkart's passing marks (settings.js): { productNameShare, amountDifferenceRupees, feeAllowanceRupees }
+ *   campaigns — the live campaigns the row uses (campaigns.js campaignsFor): { name, brand, products: [{ pid, name, short, variants }] }
+ *   readOrder(files, { want }) — what the purchase screenshot says (shot-read.js readOrderShot)
+ *   emit(event) — started, action, step and done lines for the screen; a step's line carries what was read so far (partial)
+ * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, steps, order, paused, stopped }
  */
-export async function runCheck({ row, has = null, screenshots, emit = () => {}, signal = null, checkId = newCheckId(), now = () => new Date() }) {
-  const had = { orderShot: true, deliveryShot: true, reviewShot: true, reviewLink: true, ...Object.fromEntries(Object.entries(has ?? {}).map(([k, v]) => [k, v !== false])) };
+export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_MARKS, campaigns = [], readOrder = readOrderShot, emit = () => {}, signal = null, checkId = newCheckId(), now = () => new Date() }) {
+  const had = { orderDate: true, amount: true, product: true, orderShot: true, deliveryShot: true, reviewShot: true, reviewLink: true, ...Object.fromEntries(Object.entries(has ?? {}).map(([k, v]) => [k, v !== false])) };
   const began = Date.now();
   const result = {
     checkId,
@@ -111,6 +167,8 @@ export async function runCheck({ row, has = null, screenshots, emit = () => {}, 
     finishedAt: null,
     seconds: null,
     steps: STEP_NAMES.map((name, i) => ({ n: i + 1, name, state: 'waiting', detail: null })),
+    // What the purchase screenshot says, as read on this computer, with each detail compared (step 2).
+    order: null,
     paused: null,
     stopped: false,
   };
@@ -129,7 +187,7 @@ export async function runCheck({ row, has = null, screenshots, emit = () => {}, 
     const s = result.steps[n - 1];
     s.state = state;
     s.detail = detail ? clean(detail) : null;
-    emit({ event: 'step', step: { ...s } });
+    emit({ event: 'step', step: { ...s }, partial: { order: result.order } });
   }
   /** A step that is not part of the check yet: it says it comes in a later step. */
   function later(n) {
@@ -151,6 +209,8 @@ export async function runCheck({ row, has = null, screenshots, emit = () => {}, 
     }
   }
 
+  /** Each screenshot's cell as its opening step left it: 'no column', 'missing', 'unopened' or 'opened', with its pictures. */
+  const shot = {};
   /** A cell's pictures, downloading again any that could not be had; a download that cannot be made just now pauses the check here. */
   async function fetchCell(n, which) {
     const g = await screenshots.forCell(row.id, which, { signal });
@@ -165,12 +225,200 @@ export async function runCheck({ row, has = null, screenshots, emit = () => {}, 
   /** Steps 1, 3 and 5: a screenshot's cell, and its pictures downloaded (amazon/check.js openShot). */
   async function openShot(n, which) {
     start(n, `Opening the ${WHAT[which]}`);
-    if (!had[SHOT_COLUMN[which]]) return finish(n, 'fail', `The file has no ${WHAT[which]} column.`);
+    if (!had[SHOT_COLUMN[which]]) {
+      shot[which] = { state: 'no column' };
+      return finish(n, 'fail', `The file has no ${WHAT[which]} column.`);
+    }
     const s = row.shots?.[which] ?? {};
-    if (!s.links?.length && !s.picture) return finish(n, 'fail', s.text ? `The cell says ${quoted(s.text, 60)} instead of holding a screenshot.` : 'The cell is empty.');
+    if (!s.links?.length && !s.picture) {
+      shot[which] = { state: 'missing' };
+      return finish(n, 'fail', s.text ? `The cell says ${quoted(s.text, 60)} instead of holding a screenshot.` : 'The cell is empty.');
+    }
     const g = await fetchCell(n, which);
-    if (!g.files.length) return finish(n, 'fail', problemLine(which, g.problems[0] ?? { kind: 'access', site: null, says: 'it could not be opened' }));
+    if (!g.files.length) {
+      shot[which] = { state: 'unopened' };
+      return finish(n, 'fail', problemLine(which, g.problems[0] ?? { kind: 'access', site: null, says: 'it could not be opened' }));
+    }
+    shot[which] = { state: 'opened', files: g.files };
     return finish(n, 'pass', `Opened ${g.files.length === 1 ? `the ${WHAT[which]}` : `${g.files.length} ${WHAT[which]}s`}.`);
+  }
+
+  // ---- step 2: the purchase screenshot read, and each detail compared with the sheet (amazon/check.js readShot and detailsOf) ----
+  const mark = marks.productNameShare;
+  const tolerance = marks.amountDifferenceRupees;
+  /** Up to this many rupees of Flipkart's fees may be missing from a screenshot that shows no total. */
+  const allowance = marks.feeAllowanceRupees ?? 0;
+  /** A detail with no column in the file is not compared at all. */
+  const compared = DETAILS.filter((k) => k === 'orderId' || had[k]);
+  const sheetId = row.orderId?.value ?? '';
+  const sheetDay = row.orderDate?.value ?? null;
+  const sheetAmount = Number.isFinite(row.amount?.value) ? row.amount.value : null;
+  const label = row.product?.text ?? '';
+  /** The products of the live campaigns this row uses, by their real names from Flipkart; none when it uses no campaign. */
+  const campaignProducts = campaigns.flatMap((c) => (c.products ?? []).map((p) => ({ ...p, lead: brandWordsAtStart(p.name, c.brand) })));
+  const byCampaign = campaignProducts.length > 0;
+
+  /**
+   * Which of the campaigns' products a screenshot shows, by its real name from
+   * Flipkart or the start of it (a name Flipkart cut short counts when the
+   * part shown is the start of its real name): { state: 'same', shown,
+   * product }. 'different' when it shows another product's name starting with
+   * the brand; 'not shown' otherwise, with part when too little of a name
+   * shows to tell.
+   */
+  function campaignProductOn(texts) {
+    let best = null;
+    const score = (h) => h.full + (h.cut ? 1 : 0);
+    const hits = [];
+    for (const c of campaignProducts) {
+      const hit = nameStartShown(texts, c.name, { lead: c.lead });
+      if (!hit) continue;
+      hits.push({ c, hit });
+      const enough = enoughOfName(hit, c.lead);
+      if (!best || (enough && !best.enough) || (enough === best.enough && score(hit) > score(best.hit))) best = { c, hit, enough };
+    }
+    // The start shown fits one of the campaign's products alone (its brand and a word or more of its name): that is the product, as staff read it.
+    const alone = hits.length === 1 && hits[0].hit.full >= Math.max(1, hits[0].c.lead) + (hits[0].hit.cut ? 0 : 1) && hits[0].hit.full + (hits[0].hit.cut ? 1 : 0) >= Math.max(1, hits[0].c.lead) + 1;
+    // Every campaign product the screenshot shows enough of (an order of several products): the delivery screenshot must share one, in a later step.
+    const all = alone ? [hits[0].c] : hits.filter((h) => enoughOfName(h.hit, h.c.lead)).map((h) => h.c);
+    if (best?.enough || (best && alone)) return { state: 'same', shown: best.hit.shown, product: { name: best.c.name, short: best.c.short, pid: best.c.pid }, all: all.map((c) => c.pid), campaign: true, start: !best.enough };
+    // Another product's name: a line that starts with the brand (or with the first word of a product named without it), and could not be one of the campaign's products read with a slip.
+    const other = nameLineStarting(texts, [...campaigns.map((c) => c.brand), ...campaignProducts.filter((c) => !c.lead).map((c) => c.name.split(/\s+/)[0])]);
+    const couldBeOurs = other && campaignProducts.some((c) => nameCouldBe(other, c.name, c.lead));
+    if (best && (!other || best.hit.shown.includes(other) || couldBeOurs)) return { state: NOT_SHOWN, part: best.hit.shown, campaign: true };
+    if (other && couldBeOurs) return { state: NOT_SHOWN, part: other, campaign: true };
+    // A name with a word of only one of the campaign's products in it may be that product, so it is not called a different one; a staff member looks.
+    if (other && ownWordOf(other)) return { state: NOT_SHOWN, part: other, campaign: true };
+    if (other) return { state: 'different', shown: other, campaign: true };
+    return { state: NOT_SHOWN, campaign: true };
+  }
+  /** The campaign's product whose own word (one no other of its products has in its name) a name holds, when exactly one is. */
+  function ownWordOf(name) {
+    const brandish = new Set(campaigns.flatMap((c) => productWords(c.brand)));
+    const keyWords = (t) => productWords(t).filter((w) => w.length >= 4 && !brandish.has(w));
+    const words = new Set(keyWords(name));
+    const mine = campaignProducts.filter((c) => keyWords(c.name).some((w) => words.has(w) && !campaignProducts.some((o) => o !== c && keyWords(o.name).includes(w))));
+    return mine.length === 1 ? mine[0] : null;
+  }
+  /** True when some lines tell the product: one of the campaign's products or another product's name, or (with no campaign) the product named in the sheet. */
+  const productTold = (texts) => (byCampaign ? campaignProductOn(texts).state !== NOT_SHOWN : !label || (productShown(label, texts)?.share ?? 0) >= mark);
+
+  /**
+   * What the purchase screenshot shows of each detail, compared with the
+   * sheet: { state, shown }. state is 'same', 'different', 'not shown', or
+   * 'shown' when the sheet has nothing to compare it with. A product's name
+   * cut short on the screen is not shown (part says what is shown).
+   */
+  function detailsOf(r) {
+    const ids = r.orderIds ?? [];
+    let orderId;
+    if (ids.length) orderId = !sheetId ? { state: 'shown', shown: ids[0] } : ids.includes(sheetId) ? { state: 'same', shown: sheetId } : { state: 'different', shown: ids.find((id) => id !== sheetId) };
+    else {
+      // Only part of the order ID read (cut off at the screenshot's edge, or a digit lost in reading): it is the sheet's when the part read is in it.
+      const part = sheetId ? partialOrderId(r.texts ?? [], sheetId) : null;
+      orderId = part ? { state: 'same', shown: sheetId, part: part.digits } : { state: NOT_SHOWN };
+    }
+    const dates = orderDates(r.dates);
+    const dateHit = sheetDay ? dates.find((d) => sameDay(d, sheetDay)) : null;
+    const orderDate = !dates.length ? { state: NOT_SHOWN } : !sheetDay ? { state: 'shown', shown: dateWords(dates[0]) } : dateHit ? { state: 'same', shown: dateWords(dateHit) } : { state: 'different', shown: dateWords(dates[0]) };
+    const usable = usableAmounts(r.amounts);
+    const hit = sheetAmount === null ? null : amountMatch(r.amounts, sheetAmount, { tolerance, allowance });
+    let amount;
+    if (!usable.length && !hit) amount = { state: NOT_SHOWN };
+    else if (sheetAmount === null) amount = { state: 'shown', shown: rupees(amountToName(usable).value), label: amountLabel(amountToName(usable).label) };
+    else if (hit) amount = { state: 'same', shown: rupees(hit.value), label: amountLabel(hit.label), how: hit.how, parts: hit.parts };
+    else {
+      // Flipkart's price details show the order's total ("Total amount", "Paid ₹… by"): only that total, read clearly, is different; an item's
+      // price is never the order's amount there, and a total read two ways is not clear, so it is not shown.
+      const total = totalRead(r.amounts);
+      if (total) amount = { state: 'different', shown: rupees(total.value), label: amountLabel(total.label) };
+      else if (priceDetailsShown(r.amounts)) amount = { state: NOT_SHOWN };
+      else {
+        // The amount named is the one that may be the sheet's read with a slip (one digit away), when there is one; else a total first.
+        const named = usable.find((a) => amountOneDigitOff(a.value, sheetAmount)) ?? amountToName(usable);
+        amount = { state: 'different', shown: rupees(named.value), label: amountLabel(named.label) };
+      }
+    }
+    const p = label ? productShown(label, r.texts ?? []) : null;
+    const share = p?.share ?? 0;
+    let product;
+    // A detail whose column the file does not have is not compared.
+    if (!had.product) product = { state: SKIP };
+    else if (byCampaign) {
+      // The picture's own reading tells the product; the words of its other readings only help find the product ordered when it does not.
+      const own = r.lines?.length ? r.lines.map((l) => l.text) : r.texts ?? [];
+      product = campaignProductOn(own);
+      if (product.state !== 'same' && (r.texts ?? []).length > own.length) {
+        const more = campaignProductOn(r.texts);
+        if (more.state === 'same') product = more;
+      }
+    } else if (!label) product = { state: 'shown', shown: null };
+    else if (share >= mark) product = { state: 'same', shown: p.shown, share };
+    // Cut short ("…"): only the start of the name is shown, so it is never called different.
+    else if (share > 0 && cutShort(p.shown)) product = { state: NOT_SHOWN, part: p.shown, share };
+    // A different product only when a name of three words or more shows half of the product's words, or two of them (the brand and one more).
+    else if ((share >= 0.5 || Math.round(share * productWords(p.name ?? label).length) >= 2) && wordsOf(p.shown).length >= 3) product = { state: 'different', shown: p.shown, share };
+    else product = { state: NOT_SHOWN, share };
+    return { orderId, orderDate: had.orderDate ? orderDate : { state: SKIP }, amount: had.amount ? amount : { state: SKIP }, product };
+  }
+  /** How an amount is the same, when not shown as it is: "with ₹9 of fees", "with ₹46 of SuperCoins", or "with Flipkart's fees not shown". */
+  const amountHow = (v) => {
+    if (v.how === 'with fees') return ` (${v.shown} with ${rupees(v.parts.filter((p) => p.kind === 'fee').reduce((n, p) => n + p.value, 0))} of fees${v.parts.some((p) => p.kind === 'off') ? ', less the money taken off' : ''})`;
+    if (v.how === 'with supercoins') return ` (${v.shown} with ${rupees(v.parts[0]?.value)} of SuperCoins)`;
+    return v.how === 'fees not shown' ? ` (${v.shown}, with Flipkart's fees not shown)` : '';
+  };
+  /** "Order ID: the same. Order date: not shown. …", for the step's line on the row's page. */
+  const detailWords = (details) =>
+    compared
+      .map((k) => {
+        const v = details[k];
+        if (k === 'product' && v.campaign && v.state !== NOT_SHOWN) return `Product: ${v.state === 'same' ? `one of the campaign's products${v.start ? ', by the start of its name' : ''}` : "not one of the campaign's products"}.`;
+        if (k === 'orderId' && v.part) return `Order ID: the same (${v.part} of its ${sheetId.replace(/\D/g, '').length} digits were read).`;
+        if (k === 'amount' && v.state === 'same') return `Amount: the same${amountHow(v)}.`;
+        return `${cap(NOUN[k])}: ${STATE_SAID[v.state]}.`;
+      })
+      .join(' ');
+  /** The purchase screenshot fails its step when it does not show the order ID or the product as the same, or a date or an amount is different. */
+  const shotFails = (details) => details.orderId.state !== 'same' || (had.product && details.product.state !== 'same') || ['orderDate', 'amount'].some((k) => ['different', 'shown'].includes(details[k].state));
+
+  /** Step 2: the purchase screenshot read on this computer, and each detail compared with the sheet. */
+  async function readPurchase(n) {
+    const was = shot.order?.state;
+    if (was !== 'opened') {
+      const why = was === 'no column' ? 'The file has no purchase screenshot column, so there is nothing to read.' : was === 'missing' ? 'There is no purchase screenshot to read.' : 'The purchase screenshot could not be opened, so it was not read.';
+      return finish(n, 'not-reached', why);
+    }
+    start(n, 'Reading the purchase screenshot');
+    // A screenshot is read again the other ways when it lacks what the sheet gives: the order ID, the amount and the product.
+    const want = { orderId: sheetId || null, amount: sheetAmount, tolerance, allowance, product: had.product ? productTold : null };
+    const r = await readOrder(shot.order.files, { want });
+    checkStop();
+    const near = (v) => sheetAmount !== null && Number.isFinite(v) && Math.abs(v - sheetAmount) <= tolerance + 1e-9;
+    const record = {
+      ok: Boolean(r.ok),
+      problem: r.problem ?? null,
+      confidence: r.confidence ?? null,
+      wordCount: r.wordCount ?? 0,
+      hindi: Boolean(r.hindi),
+      orderIds: r.orderIds ?? [],
+      dates: orderDates(r.dates).map(dateWords),
+      // A number whose rupee sign was read as a digit is shown as the amount it is.
+      amounts: (r.amounts ?? []).map((a) => {
+        const alt = (a.alts ?? []).find(near);
+        return { text: a.text, value: !near(a.value) && alt !== undefined ? alt : a.value, label: a.label, skip: Boolean(a.skip) };
+      }),
+      product: null,
+      productShare: null,
+      text: clean(r.text ?? ''),
+      details: null,
+    };
+    result.order = record;
+    if (!r.ok) return finish(n, 'fail', `It could not be read: ${r.problem ?? 'its words are not clear enough to read'}.`);
+    const details = detailsOf(r);
+    record.details = details;
+    record.product = details.product.shown ?? details.product.part ?? null;
+    record.productShare = details.product.share ?? null;
+    return finish(n, shotFails(details) ? 'fail' : 'pass', detailWords(details));
   }
 
   emit({ event: 'started', checkId, steps: STEP_NAMES, rowId: row.id, row: row.row ?? null, name: result.name });
@@ -178,6 +426,7 @@ export async function runCheck({ row, has = null, screenshots, emit = () => {}, 
     for (let n = 1; n <= STEP_NAMES.length; n++) {
       const which = n === 5 ? reviewCell(row, had) : OPENS[n];
       if (which) await step(n, () => openShot(n, which));
+      else if (n === 2) await step(n, () => readPurchase(n));
       else later(n);
     }
   } catch (err) {

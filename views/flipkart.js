@@ -31,9 +31,11 @@
 // as on Amazon: the row's details, with its screenshots as small pictures
 // that open large when clicked (or why one could not be had, in the Amazon
 // words), and a check's steps, shown live as each one runs and still shown
-// after a reload. For now a check only gets the screenshots: every other step
-// comes in a later step, and no row gets a Status yet: a row counts as
-// checked once its last check finished. No Status cards yet. The local server
+// after a reload. For now a check gets the screenshots and reads the purchase
+// screenshot on this computer, comparing it with the sheet, and the row's
+// page shows what it says (the Amazon screen's "Read from the purchase
+// screenshot" card); every other step comes in a later step, and no row gets
+// a Status yet: a row counts as checked once its last check finished. No Status cards yet. The local server
 // reads and keeps the file and the campaigns, and runs the checks and the
 // Google login; this screen only shows them.
 
@@ -967,6 +969,8 @@ function applyCheckEvent(view, e) {
   } else if (e?.event === 'step' && e.step && Number.isInteger(e.step.n)) {
     const i = e.step.n - 1;
     if (i >= 0 && i < STEP_NAMES.length) view.steps[i] = { ...view.steps[i], ...e.step };
+    // What was read so far (the purchase screenshot), for its card on the row's page.
+    if (e.partial) view.result = { ...obj(view.result), ...e.partial };
   } else if (e?.event === 'done') {
     view.result = e.result ?? view.result;
     view.done = true;
@@ -1271,6 +1275,39 @@ function detailsCard(ctx, r) {
   );
 }
 
+/** Amounts read from a screenshot, as rupees with what they are: "₹349 (total amount), ₹999 (listing price)". Copied from the Amazon screen. */
+function amountsSaid(amounts) {
+  const seen = new Set();
+  const out = [];
+  for (const a of arr(amounts)) {
+    if (!Number.isFinite(a?.value)) continue;
+    const said = `₹${Number.isInteger(a.value) ? a.value : a.value.toFixed(2)}${a.label ? ` (${a.label})` : ''}`;
+    if (!seen.has(said)) {
+      seen.add(said);
+      out.push(said);
+    }
+  }
+  return out.join(', ');
+}
+
+/** What the purchase screenshot says, as read on this computer: the Amazon screen's card, for Flipkart's purchase screenshot. None when the file has no purchase screenshot column. */
+function readCard(ctx, res) {
+  const { h, words, state } = ctx;
+  const sheet = state.saved?.sheet;
+  if (sheet && !Number.isInteger(obj(sheet.mapping).orderShot)) return null;
+  const o = res?.order;
+  const read = (x) => `Read on this computer, in ${x.hindi ? 'English and Hindi' : 'English only'}: ${x.wordCount ?? 0} words, read with ${x.confidence ?? 0} percent certainty.`;
+  const everything = (t) => (t ? h('details', null, h('summary', null, 'Everything read from it'), h('pre', { class: 'fk-ocr-text' }, t)) : null);
+  return h(
+    'section',
+    { class: 'card fk-read', key: 'card-order', 'data-id': 'card-order' },
+    h('h3', null, 'Read from the purchase screenshot'),
+    o
+      ? h('div', null, o.problem ? words.notice(h, 'warn', o.problem) : null, words.fields(h, [['Order IDs', arr(o.orderIds).join(', ') || 'None shown'], ['Dates', arr(o.dates).join(', ') || 'None shown'], ['Amounts', amountsSaid(o.amounts) || 'None shown'], ['Product', o.product], ['Read by', read(o)]]), everything(o.text))
+      : h('p', { class: 'muted' }, 'Not read yet.'),
+  );
+}
+
 /** The Type and the Note: none yet for a Flipkart row (the Status comes in a later step), but those the file already had. */
 function resultCard(ctx, r) {
   const { h } = ctx;
@@ -1344,6 +1381,8 @@ function rowPage(ctx) {
   const single = !inRun && r.id && state.check && state.check.rowId === r.id ? state.check : null;
   const liveView = inRun ? { ...inRun.view, running: true } : single ? { ...single.view, running: single.running } : null;
   const view = liveView ?? { running: false, steps: arr(o.result?.steps), action: o.result?.finishedAt ? `Last check finished ${words.ist(o.result.finishedAt)}.` : null };
+  // What was read: the check running now, as far as it got, or the last check, kept with the row.
+  const res = liveView ? liveView.result : o.result;
   const listed = arr(state.saved?.rows).find((x) => x?.id === r.id) ?? r;
   return h(
     'div',
@@ -1362,7 +1401,7 @@ function rowPage(ctx) {
     ),
     finalBanner(ctx, liveView),
     single?.notice ? words.notice(h, single.notice.tone, single.notice.text) : null,
-    h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, r), detailsCard(ctx, r)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
+    h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, r), detailsCard(ctx, r), readCard(ctx, res)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
     bigPicture(ctx),
   );
 }

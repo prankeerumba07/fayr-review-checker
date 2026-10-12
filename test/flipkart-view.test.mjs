@@ -488,6 +488,22 @@ const PICTURED = {
 /** A check's steps as the server keeps them: the screenshots opened (one could not be had), every other step coming in a later step. */
 const STEPS_DONE = STEP_NAMES.map((name, i) => ({ n: i + 1, name, state: i === 0 || i === 4 ? 'pass' : i === 2 ? 'fail' : 'later', detail: ['Opened the purchase screenshot.', null, 'The delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.', null, 'Opened the review screenshot.'][i] ?? null }));
 const LAST_CHECK = { checkId: 'c20261012123000abcdef', startedAt: '2026-10-12T12:29:58.000Z', finishedAt: '2026-10-12T12:30:00.000Z', seconds: 2, steps: STEPS_DONE };
+/** What a purchase screenshot says, as the server keeps it with the row's last check (step 2). */
+const ORDER_READ = {
+  ok: true,
+  problem: null,
+  confidence: 88,
+  wordCount: 66,
+  hindi: true,
+  orderIds: ['OD100000000000000002'],
+  dates: ['20-07, with no year shown'],
+  amounts: [{ text: '₹999', value: 999, label: 'listing price', skip: false }, { text: '₹329', value: 329, label: 'selling price', skip: false }, { text: '₹30', value: 30, label: 'total fees', skip: true }, { text: '₹349', value: 349, label: 'total amount', skip: false }],
+  product: 'Test Brand Steel Bottle 1 L, Blue',
+  productShare: 1,
+  text: 'Order #OD100000000000000002\nTotal amount ₹349',
+  details: { orderId: { state: 'same', shown: 'OD100000000000000002' }, orderDate: { state: 'skip' }, amount: { state: 'same', shown: '₹349', label: 'the total amount', how: 'same', parts: [] }, product: { state: 'same', shown: 'Test Brand Steel Bottle 1 L, Blue', share: 1 } },
+};
+const LAST_CHECK_READ = { ...LAST_CHECK, order: ORDER_READ };
 const stepsOf = (tree) => findAll(byId(tree, 'activity'), (n) => n.tag === 'li');
 /** A screen showing one row's page. */
 async function rowScreen(local, id = 'r000000000001') {
@@ -592,6 +608,50 @@ test("Check on a row's page: each step shown live as it runs, with the same mark
   await settle();
   assert.match(textOf(s.page()), /The check was stopped, and nothing was saved for it\. Press Check to check this row again\./);
   assert.equal(STEP_NAMES.length, 9);
+});
+
+test('a row\'s page shows what the purchase screenshot says, as on Amazon ("Read from the purchase screenshot"): after a reload, and live as soon as it is read; with no purchase screenshot column, no card', async () => {
+  const card = (tree) => byId(tree, 'card-order');
+  const fields = (tree) => findAll(card(tree), (n) => n.tag === 'div' && n.attrs?.class === 'field-row').map((n) => [textOf(findAll(n, (x) => x.tag === 'dt')[0]), textOf(findAll(n, (x) => x.tag === 'dd')[0])]);
+  const s = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK_READ } } }));
+  assert.equal(textOf(findAll(card(s.page()), (n) => n.tag === 'h3')[0]), 'Read from the purchase screenshot');
+  assert.deepEqual(fields(s.page()), [
+    ['Order IDs', 'OD100000000000000002'],
+    ['Dates', '20-07, with no year shown'],
+    ['Amounts', '₹999 (listing price), ₹329 (selling price), ₹30 (total fees), ₹349 (total amount)'],
+    ['Product', 'Test Brand Steel Bottle 1 L, Blue'],
+    ['Read by', 'Read on this computer, in English and Hindi: 66 words, read with 88 percent certainty.'],
+  ]);
+  const all = findAll(card(s.page()), (n) => n.tag === 'details')[0];
+  assert.deepEqual([textOf(findAll(all, (n) => n.tag === 'summary')[0]), textOf(findAll(all, (n) => n.tag === 'pre')[0]), findAll(all, (n) => n.tag === 'pre')[0].attrs.class], ['Everything read from it', ORDER_READ.text, 'fk-ocr-text']);
+  // The left side as on Amazon: the Type and Note, the details from the sheet, then what the purchase screenshot says.
+  assert.deepEqual(findAll(byId(s.page(), 'row-page'), (n) => n.attrs?.class === 'fk-left')[0].children.filter(Boolean).map((n) => n.attrs['data-id']), ['card-result', 'row-details', 'card-order']);
+  // Not read: it says so; a picture whose words are not clear says why.
+  const none = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK } } }));
+  assert.equal(textOf(card(none.page())), 'Read from the purchase screenshotNot read yet.');
+  const unclear = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: { ...LAST_CHECK, order: { ...ORDER_READ, ok: false, problem: 'its words are not clear enough to read', orderIds: [], dates: [], amounts: [], product: null, wordCount: 2, confidence: 31 } } } } }));
+  assert.match(textOf(card(unclear.page())), /^Read from the purchase screenshotits words are not clear enough to readOrder IDsNone shownDatesNone shownAmountsNone shownProductNoneRead byRead on this computer, in English and Hindi: 2 words, read with 31 percent certainty\./);
+  // Live: as soon as step 2 has read it, while the check goes on.
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const local = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: null } } });
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
+    onEvent({ event: 'step', step: { n: 2, name: STEP_NAMES[1], state: 'pass', detail: 'Order ID: the same.' }, partial: { order: ORDER_READ } });
+    await gate;
+    onEvent({ event: 'done', result: LAST_CHECK_READ });
+    return { ok: true };
+  };
+  const live = await rowScreen(local);
+  assert.equal(textOf(card(live.page())), 'Read from the purchase screenshotNot read yet.');
+  byId(live.page(), 'check').attrs.onclick();
+  await settle();
+  assert.deepEqual(fields(live.page())[0], ['Order IDs', 'OD100000000000000002'], 'shown at once, while the check runs');
+  release();
+  await settle();
+  // A file with no purchase screenshot column has no card, as on Amazon.
+  const noColumn = { ...SAVED, sheet: { ...SAVED.sheet, mapping: { ...SAVED.sheet.mapping, orderShot: null } } };
+  assert.equal(card((await rowScreen(fakeLocal({ saved: noColumn, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK_READ } } }))).page()), null);
 });
 
 /** What the server says when no one is logged in to Google before a row, for "Start checking". */
@@ -767,6 +827,8 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   byId(rowPage.page(), 'check').attrs.onclick();
   await settle();
   add(rowPage);
+  // What the purchase screenshot says, on the row's page.
+  add(await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK_READ } } })));
   // "Start checking": the rows checked one by one, with the checking area beside the table, then paused.
   const runLocal = fakeLocal({ saved: SAVED });
   const running = await opened(runLocal);
@@ -825,13 +887,15 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
     ['.fk-rows-layout.fk-with-live', '.rows-layout.with-live'], ['.fk-rows-main', '.rows-main'], ['.fk-rows-main > .fk-empty-state', '.rows-main > .empty-state'], ['.fk-with-live .fk-rows-wrap', '.with-live .rows-wrap'],
     ['.fk-rows-table tbody tr.fk-current-row > td', '.rows-table tbody tr.current-row > td'], ['.fk-rows-table tbody tr.fk-current-row > td:first-child', '.rows-table tbody tr.current-row > td:first-child'],
     ['.fk-live-panel', '.live-panel'], ['.fk-live-head', '.live-head'], ['.fk-live-head h2', '.live-head h2'], ['.fk-run-progress', '.run-progress'], ['.fk-live-links', '.live-links'], ['.fk-live-flat, .fk-steps-flat', '.live-flat, .steps-flat'],
+    // What the purchase screenshot says, as on Amazon.
+    ['.fk-ocr-text', '.ocr-text'], ['.fk-read details > summary', '.card details:not(.fold):not(.menu) > summary'],
   ]) {
     assert.ok(rule(amazonCss, theirs), `${theirs} is an Amazon rule`);
     assert.equal(rule(css, mine), rule(amazonCss, theirs), `${mine} is the same as ${theirs}`);
   }
   const wide = (src) => src.match(/@media \(max-width: 1200px\) \{([^]*?)\n\}/)?.[1] ?? null;
   assert.equal(wide(css), wide(amazonCss).replaceAll('.rows-layout.with-live', '.fk-rows-layout.fk-with-live').replaceAll('.live-panel', '.fk-live-panel'), 'in a narrower window, the checking area goes under the table, as on Amazon');
-  for (const cls of ['fk-overview', 'fk-main-actions', 'fk-rows-layout', 'fk-with-live', 'fk-rows-main', 'fk-current-row', 'fk-live-panel', 'fk-live-head', 'fk-run-progress', 'fk-live-links', 'fk-live-flat', 'fk-steps-flat']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
+  for (const cls of ['fk-overview', 'fk-main-actions', 'fk-rows-layout', 'fk-with-live', 'fk-rows-main', 'fk-current-row', 'fk-live-panel', 'fk-live-head', 'fk-run-progress', 'fk-live-links', 'fk-live-flat', 'fk-steps-flat', 'fk-read', 'fk-ocr-text', 'fields', 'field-row']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
   for (const name of ['about-file', 'columns', 'column-grid', 'req', 'opt', 'col-letter', 'row-cell', 'strong-cell', 'product-cell', 'status-cell', 'type-cell', 'note-cell', 'cell-words', 'link-cell', 'other-cell', 'link-label', 'nolink', 'link-warning', 'empty-cell', 'empty-state', 'rows-wrap', 'rows-count']) {
     assert.ok(rule(amazonCss, `.${name}`), `.${name} is an Amazon rule`);
     assert.equal(rule(css, `.fk-${name}`), rule(amazonCss, `.${name}`), `.fk-${name} is the same as .${name}`);

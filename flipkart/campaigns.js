@@ -184,6 +184,24 @@ export function brandProblem(read, brand) {
 /** A product that is used: read from Flipkart, and confirmed. */
 export const usable = (p) => Boolean(p?.read?.name && !p.problem);
 
+/**
+ * The campaigns a row uses, as on Amazon: every live one whose brand is in the
+ * row's product name in the sheet, or else in the file's name or the tab's
+ * name (places), with only the products that are used, as the check needs
+ * them: { key, name, brand, live, products: [{ pid, name, short, variants:
+ * [pid] }] }, each product by its real name read from Flipkart. Copied from
+ * amazon/campaigns.js.
+ */
+export function campaignsFor(productName, campaigns, places = []) {
+  return campaignsFound(productName, campaigns, places).list.map((c) => ({
+    key: c.key,
+    name: c.name,
+    brand: c.brand,
+    live: Boolean(c.live),
+    products: (c.products ?? []).filter(usable).map((p) => ({ pid: p.read.pid ?? p.pid ?? null, name: p.read.name, short: shortName(p.read.name), variants: (p.read.variants ?? []).map((v) => v.pid).filter(Boolean) })),
+  }));
+}
+
 /** Every product of a campaign confirmed again for its brand, from what was read (a changed brand needs no page opened). */
 export function confirmProducts(campaign) {
   return {

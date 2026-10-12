@@ -16,15 +16,17 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, request } from 'node:http';
 import net from 'node:net';
-import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import { createHandler, createSessions, bearerOf } from '../serve.mjs';
 import { createFlipkartRoutes, sheetView } from '../flipkart/routes.js';
 import { STEP_NAMES } from '../flipkart/check.js';
+import { orderIdsIn, datesIn, amountsIn } from '../flipkart/screen-text.js';
+import { DEFAULT_MARKS } from '../flipkart/settings.js';
 import { tinyPng } from './fixtures/flipkart/zip-tools.mjs';
 import { MAX_SHEET_BYTES, createFlipkartStore, putCampaign } from '../flipkart/store.js';
 import { ONLY_FLIPKART_NAMES } from '../flipkart/browser.js';
@@ -398,13 +400,15 @@ test('nothing is downloaded and no link is opened: the file is read and shown on
   // And no Flipkart file has a way to reach a website or start a program, but these, each for its own reason:
   // the Live Flipkart Browser (browser.js), which reads campaigns' products, uses the browser tool; the
   // downloads (pictures.js) use https, through the fetch they are given; getting a row's screenshots
-  // (screenshots.js) passes on the Live Amazon Browser's own download, handed over by serve.mjs; and making a
-  // PDF into a picture (picture-fix.js) uses the Mac's own tools. Every other file has none.
+  // (screenshots.js) passes on the Live Amazon Browser's own download, handed over by serve.mjs; making a
+  // PDF into a picture (picture-fix.js) uses the Mac's own tools; and reading a picture's words (ocr.js) uses
+  // Tesseract and the Mac's own picture tool, on this computer. Every other file has none.
   const TOOLS = {
     'browser.js': ["import { chromium } from 'playwright-core';"],
     'pictures.js': ["from 'node:https'", "from 'node:net'", 'fetch('],
     'screenshots.js': ['fetch('],
     'picture-fix.js': ["from 'node:child_process'"],
+    'ocr.js': ["from 'node:child_process'"],
   };
   for (const f of readdirSync(join(ROOT, 'flipkart'))) {
     let src = readFileSync(join(ROOT, 'flipkart', f), 'utf8');
@@ -483,13 +487,36 @@ function driveLogin(state = 'in') {
   return g;
 }
 
-test("Check over HTTP, as on Amazon: the steps streamed as they run; the screenshots downloaded through the Amazon screen's Google login (a pretend Google Drive) and kept only in data/flipkart/; one that cannot be had says why in the Amazon words; the row's page shows it all after a reload; no Status; no Google login pauses first; one check at a time", async () => {
+/** A purchase screenshot as the reader gives it (shot-read.js), made from made-up lines with the real rules. */
+const reading = (texts) => ({ ok: true, problem: null, confidence: 90, wordCount: 30, hindi: true, lines: texts.map((text) => ({ text })), texts, text: texts.join('\n'), orderIds: orderIdsIn(texts), dates: datesIn(texts), amounts: amountsIn(texts) });
+/** A pretend reader in place of Tesseract: each row's purchase screenshot says that row's own order ID, order date, product and amount (the made-up file's), found by the picture's file name; read: the rows whose picture was read. */
+function pretendReader() {
+  const said = {};
+  const read = [];
+  return {
+    read,
+    set(rows) {
+      for (const r of rows) said[r.id] = reading([`Order #${r.orderId}`, r.product, `Order placed on ${r.orderDate}`, `Total amount ${r.amount}`]);
+    },
+    async order(files) {
+      const id = basename(files[0] ?? '').slice(0, 13);
+      read.push(id);
+      return said[id] ?? reading([]);
+    },
+  };
+}
+const ALL_SAME = 'Order ID: the same. Order date: the same. Amount: the same. Product: the same.';
+
+test("Check over HTTP, as on Amazon: the steps streamed as they run; the screenshots downloaded through the Amazon screen's Google login (a pretend Google Drive) and kept only in data/flipkart/; one that cannot be had says why in the Amazon words; the purchase screenshot read and compared with the sheet, with Flipkart's own passing marks; the row's page shows it all after a reload; no Status; no Google login pauses first; one check at a time", async () => {
   const dir = tempDir();
   const google = driveLogin();
-  const routes = createFlipkartRoutes({ dataDir: dir, auth, google, shotOptions: { gapMs: 0 } });
+  const reader = pretendReader();
+  const routes = createFlipkartRoutes({ dataDir: dir, auth, google, shotOptions: { gapMs: 0 }, readers: reader });
   const at = await serve({ flipkart: routes });
   assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
-  const [one, two, three] = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  const rows = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  const [one, two, three] = rows;
+  reader.set(rows);
   const before = await call('GET', `/local/flipkart/rows/${one.id}`, { at });
   assert.deepEqual([before.status, before.json.result, before.json.row.label, before.json.row.shots.order.pictures], [200, null, 'Row 1', []], 'not checked yet');
   const check = (row, opts = {}) => call('POST', `/local/flipkart/rows/${row.id}/check`, { at, body: Buffer.from('{}'), type: 'application/json', ...opts });
@@ -498,14 +525,16 @@ test("Check over HTTP, as on Amazon: the steps streamed as they run; the screens
   assert.deepEqual([res.status, res.headers['content-type']], [200, 'application/x-ndjson; charset=utf-8']);
   const events = lines(res);
   assert.deepEqual([events[0].event, events[0].steps, events.at(-1).event], ['started', STEP_NAMES, 'done']);
-  assert.deepEqual(events.filter((e) => e.event === 'step').map((e) => `${e.step.n} ${e.step.state}`), ['1 running', '1 pass', '2 later', '3 running', '3 fail', '4 later', '5 running', '5 pass', '6 later', '7 later', '8 later', '9 later'], 'each step as it runs');
+  assert.deepEqual(events.filter((e) => e.event === 'step').map((e) => `${e.step.n} ${e.step.state}`), ['1 running', '1 pass', '2 running', '2 pass', '3 running', '3 fail', '4 later', '5 running', '5 pass', '6 later', '7 later', '8 later', '9 later'], 'each step as it runs');
   const result = events.at(-1).result;
-  assert.deepEqual(result.steps.map((s) => s.detail), ['Opened the purchase screenshot.', null, 'The delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.', null, 'Opened the review screenshot.', null, null, null, null]);
+  assert.deepEqual(result.steps.map((s) => s.detail), ['Opened the purchase screenshot.', ALL_SAME, 'The delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.', null, 'Opened the review screenshot.', null, null, null, null]);
+  assert.deepEqual([result.order.orderIds, result.order.details.amount.state, reader.read], [[orderId(2)], 'same', [one.id]], 'its purchase screenshot read on this computer (here by a pretend reader in place of Tesseract), and compared with the sheet');
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, 'flipkart', 'settings.json'), 'utf8')).passingMarks, DEFAULT_MARKS, "Flipkart's own passing marks, written in its own settings, starting with the Amazon checker's values");
   assert.deepEqual([result.paused, 'status' in result, 'type' in result, 'note' in result], [null, false, false, false], 'no Status, Type or Note');
   assert.deepEqual([...new Set(google.fetched)], ['1TestFlipkartOrder02abcd', '1TestFlipkartDelivery02ab', '1TestFlipkartReview02abcd'], "through the Amazon screen's Google login");
   // After a reload: the row's page shows the check's steps, and each picture kept or why it could not be had.
   const page = (await call('GET', `/local/flipkart/rows/${one.id}`, { at })).json;
-  assert.deepEqual([page.result.checkId, page.result.steps], [result.checkId, result.steps]);
+  assert.deepEqual([page.result.checkId, page.result.steps, page.result.order.orderIds, page.result.order.details.product.state], [result.checkId, result.steps, [orderId(2)], 'same'], 'what the purchase screenshot says is kept with the row');
   assert.deepEqual(page.row.shots.order.pictures.map((p) => [p.i, p.ok, p.type, p.link]), [[0, true, 'image/png', orderShot(2)]]);
   assert.deepEqual(page.row.shots.delivery.pictures, [{ i: 0, ok: false, link: deliveryShot(2), problem: { kind: 'drive', site: 'Google Drive', says: 'the Google account logged in to the dashboard has no access to the file' } }]);
   const table = (await call('GET', '/local/flipkart/sheet', { at })).json.rows[0];
@@ -516,7 +545,7 @@ test("Check over HTTP, as on Amazon: the steps streamed as they run; the screens
   assert.equal((await call('GET', `/local/flipkart/rows/${one.id}/picture/delivery/0`, { at })).status, 404, 'that one could not be had');
   // A row whose pictures are in its cells needs no download, so it is checked with no Google login too.
   google.state = 'out';
-  assert.deepEqual(lines(await check(two)).at(-1).result.steps.map((s) => s.state), ['pass', 'later', 'pass', 'later', 'pass', 'later', 'later', 'later', 'later']);
+  assert.deepEqual(lines(await check(two)).at(-1).result.steps.map((s) => s.state), ['pass', 'pass', 'pass', 'later', 'pass', 'later', 'later', 'later', 'later']);
   // A row whose screenshots are on Google Drive, with no one logged in to Google: the check pauses before it starts, as on Amazon, and nothing is saved.
   assert.deepEqual(lines(await check(three)), [{ event: 'paused', kind: 'google-out', says: 'No one is logged in to Google, so the screenshots on Google Drive cannot be downloaded. Press "Log in to Google" in the top bar and log in there, then press Check.' }]);
   assert.equal((await call('GET', `/local/flipkart/rows/${three.id}`, { at })).json.result, null, 'nothing saved');
@@ -533,7 +562,12 @@ test("Check over HTTP, as on Amazon: the steps streamed as they run; the screens
   google.hold = null;
   release();
   const third = lines(await running).at(-1).result;
-  assert.deepEqual(third.steps.map((s) => [s.state, s.detail]).filter(([state]) => state !== 'later'), [['pass', 'Opened 2 purchase screenshots.'], ['fail', 'The cell says "Delivered Left at the door" instead of holding a screenshot.'], ['pass', 'Opened the review screenshot.']]);
+  assert.deepEqual(third.steps.map((s) => [s.state, s.detail]).filter(([state]) => state !== 'later'), [['pass', 'Opened 2 purchase screenshots.'], ['pass', ALL_SAME], ['fail', 'The cell says "Delivered Left at the door" instead of holding a screenshot.'], ['pass', 'Opened the review screenshot.']]);
+  // A passing mark written wrongly in Flipkart's settings: nothing is checked until it is put right, and it is said plainly.
+  writeFileSync(join(dir, 'flipkart', 'settings.json'), JSON.stringify({ passingMarks: { ...DEFAULT_MARKS, productNameShare: 2 } }));
+  const wrong = 'In Flipkart\'s settings file, data/flipkart/settings.json, "passingMarks.productNameShare" must be a share from 0.01 to 1 (0.8 means 80% of the words), without quotes. Nothing can be checked until it is put right.';
+  for (const res of [await check(two), await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from('{}'), type: 'application/json' })]) assert.deepEqual([res.status, res.json?.message], [400, wrong]);
+  writeFileSync(join(dir, 'flipkart', 'settings.json'), JSON.stringify({ passingMarks: DEFAULT_MARKS }));
   // What is not a row's route, and the same safety as every route.
   assert.equal((await call('POST', '/local/flipkart/rows/r000000000000/check', { at, body: Buffer.from('{}'), type: 'application/json' })).status, 404);
   const getCheck = await call('GET', `/local/flipkart/rows/${one.id}/check`, { at });
@@ -602,7 +636,8 @@ function startRun(at, body = {}) {
 test('"Start checking" over HTTP, as on Amazon: the rows not checked yet, one by one from the first one, each row\'s steps streamed and its new line sent once it is finished; no one logged in to Google, a login using the Live Amazon Browser, or a pause in a row\'s check pauses before or at that row, and checking carries on from it; Stop; "Check every row again"; one check at a time; still no Status', async () => {
   const dir = tempDir();
   const google = driveLogin();
-  const routes = createFlipkartRoutes({ dataDir: dir, auth, google, shotOptions: { gapMs: 0 } });
+  const reader = pretendReader();
+  const routes = createFlipkartRoutes({ dataDir: dir, auth, google, shotOptions: { gapMs: 0 }, readers: reader });
   const at = await serve({ flipkart: routes });
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const json = (body) => ({ at, body: Buffer.from(JSON.stringify(body)), type: 'application/json' });
@@ -629,6 +664,7 @@ test('"Start checking" over HTTP, as on Amazon: the rows not checked yet, one by
   assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
   const rows = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
   const [one, two] = rows;
+  reader.set(rows);
   assert.deepEqual(await doneNow(), [false, false, false, false, false], 'no row is checked yet');
   // Row 2 checked by its own button first: it counts as checked once its check finished.
   const single = lines(await call('POST', `/local/flipkart/rows/${two.id}/check`, json({})));
@@ -676,7 +712,7 @@ test('"Start checking" over HTTP, as on Amazon: the rows not checked yet, one by
   assert.deepEqual(runLines(run), [['run-started', null, 1], ['row', 'Row 1', 1], ['row-done', 'Row 1', 2], ['row', 'Row 3', 2], ['row-done', 'Row 3', 3], ['row', 'Row 4', 3], ['row-done', 'Row 4', 4], ['row', 'Row 5', 4], ['row-done', 'Row 5', 5], ['run-done', null, 5]]);
   assert.deepEqual(run.filter((e) => e.event === 'started').map((e) => [e.name, e.steps]), [['Row 1', STEP_NAMES], ['Row 3', STEP_NAMES], ['Row 4', STEP_NAMES], ['Row 5', STEP_NAMES]], "each row's steps, streamed as they run");
   assert.deepEqual(run.filter((e) => e.event === 'row-done').map((e) => [e.rows.length, e.rows[0].id === e.rowId, e.rows[0].done, e.rows[0].prev]), [[1, true, true, null], [1, true, true, null], [1, true, true, null], [1, true, true, null]], 'the row\'s new line for the table: checked, and still no Status');
-  assert.deepEqual(run.find((e) => e.event === 'done').result.steps.map((s) => s.state), ['pass', 'later', 'fail', 'later', 'pass', 'later', 'later', 'later', 'later'], "row 1's check: the screenshots only");
+  assert.deepEqual(run.find((e) => e.event === 'done').result.steps.map((s) => s.state), ['pass', 'pass', 'fail', 'later', 'pass', 'later', 'later', 'later', 'later'], "row 1's check: the screenshots, and its purchase screenshot read");
   assert.deepEqual(run.at(-1), { event: 'run-done', checked: 4, total: 5, done: 5, left: 0 });
   assert.deepEqual(await doneNow(), [true, true, true, true, true]);
   const page = (await call('GET', `/local/flipkart/rows/${one.id}`, { at })).json;

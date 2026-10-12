@@ -195,3 +195,8 @@
   .fk-rows-layout.fk-with-live { grid-template-columns: minmax(0, 1fr); }
   .fk-live-panel { position: static; max-height: none; border-left: 0; border-top: 1px solid var(--line); border-radius: 0 0 var(--radius) var(--radius); }
 }
+
+/* ---- what the purchase screenshot says, on a row's page, like the Amazon card ---- */
+
+.fk-ocr-text { max-height: 280px; overflow-y: auto; padding: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.fk-read details > summary { cursor: pointer; margin: 8px 0; color: var(--link); font-size: 12px; }

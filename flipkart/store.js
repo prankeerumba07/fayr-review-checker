@@ -2,8 +2,8 @@
 // never served as a file): the uploaded file (upload.xlsx or upload.csv), the
 // rows made from it with the columns found, each with its last check's steps
 // (rows.json), the pictures placed in its cells and the screenshots got for a
-// row (pictures/), Flipkart's own settings with the columns chosen last
-// (settings.json), the campaigns with what was read from their products'
+// row (pictures/), Flipkart's own settings with the columns chosen last and
+// the passing marks (settings.json), the campaigns with what was read from their products'
 // Flipkart pages (campaigns.json), and each product's public reviews
 // (reviews/<product ID>.json). Nothing here writes anywhere else in data/.
 // Copied from the Amazon store's way of writing (amazon/store.js): a file is
@@ -15,6 +15,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { ANY_PID } from './links.js';
 import { imageType, MAX_PICTURE_BYTES, PICTURE_EXT } from './image-type.js';
+import { DEFAULT_MARKS, checkMarks } from './settings.js';
 
 /** The largest file taken: the same as for Amazon. */
 export const MAX_SHEET_BYTES = 50 * 1024 * 1024;
@@ -49,6 +50,26 @@ function cleanShot(s) {
   if (s?.mismatch?.text && s?.mismatch?.link) out.mismatch = { text: cleanText(s.mismatch.text), link: cleanText(s.mismatch.link) };
   if (s?.picture?.how === 'cell' || s?.picture?.how === 'floating') out.picture = s.picture.how;
   return out;
+}
+
+/** What a screenshot says, as read (check.js), as kept with the row's last check: its words cut to length, and what each detail is. Null when it was not read. */
+function keptRead(o) {
+  if (!o || typeof o !== 'object') return null;
+  const list = (v, n) => (Array.isArray(v) ? v.slice(0, n) : []);
+  return {
+    ok: Boolean(o.ok),
+    problem: o.problem ? cleanText(o.problem, 300) : null,
+    confidence: Number.isFinite(o.confidence) ? Math.round(o.confidence) : null,
+    wordCount: Number.isInteger(o.wordCount) && o.wordCount >= 0 ? o.wordCount : 0,
+    hindi: Boolean(o.hindi),
+    orderIds: list(o.orderIds, 10).map((x) => cleanText(x, 40)),
+    dates: list(o.dates, 20).map((x) => cleanText(x, 60)),
+    amounts: list(o.amounts, 40).map((a) => ({ text: cleanText(a?.text, 60), value: Number.isFinite(a?.value) ? a.value : null, label: a?.label ? cleanText(a.label, 40) : null, skip: Boolean(a?.skip) })),
+    product: o.product ? cleanText(o.product, 500) : null,
+    productShare: Number.isFinite(o.productShare) ? o.productShare : null,
+    text: cleanText(o.text, 20000),
+    details: o.details && typeof o.details === 'object' ? JSON.parse(JSON.stringify(o.details)) : null,
+  };
 }
 
 /** A row made from the file (workbook.js sheetRows), as kept, with its own id; its pictures come after. Copied from the Amazon store's way of keeping a row. */
@@ -319,7 +340,8 @@ export function createFlipkartStore(dataDir) {
     /**
      * A row's last check, kept with the row, so its page shows the check's
      * steps after a reload too: { checkId, startedAt, finishedAt, seconds,
-     * steps: [{ n, name, state, detail }] }. The check before goes.
+     * steps: [{ n, name, state, detail }], order } (order: what the purchase
+     * screenshot says, as read). The check before goes.
      */
     saveCheck(id, result) {
       return locked(async () => {
@@ -332,6 +354,7 @@ export function createFlipkartStore(dataDir) {
           finishedAt: timeOrNull(result?.finishedAt),
           seconds: Number.isFinite(result?.seconds) && result.seconds >= 0 ? Math.round(result.seconds) : null,
           steps: (Array.isArray(result?.steps) ? result.steps : []).slice(0, 20).map((s, i) => ({ n: i + 1, name: cleanText(s?.name, 200), state: STEP_STATES.has(s?.state) ? s.state : 'waiting', detail: s?.detail ? cleanText(s.detail) : null })),
+          order: keptRead(result?.order),
         };
         await writeWhole(rowsFile, JSON.stringify(d));
         return row;
@@ -360,6 +383,21 @@ export function createFlipkartStore(dataDir) {
     async columnChoice() {
       const c = (await settings()).columnChoice;
       return c && typeof c === 'object' && !Array.isArray(c) ? c : null;
+    },
+    /**
+     * Flipkart's passing marks (settings.js), from Flipkart's own settings
+     * (never Amazon's). The first time, they are written there with the Amazon
+     * checker's values, so they can be seen and changed. Throws SettingsError
+     * for a mark that is wrong.
+     */
+    passingMarks() {
+      return locked(async () => {
+        const s = await settings();
+        if (s.passingMarks !== undefined) return checkMarks(s.passingMarks);
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        await writeWhole(settingsFile, JSON.stringify({ ...s, passingMarks: { ...DEFAULT_MARKS } }, null, 2));
+        return { ...DEFAULT_MARKS };
+      });
     },
     /** Remembers a choice of columns for the next file, in Flipkart's own settings (never Amazon's). */
     setColumnChoice(choice) {
