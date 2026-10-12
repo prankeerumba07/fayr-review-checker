@@ -54,14 +54,23 @@ const SAYS = {
 const CHROME_APPS = (home) => ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', join(home, 'Applications', 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome')];
 
 /**
+ * How the Live Amazon Browser keeps its saved logins: Playwright starts it
+ * with a stand-in for the Mac's keychain. The normal Chrome window is started
+ * with the same two options, so each window can read the logins the other
+ * saved in the profile.
+ */
+const KEYCHAIN = ['--use-mock-keychain', '--password-store=basic'];
+
+/**
  * The command that opens a normal Chrome window on the saved profile, at
  * Google's login page: a plain Chrome, with none of the automation flags,
- * so nothing is hidden and nothing is got around. Null when Chrome is not
- * installed.
+ * so nothing is hidden and nothing is got around; only its saved logins are
+ * kept the Live Amazon Browser's way (KEYCHAIN), so the login made there is
+ * kept. Null when Chrome is not installed.
  */
 export async function chromeCommand(profileDir, url = GOOGLE_SIGN_IN_URL, { home = homedir(), exists = (f) => access(f).then(() => true, () => false) } = {}) {
   for (const file of CHROME_APPS(home)) {
-    if (await exists(file)) return { file, args: [`--user-data-dir=${profileDir}`, '--no-first-run', '--no-default-browser-check', '--new-window', url] };
+    if (await exists(file)) return { file, args: [`--user-data-dir=${profileDir}`, '--no-first-run', '--no-default-browser-check', ...KEYCHAIN, '--new-window', url] };
   }
   return null;
 }

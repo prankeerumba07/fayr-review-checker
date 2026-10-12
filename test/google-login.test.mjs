@@ -276,7 +276,9 @@ test('the normal Chrome window: the Live Amazon Browser is closed properly first
   chrome4.child.quit();
   await closing;
   const cmd = await chromeCommand('/made-up/profile', GOOGLE_SIGN_IN_URL, { home: '/made-up/home', exists: async (f) => f.startsWith('/made-up/home/') });
-  assert.deepEqual(cmd, { file: '/made-up/home/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', args: ['--user-data-dir=/made-up/profile', '--no-first-run', '--no-default-browser-check', '--new-window', GOOGLE_SIGN_IN_URL] });
+  // Its saved logins are kept the Live Amazon Browser's way (Playwright's two keychain options), so the login made there is kept; still a normal window, with no automation option.
+  assert.deepEqual(cmd, { file: '/made-up/home/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', args: ['--user-data-dir=/made-up/profile', '--no-first-run', '--no-default-browser-check', '--use-mock-keychain', '--password-store=basic', '--new-window', GOOGLE_SIGN_IN_URL] });
+  assert.ok(!cmd.args.some((a) => /automation|remote-debugging|headless/.test(a)), 'still a normal Chrome window');
   assert.equal(await chromeCommand('/made-up/profile', GOOGLE_SIGN_IN_URL, { home: '/made-up/home', exists: async () => false }), null);
 });
 
