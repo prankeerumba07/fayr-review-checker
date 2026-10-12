@@ -15,6 +15,15 @@ export const SIPS = process.env.SIPS_BIN || 'sips';
 export const MIN_CONFIDENCE = 60;
 export const MIN_WORDS = 3;
 
+/**
+ * Tesseract's other way of telling letters from the background: part by part
+ * (Sauvola), instead of one level for the whole picture. It keeps small,
+ * light grey letters, such as the "Order #OD…" Flipkart writes under the
+ * product's name, which the usual way drops when the rest of the screen is
+ * dark or busy (black words, coloured adverts).
+ */
+export const LIGHT_LETTERS = ['-c', 'thresholding_method=2'];
+
 function run(cmd, args, { timeoutMs = 90_000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -113,14 +122,16 @@ export async function rewritePicture(file, { scale = 1, sips = run } = {}) {
  * PNG by the Mac's own picture tool and read again; with `scale`, the picture
  * is read enlarged that many times. `psm` is Tesseract's way of finding the
  * lines: '3' for a page, '11' for words scattered over it (it finds a line
- * the first way may miss). Throws when the picture could not be read at all.
+ * the first way may miss). With `light`, letters are told from the
+ * background part by part (LIGHT_LETTERS), which keeps small light grey
+ * ones. Throws when the picture could not be read at all.
  */
-export async function readLines(file, { tesseract = run, sips = run, scale = 1, psm = '3' } = {}) {
+export async function readLines(file, { tesseract = run, sips = run, scale = 1, psm = '3', light = false } = {}) {
   const langs = await tesseractLanguages();
   const use = ['eng', 'hin'].filter((l) => langs.has(l));
   const lang = use.length ? use.join('+') : 'eng';
   const read = async (f) => {
-    const tsv = await tesseract(TESSERACT, [f, 'stdout', '-l', lang, '--psm', String(psm), 'tsv']);
+    const tsv = await tesseract(TESSERACT, [f, 'stdout', '-l', lang, '--psm', String(psm), ...(light ? LIGHT_LETTERS : []), 'tsv']);
     const { words, lines } = parseTsv(tsv);
     const scored = words.filter((w) => w.conf >= 0);
     const confidence = scored.length ? Math.round(scored.reduce((a, w) => a + w.conf, 0) / scored.length) : 0;

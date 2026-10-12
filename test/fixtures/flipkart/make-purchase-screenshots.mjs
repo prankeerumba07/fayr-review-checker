@@ -8,6 +8,9 @@
 //                                  (Listing price, Selling price, Total fees, Other discount, Total amount),
 //                                  an offer and an advert with prices of their own
 //   purchase-lunch-box-coins.png   row 2's order, paid partly with SuperCoins: "Total amount ₹449 + 50"
+//   purchase-light-order-id.png    the order on row 6 of flipkart-orders.xlsx, its order ID in small light grey letters with a copy mark after it,
+//                                  as Flipkart's app writes it under the product's name, and dark adverts below:
+//                                  Tesseract's usual way drops those letters; its way for light letters keeps them
 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,13 +78,30 @@ function lunchBox() {
   </div></body></html>`;
 }
 
+function lightOrderId() {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${BASE}
+  .light-id { color: #9e9e9e; font-size: 12px; margin: 6px 0 12px; display: flex; align-items: center; gap: 6px; }
+  .copy { width: 12px; height: 12px; border: 2px solid #2a55e5; border-radius: 3px; box-sizing: border-box; }
+  .dark { height: 150px; border-radius: 10px; padding: 18px; margin-bottom: 12px; font-weight: 800; }
+  .veg { background: #9b0a4d; color: #ffe000; font-size: 30px; }
+  .credit { background: #0c2a7a; color: #fff; font-size: 24px; }</style></head><body><div class="wrap">
+    <div class="top"><span>&lt; Order Details</span><span class="help">Help</span></div>
+    <div class="item"><div class="pic"></div><div><div class="name">${LUNCH_BOX}</div><div class="small">Green</div></div></div>
+    <div class="light-id"><span>Order #${orderId(6)}</span><span class="copy"></span></div>
+    <div class="box"><div class="ok">Order Confirmed</div><div>Your Order has been placed.</div></div>
+    <div class="box">Delivery Executive details will be available once the order is out for delivery</div>
+    <div class="dark veg">Test Veggies, fresh every day</div>
+    <div class="dark credit">Get test credit in minutes</div>
+  </div></body></html>`;
+}
+
 export async function makePurchaseScreenshots() {
   const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--host-resolver-rules=MAP * ~NOTFOUND'] });
   try {
     const context = await browser.newContext({ deviceScaleFactor: 2, viewport: { width: 470, height: 900 } });
     await context.route('**/*', (r) => r.abort());
     const p = await context.newPage();
-    for (const [file, html] of [['purchase-steel-bottle.png', bottle()], ['purchase-lunch-box-coins.png', lunchBox()]]) {
+    for (const [file, html] of [['purchase-steel-bottle.png', bottle()], ['purchase-lunch-box-coins.png', lunchBox()], ['purchase-light-order-id.png', lightOrderId()]]) {
       await p.setContent(html);
       await p.locator('.wrap').screenshot({ path: join(HERE, file) });
     }

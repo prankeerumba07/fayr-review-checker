@@ -17,12 +17,19 @@ export const SECOND_LOOK_SCALE = 2;
 /**
  * The other ways a purchase screenshot is read, in turn, when the first
  * reading is not clear or lacks what is looked for, until nothing is lacking:
- * enlarged, and as words scattered over a page (Tesseract's other way of
- * finding lines, which finds a line the first way may miss). The Amazon
- * checker's two other ways need a copy of the picture made in a hidden
- * Chrome, which Flipkart does not have; they are left out.
+ * enlarged; as words scattered over a page (Tesseract's other way of
+ * finding lines, which finds a line the first way may miss); and, only for
+ * order IDs (`idsOnly`, as the Amazon checker's last way), with the letters
+ * told from the background part by part (ocr.js LIGHT_LETTERS), as the
+ * picture is and enlarged three times. Those last two keep small light grey
+ * letters: the order ID Flipkart's app writes under the product's name, and
+ * the page's address at the top of a computer's screenshot ("order_id=OD…"),
+ * on a purchase screenshot and a delivery one alike; an advert's big price
+ * they read is never an amount. The Amazon checker's two other ways need a
+ * copy of the picture made in a hidden Chrome, which Flipkart does not have;
+ * they are left out.
  */
-export const SECOND_LOOKS = [{ scale: SECOND_LOOK_SCALE }, { psm: '11' }];
+export const SECOND_LOOKS = [{ scale: SECOND_LOOK_SCALE }, { psm: '11' }, { light: true, idsOnly: true }, { light: true, scale: 3, idsOnly: true }];
 
 /**
  * The words on one or more pictures: { ok, problem, confidence, wordCount,
@@ -33,17 +40,18 @@ export const SECOND_LOOKS = [{ scale: SECOND_LOOK_SCALE }, { psm: '11' }];
  * `looks`. Without `merge`, the first better reading replaces the first one.
  * With `merge`, every reading's words are kept (`extra`, and in texts and text
  * after the picture's own lines) until nothing is lacking: what one reading
- * missed, another may have read.
+ * missed, another may have read; a look marked `idsOnly` adds its words only
+ * to idTexts, where order IDs are looked for.
  */
 export async function readText(files, { tesseract, sips, missing = null, looks = [{ scale: SECOND_LOOK_SCALE }], merge = false } = {}) {
   const pictures = [];
   const opts = { ...(tesseract ? { tesseract } : {}), ...(sips ? { sips } : {}) };
   for (const file of [].concat(files ?? []).filter(Boolean)) {
     const one = async (look = {}) => {
-      const read = await readLines(file, { ...opts, scale: look.scale ?? 1, psm: look.psm ?? '3' });
+      const read = await readLines(file, { ...opts, scale: look.scale ?? 1, psm: look.psm ?? '3', light: Boolean(look.light) });
       if (!read) return null;
       const wordCount = wordsOf(read.lines.map((l) => l.text).join(' ')).length;
-      return { ok: read.confidence >= MIN_CONFIDENCE && wordCount >= MIN_WORDS, confidence: read.confidence, wordCount, lines: read.lines, hindi: read.hindi, scale: look.scale ?? 1 };
+      return { ok: read.confidence >= MIN_CONFIDENCE && wordCount >= MIN_WORDS, confidence: read.confidence, wordCount, lines: read.lines, hindi: read.hindi, scale: look.scale ?? 1, idsOnly: Boolean(look.idsOnly) };
     };
     let first = null;
     try {
@@ -64,7 +72,7 @@ export async function readText(files, { tesseract, sips, missing = null, looks =
         if (!again) continue;
         if (merge) {
           // The first clear reading is the picture's own; the others add their words.
-          if (!best.ok && again.ok) best = again;
+          if (!best.ok && again.ok && !again.idsOnly) best = again;
           else extra.push(again);
           if (best.ok && !(missing && missing([...best.lines, ...extra.flatMap((x) => x.lines)]))) break;
         } else {
@@ -76,7 +84,7 @@ export async function readText(files, { tesseract, sips, missing = null, looks =
         }
       }
     }
-    pictures.push({ ...best, extra: extra.map((x) => x.lines) });
+    pictures.push({ ...best, extra: extra.filter((x) => !x.idsOnly).map((x) => x.lines), idLines: extra.filter((x) => x.idsOnly).map((x) => x.lines) });
   }
   const clear = pictures.filter((p) => p.ok);
   const lines = clear.flatMap((p) => p.lines);
@@ -84,6 +92,7 @@ export async function readText(files, { tesseract, sips, missing = null, looks =
   const known = new Set(own);
   const more = clear.flatMap((p) => p.extra.flat().map((l) => l.text)).filter((t) => !known.has(t) && known.add(t));
   const texts = [...own, ...more];
+  const idTexts = clear.flatMap((p) => (p.idLines ?? []).flat().map((l) => l.text)).filter((t) => !known.has(t));
   const all = pictures.flatMap((p) => p.lines.map((l) => l.text));
   return {
     ok: clear.length > 0,
@@ -93,6 +102,7 @@ export async function readText(files, { tesseract, sips, missing = null, looks =
     hindi: pictures.some((p) => p.hindi),
     lines,
     texts,
+    idTexts,
     text: (clear.length ? texts : all).join('\n'),
     pictures,
   };
@@ -119,5 +129,5 @@ function lacksOrder(lines, want = {}) {
  */
 export async function readOrderShot(files, opts = {}) {
   const read = await readText(files, { ...opts, missing: opts.missing ?? ((lines) => lacksOrder(lines, opts.want)), looks: opts.looks ?? SECOND_LOOKS, merge: true });
-  return { ...read, orderIds: orderIdsIn(read.texts), dates: datesIn(read.texts), amounts: amountsIn(read.texts) };
+  return { ...read, orderIds: orderIdsIn([...read.texts, ...read.idTexts]), dates: datesIn(read.texts), amounts: amountsIn(read.texts) };
 }

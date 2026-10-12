@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { orderIdsIn, partialOrderId, datesIn, sameDay, amountsIn, matchingAmount, amountMatch, totalRead, priceDetailsShown, totalShown, rupees, productShown, productNames, nameStartShown, nameLineStarting } from '../flipkart/screen-text.js';
 import { readOrderShot, SECOND_LOOKS } from '../flipkart/shot-read.js';
+import { readLines, LIGHT_LETTERS } from '../flipkart/ocr.js';
 import { DEFAULT_MARKS, checkMarks, SettingsError } from '../flipkart/settings.js';
 import { createFlipkartStore } from '../flipkart/store.js';
 import { checkSettings } from '../amazon/settings.js';
@@ -97,7 +98,7 @@ test("product names: a name ending with \"- Flipkart\" names the product, not th
 });
 
 test('the made-up purchase screenshots, read by Tesseract on this computer: the order ID, the day it was placed, the prices with their labels, the SuperCoins; adverts and offers are never amounts', async () => {
-  assert.deepEqual(SECOND_LOOKS, [{ scale: 2 }, { psm: '11' }], "the Amazon checker's other ways that need no hidden Chrome");
+  assert.deepEqual(SECOND_LOOKS, [{ scale: 2 }, { psm: '11' }, { light: true, idsOnly: true }, { light: true, scale: 3, idsOnly: true }], "the Amazon checker's other ways that need no hidden Chrome, then the way for light letters, as the picture is and enlarged, only for order IDs");
   const o = await readOrderShot([join(FIX, 'purchase-steel-bottle.png')], { want: { orderId: ID, amount: 349, tolerance: 1, allowance: 5 } });
   assert.equal(o.ok, true, o.problem);
   assert.ok(o.confidence >= 60 && o.wordCount >= 30, `${o.confidence} ${o.wordCount}`);
@@ -114,6 +115,26 @@ test('the made-up purchase screenshots, read by Tesseract on this computer: the 
   assert.deepEqual(totalRead(coins.amounts), { value: 449, label: 'total amount' });
   const missing = await readOrderShot([join(FIX, 'no-such-picture.png')], {});
   assert.deepEqual([missing.ok, missing.problem], [false, 'it could not be read on this computer'], 'a picture that cannot be read says so, and nothing throws');
+});
+
+test("an order ID in small light grey letters under the product's name, with dark adverts below, as Flipkart's app shows it: Tesseract's usual way drops it, and the purchase screenshot is read again with the letters told from the background part by part, which finds it", async () => {
+  const file = join(FIX, 'purchase-light-order-id.png');
+  assert.deepEqual(orderIdsIn((await readLines(file)).lines), [], 'the usual way misses it, as it did on real screenshots');
+  const o = await readOrderShot([file], { want: { orderId: orderId(6) } });
+  assert.equal(o.ok, true, o.problem);
+  assert.deepEqual(o.orderIds, [orderId(6)]);
+  assert.deepEqual([orderIdsIn(o.texts), orderIdsIn(o.idTexts)], [[], [orderId(6)]], 'read the way for light letters, whose words are only looked at for order IDs');
+  assert.ok(o.texts.some((t) => t.includes(LUNCH_BOX)), "the product's name");
+  const asked = [];
+  await readLines(file, {
+    light: true,
+    tesseract: async (cmd, args) => {
+      asked.push(args);
+      return '';
+    },
+  });
+  assert.deepEqual(asked[0].slice(-3), ['-c', 'thresholding_method=2', 'tsv'], "Tesseract's own way, part by part (Sauvola)");
+  assert.deepEqual(LIGHT_LETTERS, ['-c', 'thresholding_method=2']);
 });
 
 test("Flipkart's passing marks are in its own settings, starting with the Amazon checker's values and checked with the same words; they are written there the first time, and a wrong one is said plainly", async () => {
