@@ -7,15 +7,6 @@
 // ("Google Drive", "Flipkart review"). Nothing here opens a link.
 
 export const FLIPKART_ORIGIN = 'https://www.flipkart.com';
-
-/** Google's home page: where Google goes after a login, with an account button at the top that says who is logged in. Nothing of the account is on it. Copied from amazon/links.js. */
-export const GOOGLE_HOME = 'https://www.google.com/';
-/**
- * Google's own login page, for a person to log in by hand in the Flipkart
- * Google Browser; Google goes on to its home page afterwards. A login still
- * saved skips the form. Copied from amazon/links.js.
- */
-export const GOOGLE_SIGN_IN_URL = 'https://accounts.google.com/ServiceLogin?hl=en&continue=https%3A%2F%2Fwww.google.com%2F';
 /** A Flipkart product ID (pid) typed alone: 16 capital letters and digits, for example FCPHEW7AM9C7RU24. */
 export const PID = /^[A-Z0-9]{16}$/;
 /** A product ID found in a link or on a page: most are 16 letters and digits, but some are not (a book's is its 13-digit ISBN). */

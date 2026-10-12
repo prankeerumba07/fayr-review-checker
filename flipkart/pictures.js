@@ -4,8 +4,8 @@
 // Flipkart. https only, never an address on this computer or the local
 // network, PNG, JPEG or WebP (or a PDF, made into a picture afterwards), at
 // most 5 redirects, each to an allowed website. A Drive file is downloaded
-// with the `fetch` given (screenshots.js gives the Flipkart Google Browser's
-// own download, which carries its Google login, without opening a page);
+// with the `fetch` given (screenshots.js gives the Live Amazon Browser's own
+// download, which carries its Google login, without opening a page);
 // this file itself never logs in anywhere, and nothing is typed. A
 // Drive file whose download is refused (its owner may have turned downloading
 // off) but which can still be viewed is opened through the picture Drive
@@ -394,7 +394,7 @@ export async function downloadPicture(link, { allowed = [], fetch = safeFetch, s
     const kind = drive ? 'busy' : 'access';
     if (signal?.aborted) return { ok: false, kind: 'busy', site, says: 'the download was stopped', stopped: true };
     if (err?.code === 'PRIVATE_ADDRESS') return { ok: false, kind: 'access', site, says: 'the link leads to this computer or the local network, which is never opened' };
-    if (err?.code === 'CLOSED') return { ok: false, kind: 'busy', site, says: 'the Flipkart Google Browser is not open, so it could not be downloaded' };
+    if (err?.code === 'CLOSED') return { ok: false, kind: 'busy', site, says: 'the Live Amazon Browser is not open, so it could not be downloaded' };
     if (timer.signal.aborted || err?.code === 'TIMEOUT') return { ok: false, kind, site, says: `it did not answer within ${Math.round(timeoutMs / 1000)} seconds` };
     return { ok: false, kind, site, says: 'it could not be reached from this computer' };
   } finally {

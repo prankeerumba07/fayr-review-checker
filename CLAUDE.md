@@ -12,7 +12,7 @@ A Flipkart checker is being added to this dashboard. The Amazon checker works an
    - Also Amazon's own: `views/amazon.css`, `live-browser.html` and `settings.json` in this folder.
 3. Shared files may only get the few lines needed to add the Flipkart screen and its routes. For anything bigger, stop and ask the user first. The shared files are `serve.mjs`, `app.js`, `index.html`, `styles.css`, `lib/`, `assets/`, `package.json`, `package-lock.json`, `syntax-check.mjs`, `README.md` and `.gitignore`.
 4. If Flipkart needs something the Amazon code has, copy it into the `flipkart/` folder. Never change the Amazon one so both can use it.
-5. Flipkart gets its own settings and its own browser login folder, never Amazon's. Amazon's are `settings.json` in this folder, `data/settings.json` and `data/amazon-profile/`.
+5. Flipkart gets its own settings and its own Live Flipkart Browser folder (data/flipkart/browser-profile), never Amazon's. The one exception: Flipkart's Google Drive downloads use the Amazon screen's Google login in the Live Amazon Browser, handed over by serve.mjs, and Flipkart never changes it.
 6. After every Flipkart change, run every test (`npm test`). Every Amazon test must still pass, with the same count as before. If any Amazon test fails, undo the change and tell the user.
    - The count before any Flipkart work (2026-10-09): 392 tests in 25 test files, all passing.
    - Only the Amazon tests: `node --test --test-concurrency=1 $(ls test/*.test.mjs | grep -v '^test/flipkart')`

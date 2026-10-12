@@ -4,10 +4,10 @@
 // only; every other /local/ path still goes to the Amazon routes. Uploading a
 // file finds what its columns hold as on Amazon (or asks for them), and keeps
 // it, its rows, the pictures in its cells and the columns chosen only in
-// data/flipkart/; they show again after a restart. The Google login's routes,
-// with a pretend Flipkart Google Browser. Temporary data folders and a Live
-// Amazon Browser that is never used: nothing reaches Amazon, Flipkart, Google
-// or any other website.
+// data/flipkart/; they show again after a restart. The top bar's Google login:
+// the Amazon screen's own, handed over by serve.mjs, read as it is. Temporary
+// data folders and a Live Amazon Browser that is never used: nothing reaches
+// Amazon, Flipkart, Google or any other website.
 // Run: node test/flipkart-routes.test.mjs
 
 import { test, after } from 'node:test';
@@ -24,8 +24,7 @@ import { createHandler, createSessions, bearerOf } from '../serve.mjs';
 import { createFlipkartRoutes } from '../flipkart/routes.js';
 import { MAX_SHEET_BYTES } from '../flipkart/store.js';
 import { ONLY_FLIPKART_NAMES } from '../flipkart/browser.js';
-import { isFlipkartSite, GOOGLE_SIGN_IN_URL } from '../flipkart/links.js';
-import { googleAccountFrom } from '../flipkart/page-read.js';
+import { isFlipkartSite } from '../flipkart/links.js';
 import { createStore } from '../amazon/store.js';
 import { createAmazonRoutes } from '../amazon/routes.js';
 import { FILE, HEADER, orderId, orderShot, deliveryShot, reviewLink, reviewShot, person } from './fixtures/flipkart/make-flipkart.mjs';
@@ -180,11 +179,12 @@ test("without Flipkart's routes, /local/flipkart/ paths are not found and the Am
   assert.deepEqual([(await call('GET', '/local/flipkart/status', { at })).status, (await call('GET', '/local/amazon/campaigns', { at })).status], [404, 200]);
 });
 
-test("npm start plugs Flipkart's routes in beside the Amazon routes, with the same session token and the same data folder", () => {
+test("npm start plugs Flipkart's routes in beside the Amazon routes, with the same session token, the same data folder and the Amazon screen's Google login: its state and the Live Amazon Browser's own download", () => {
   const src = readFileSync(join(ROOT, 'serve.mjs'), 'utf8');
   assert.match(src, /const \{ createFlipkartRoutes \} = await import\('\.\/flipkart\/routes\.js'\);/);
   assert.match(src, /const local = createAmazonRoutes\(\{[^\n]*auth: \(req\) => sessions\.verify\(bearerOf\(req\)\) \}\);/);
-  assert.match(src, /const flipkart = createFlipkartRoutes\(\{ dataDir, log, auth: \(req\) => sessions\.verify\(bearerOf\(req\)\) \}\);/);
+  assert.match(src, /const amazonGoogle = \{ view: \(\) => google\.view\(\), busy: \(\) => google\.busy, amazonLogin: \(\) => \(\{ state: login\.view\(\)\.state, busy: login\.busy \}\), loggedOut: \(\) => google\.loggedOut\(\), begin: \(\) => live\.begin\(\), fetch: \(url, init\) => live\.fetch\(url, init\) \};/);
+  assert.match(src, /const flipkart = createFlipkartRoutes\(\{ dataDir, log, google: amazonGoogle, auth: \(req\) => sessions\.verify\(bearerOf\(req\)\) \}\);/);
   assert.match(src, /createServer\(createHandler\(\{ sessions, local, flipkart \}\)\)/);
 });
 
@@ -388,17 +388,14 @@ test('nothing is downloaded and no link is opened: the file is read and shown on
   assert.deepEqual(outside, [], 'no connection to any website');
   assert.deepEqual(fetched, [], 'nothing fetched');
   // And no Flipkart file has a way to reach a website or start a program, but these, each for its own reason:
-  // the Live Flipkart Browser (browser.js), which reads campaigns' products, and the Flipkart Google Browser
-  // (google-browser.js), for the Google login and the Google Drive downloads with its login, use the browser
-  // tool; the downloads (pictures.js) use https, through the fetch they are given; getting a row's screenshots
-  // (screenshots.js) passes that fetch on; the Google login (google-login.js) may open a normal Chrome window,
-  // and making a PDF into a picture (picture-fix.js) uses the Mac's own tools. Every other file has none.
+  // the Live Flipkart Browser (browser.js), which reads campaigns' products, uses the browser tool; the
+  // downloads (pictures.js) use https, through the fetch they are given; getting a row's screenshots
+  // (screenshots.js) passes on the Live Amazon Browser's own download, handed over by serve.mjs; and making a
+  // PDF into a picture (picture-fix.js) uses the Mac's own tools. Every other file has none.
   const TOOLS = {
     'browser.js': ["import { chromium } from 'playwright-core';"],
-    'google-browser.js': ["import { chromium } from 'playwright-core';", 'request.fetch(', 'fetch('],
     'pictures.js': ["from 'node:https'", "from 'node:net'", 'fetch('],
     'screenshots.js': ['fetch('],
-    'google-login.js': ["from 'node:child_process'"],
     'picture-fix.js': ["from 'node:child_process'"],
   };
   for (const f of readdirSync(join(ROOT, 'flipkart'))) {
@@ -414,71 +411,45 @@ test('nothing is downloaded and no link is opened: the file is read and shown on
   assert.deepEqual([isFlipkartSite('https://accounts.google.com/'), isFlipkartSite('https://drive.google.com/')], [false, false]);
 });
 
-/** A stand-in for the Flipkart Google Browser: its cookies (names only), what its pages show, and whether it was stopped. */
-function pretendGoogleBrowser({ cookies = [] } = {}) {
-  const b = {
-    cookies,
-    asked: [],
-    opened: [],
-    begun: 0,
-    stopped: 0,
-    window: false,
-    profileDir: '/made-up/data/flipkart/google-profile',
-    async cookieNames(urls) {
-      b.asked.push(urls);
-      return b.cookies;
-    },
-    async begin() {
-      b.begun++;
-      b.window = true;
-    },
-    isOpen: () => b.window,
-    async open(url) {
-      b.opened.push(url);
-      return { ok: true, status: 200, url };
-    },
-    async readGoogle() {
-      const line = { url: 'https://accounts.google.com/v3/signin/identifier', title: 'Sign in - Google Accounts', account: null, signIn: false, loginForm: true, refused: false, robot: false };
-      return b.window ? { account: googleAccountFrom(line), line } : null;
-    },
-    async close() {
-      b.window = false;
-    },
-    async stop() {
-      b.stopped++;
-      b.window = false;
-    },
+/** A stand-in for the Amazon screen's Google login, as serve.mjs hands it over: its state, and whatever else of it is used. */
+function pretendAmazonGoogle(state) {
+  const g = {
+    now: state,
+    used: [],
+    view: () => ({ ...g.now }),
+    busy: () => false,
+    amazonLogin: () => ({ state: 'in', busy: false }),
+    loggedOut: () => g.used.push('loggedOut'),
+    begin: async () => g.used.push('begin'),
+    fetch: async () => (g.used.push('fetch'), new Response('')),
   };
-  return b;
+  return g;
 }
 
-test('the Google login over HTTP, as on Amazon: the first time the screen asks, the saved login is checked with no window opened; "Log in to Google" opens Google\'s login page in the Flipkart Google Browser; only POST for the buttons, with the same safety; the window is stopped when the dashboard stops', async () => {
+test("the top bar's Google login is the Amazon screen's own, read as it is, so both screens always show the same login; Flipkart has no Google buttons of its own (they are the Amazon screen's routes), and nothing of that login, its window or data/flipkart/ is changed", async () => {
   const dir = tempDir();
-  const googleBrowser = pretendGoogleBrowser();
-  const routes = createFlipkartRoutes({ dataDir: dir, auth, googleBrowser });
+  const google = pretendAmazonGoogle({ state: 'out', name: null, says: null, chrome: false });
+  const routes = createFlipkartRoutes({ dataDir: dir, auth, google });
   const at = await serve({ flipkart: routes });
-  const first = await call('GET', '/local/flipkart/account', { at });
-  assert.deepEqual([first.status, first.json], [200, { google: { state: 'checking', name: null, says: null, chrome: false } }]);
-  let seen;
-  for (let i = 0; i < 100 && (seen = (await call('GET', '/local/flipkart/account', { at })).json.google).state === 'checking'; i++) await new Promise((r) => setTimeout(r, 20));
-  assert.deepEqual(seen, { state: 'out', name: null, says: null, chrome: false });
-  assert.deepEqual([googleBrowser.asked.length, googleBrowser.begun, googleBrowser.opened], [1, 0, []], 'checked once, from the cookies, with no window and no page');
+  const account = async () => (await call('GET', '/local/flipkart/account', { at })).json;
+  assert.deepEqual(await account(), { google: { state: 'out', name: null, says: null, chrome: false } });
+  // A login made on either screen: the Flipkart top bar says so the next time it asks.
+  google.now = { state: 'in', name: 'Test Person', says: null, chrome: false };
+  assert.deepEqual(await account(), { google: { state: 'in', name: 'Test Person', says: null, chrome: false } });
+  google.now = { state: 'waiting', name: null, says: null, chrome: true };
+  assert.deepEqual((await account()).google, { state: 'waiting', name: null, says: null, chrome: true });
   assert.equal((await call('GET', '/local/flipkart/account', { at, token: null })).status, 401, 'no token');
   assert.equal((await call('GET', '/local/flipkart/account', { at, site: 'cross-site' })).status, 403, 'another website');
   const post = await call('POST', '/local/flipkart/account', { at });
   assert.deepEqual([post.status, post.headers.allow], [405, 'GET, HEAD']);
-  const pressed = await call('POST', '/local/flipkart/google/log-in', { at, body: Buffer.from('{}'), type: 'application/json' });
-  assert.equal(pressed.status, 200);
-  assert.ok(['checking', 'waiting'].includes(pressed.json.google.state), pressed.text);
-  for (let i = 0; i < 100 && (await call('GET', '/local/flipkart/account', { at })).json.google.state !== 'waiting'; i++) await new Promise((r) => setTimeout(r, 20));
-  assert.deepEqual([googleBrowser.begun, googleBrowser.opened], [1, [GOOGLE_SIGN_IN_URL]], "the window opened, with Google's login page");
-  assert.equal((await call('GET', '/local/flipkart/account', { at })).json.google.state, 'waiting', 'waiting for the person to log in by hand');
-  const get = await call('GET', '/local/flipkart/google/log-in', { at });
-  assert.deepEqual([get.status, get.headers.allow], [405, 'POST']);
-  assert.equal((await call('POST', '/local/flipkart/google/log-in', { at, token: null })).status, 401);
-  assert.equal((await call('POST', '/local/flipkart/google/log-in', { at, site: 'cross-site' })).status, 403);
-  assert.equal((await call('POST', '/local/flipkart/google/sign-out', { at })).status, 404, 'no other Google button');
+  // The buttons are the Amazon screen's own routes: Flipkart has none.
+  for (const button of ['log-in', 'check-login', 'log-in-in-chrome', 'logged-in']) {
+    assert.equal((await call('POST', `/local/flipkart/google/${button}`, { at, body: Buffer.from('{}'), type: 'application/json' })).status, 404, button);
+  }
   await routes.close();
-  assert.equal(googleBrowser.stopped, 1, 'the Flipkart Google Browser is closed when the dashboard stops, and never opens again');
-  assert.deepEqual(filesIn(dir), ['flipkart/login-log.txt'], 'the Google login\'s lines, kept only in data/flipkart/');
+  assert.deepEqual(google.used, [], 'the top bar only reads the login: no window opened, nothing downloaded, nothing changed');
+  assert.deepEqual(filesIn(dir), [], 'nothing kept for it in data/flipkart/: no Google login, profile or log of its own');
+  // With none handed over, there is no state to show, so the top bar says it is checking.
+  const bare = await serve({ flipkart: createFlipkartRoutes({ dataDir: tempDir(), auth }) });
+  assert.deepEqual((await call('GET', '/local/flipkart/account', { at: bare })).json, { google: null });
 });

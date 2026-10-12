@@ -142,9 +142,10 @@ function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT,
       if (method === 'GET' && path === '/local/flipkart/sheet') return structuredClone(saved);
       if (method === 'GET' && path === '/local/flipkart/campaigns') return { campaigns: [], reading: false };
       if (method === 'GET' && path === '/local/flipkart/account') return structuredClone({ google: local.google });
-      if (method === 'POST' && path.startsWith('/local/flipkart/google/')) {
+      // The Google login's buttons are the Amazon screen's own routes, which answer with the Amazon screen's whole top bar.
+      if (method === 'POST' && path.startsWith('/local/amazon/google/')) {
         if (press) local.google = await press(path);
-        return structuredClone({ google: local.google });
+        return structuredClone({ state: 'in', name: 'Amazon Person', loggedIn: true, google: local.google, hindi: true, english: true, browserOpen: true, running: null });
       }
       throw new ApiError(404, 'Not found.');
     },
@@ -405,15 +406,14 @@ test('the rows still show after the page is reloaded, and a CSV file says it has
   assert.equal(textOf(byId(empty.page(), 'no-rows')), 'This tab has column names but no rows under them.');
 });
 
-test('the Google login in the top bar, the same as on the Amazon screen: the same states, words and buttons, and the soft box under the bar, with the Flipkart Google Browser in place of the Live Amazon Browser', async () => {
-  // The same words as the Amazon screen's, each with the Flipkart Google Browser in place of the Live Amazon Browser.
+test("the Google login in the top bar is the Amazon screen's own: the same states, words and buttons, and the soft box under the bar; its buttons ask the Amazon screen's own routes, so logging in on either screen counts for both", async () => {
+  // Exactly the Amazon screen's words: it is the same login, in the Live Amazon Browser.
   assert.deepEqual(Object.keys(GOOGLE_WORDS), Object.keys(AMAZON_GOOGLE_WORDS));
   for (const [key, words] of Object.entries(AMAZON_GOOGLE_WORDS)) {
-    if (typeof words === 'function') for (const name of ['Test Person', null]) assert.equal(GOOGLE_WORDS[key](name), words(name).replaceAll('Live Amazon Browser', 'Flipkart Google Browser'), key);
-    else assert.equal(GOOGLE_WORDS[key], words.replaceAll('Live Amazon Browser', 'Flipkart Google Browser'), key);
+    if (typeof words === 'function') for (const name of ['Test Person', null]) assert.equal(GOOGLE_WORDS[key](name), words(name), key);
+    else assert.equal(GOOGLE_WORDS[key], words, key);
   }
-  assert.ok(Object.values(GOOGLE_WORDS).some((w) => typeof w === 'string' && w.includes('Flipkart Google Browser')));
-  assert.doesNotMatch(JSON.stringify(Object.values(GOOGLE_WORDS).filter((w) => typeof w === 'string')), /Amazon/);
+  assert.match(GOOGLE_WORDS.outHow, /Live Amazon Browser/);
   assert.equal(LOGIN_POLL_MS, AMAZON_LOGIN_POLL_MS, 'the top bar asks every 2 seconds, as on Amazon');
   const bar = (s) => s.ctx && flipkart.bar(s.ctx);
   const line = (s) => textOf(byId(bar(s), 'google-line'));
@@ -427,16 +427,18 @@ test('the Google login in the top bar, the same as on the Amazon screen: the sam
   let pressed = [];
   const s = await opened(fakeLocal({ press: async (path) => (pressed.push(path), { state: 'waiting', name: null, says: null, chrome: false }) }));
   assert.deepEqual([line(s), buttons(s)], ['Not logged in to Google', [['google-log-in', 'Log in to Google']]]);
-  assert.equal(byId(bar(s), 'google-log-in').attrs.title, "Google's login page opens in the Flipkart Google Browser window, for you to log in there by hand. The screenshots on Google Drive are downloaded through that login.");
+  assert.equal(byId(bar(s), 'google-log-in').attrs.title, "Google's login page opens in the Live Amazon Browser window, for you to log in there by hand. The screenshots on Google Drive are downloaded through that login.");
   assert.deepEqual(findAll(bar(s), (n) => n.attrs?.['data-id'] === 'market').length, 1, 'the marketplace tabs come first');
   byId(bar(s), 'google-log-in').attrs.onclick();
   await settle();
-  assert.deepEqual(pressed, ['/local/flipkart/google/log-in'], 'the server is asked to open the Flipkart Google Browser');
-  assert.deepEqual(s.local.calls.at(-1), { method: 'POST', path: '/local/flipkart/google/log-in', body: {} });
+  assert.deepEqual(pressed, ['/local/amazon/google/log-in'], "the Amazon screen's own route, which opens Google's login page in the Live Amazon Browser");
+  assert.deepEqual(s.local.calls.at(-1), { method: 'POST', path: '/local/amazon/google/log-in', body: {} });
+  assert.deepEqual(s.ctx.state.account.data, { google: { state: 'waiting', name: null, says: null, chrome: false } }, "only the Google login of the Amazon route's answer is kept, never the Amazon login");
+  assert.equal(byId(bar(s), 'account-line'), null, 'no Amazon login line');
   // Waiting: what to do, in a soft box under the bar, and the normal Chrome window offered.
   assert.equal(line(s), 'Waiting for you to log in to Google');
-  assert.deepEqual(help(s), ['Log in to Google in the Flipkart Google Browser window. This tool never types, stores or reads a password; Chrome keeps the login, so it stays after a restart.', 'If Google will not let you log in there, use a normal Chrome window instead: Log in to Google in a normal Chrome window']);
-  assert.equal(byId(bar(s), 'google-log-in-in-chrome').attrs.title, "For when Google will not let you log in inside the Flipkart Google Browser window: the dashboard closes that window, opens a normal Chrome window with the same saved profile on Google's login page, and you log in there.");
+  assert.deepEqual(help(s), ['Log in to Google in the Live Amazon Browser window. This tool never types, stores or reads a password; Chrome keeps the login, so it stays after a restart.', 'If Google will not let you log in there, use a normal Chrome window instead: Log in to Google in a normal Chrome window']);
+  assert.equal(byId(bar(s), 'google-log-in-in-chrome').attrs.title, "For when Google will not let you log in inside the Live Amazon Browser window: the dashboard closes that window, opens a normal Chrome window with the same saved profile on Google's login page, and you log in there.");
   // The normal Chrome window open: "I have logged in".
   s.local.google = { state: 'waiting', name: null, says: null, chrome: true };
   s.timers?.[0]?.fn?.();
@@ -448,7 +450,7 @@ test('the Google login in the top bar, the same as on the Amazon screen: the sam
   await flipkart.enter(s.ctx);
   await settle();
   assert.deepEqual([line(s), buttons(s), byId(bar(s), 'google-help')], ['Logged in to Google as Test Person', [], null]);
-  s.local.google = { state: 'problem', name: null, says: 'Google showed a robot check in the Flipkart Google Browser window, so the Google login could not be checked. This dashboard never answers a robot check. Press "Check the Google login again" when you want to try again.', chrome: false };
+  s.local.google = { state: 'problem', name: null, says: 'Google showed a robot check in the Live Amazon Browser window, so the Google login could not be checked. This dashboard never answers a robot check. Press "Check the Google login again" when you want to try again.', chrome: false };
   await flipkart.enter(s.ctx);
   await settle();
   assert.equal(line(s), 'The Google login could not be checked');

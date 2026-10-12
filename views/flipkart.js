@@ -1,9 +1,10 @@
 // The Flipkart screen. The top bar holds the marketplace tabs (bar() below),
-// with Flipkart chosen and Amazon one press away, and the Google login, the
-// same as on the Amazon screen (the same states, words, buttons and soft box
-// under the bar), with the Flipkart Google Browser in place of the Live Amazon
-// Browser: the screenshots on Google Drive are downloaded through that login.
-// There is no Amazon login and no Flipkart login here. The page: the upload area,
+// with Flipkart chosen and Amazon one press away, and the Google login: the
+// Amazon screen's own, in the Live Amazon Browser, shown the same way (the
+// same states, words, buttons and soft box under the bar). Its buttons ask the
+// Amazon screen's own routes, so logging in to Google on either screen counts
+// for both, and the screenshots on Google Drive are downloaded through that
+// login. There is no Amazon login and no Flipkart login here. The page: the upload area,
 // which looks like the Amazon one ("Choose file", or drop the file anywhere
 // on the page: app.js passes it on), for an .xlsx or a .csv file. The local
 // server finds what each column holds, as on Amazon; when a needed column
@@ -25,30 +26,32 @@
 // login; this screen only shows them.
 
 const BASE = '/local/flipkart';
+/** The Google login's buttons are the Amazon screen's own routes: it is the same login. */
+const GOOGLE_BUTTONS_BASE = '/local/amazon';
 /** How often the screen looks again while a campaign's products are read from Flipkart, and how often the top bar asks the server about the Google login. */
 const READING_POLL_MS = 2000;
 export const LOGIN_POLL_MS = READING_POLL_MS;
 
 /**
  * The Google login's words in the top bar, one state at a time: the Amazon
- * screen's (views/amazon.js), with the Flipkart Google Browser in place of
- * the Live Amazon Browser. The screenshots on Google Drive are downloaded
- * through this login.
+ * screen's own (views/amazon.js), since it is the same login, in the Live
+ * Amazon Browser. The screenshots on Google Drive are downloaded through this
+ * login.
  */
 export const GOOGLE_WORDS = {
   checking: 'Checking the Google login…',
   in: (name) => (name ? `Logged in to Google as ${name}` : 'Logged in to Google'),
   out: 'Not logged in to Google',
   outButton: 'Log in to Google',
-  outHow: "Google's login page opens in the Flipkart Google Browser window, for you to log in there by hand. The screenshots on Google Drive are downloaded through that login.",
-  waiting: 'Log in to Google in the Flipkart Google Browser window. This tool never types, stores or reads a password; Chrome keeps the login, so it stays after a restart.',
+  outHow: "Google's login page opens in the Live Amazon Browser window, for you to log in there by hand. The screenshots on Google Drive are downloaded through that login.",
+  waiting: 'Log in to Google in the Live Amazon Browser window. This tool never types, stores or reads a password; Chrome keeps the login, so it stays after a restart.',
   waitingChrome: 'Log in to Google in the normal Chrome window that just opened (it uses the same saved profile, so the login is kept), then press "I have logged in".',
   waitingShort: 'Waiting for you to log in to Google',
   doneButton: 'I have logged in',
   problemShort: 'The Google login could not be checked',
   problemButton: 'Check the Google login again',
   chromeButton: 'Log in to Google in a normal Chrome window',
-  chromeHow: "For when Google will not let you log in inside the Flipkart Google Browser window: the dashboard closes that window, opens a normal Chrome window with the same saved profile on Google's login page, and you log in there.",
+  chromeHow: "For when Google will not let you log in inside the Live Amazon Browser window: the dashboard closes that window, opens a normal Chrome window with the same saved profile on Google's login page, and you log in there.",
   chromeOffer: 'If Google will not let you log in there, use a normal Chrome window instead:',
 };
 
@@ -276,7 +279,7 @@ async function campaignAction(ctx, key, action) {
   }
 }
 
-// ---- the Google login in the top bar (copied from the Amazon screen, views/amazon.js, and changed for Flipkart) ----
+// ---- the Google login in the top bar (copied from the Amazon screen, views/amazon.js: the same login) ----
 
 async function loadAccount(ctx) {
   const n = ++ctx.state.account.seq;
@@ -294,15 +297,15 @@ async function loadAccount(ctx) {
   }
 }
 
-/** One of the Google login's buttons ('google/…'): the server does it, and the top bar follows it. */
+/** One of the Google login's buttons ('google/…'): the Amazon screen's own route does it, exactly as there, and the top bar follows it. Only the Google login of its answer is kept. */
 async function startLogin(ctx, what) {
   if (ctx.state.account.busy) return;
   ctx.update((st) => Object.assign(st.account, { busy: true, error: null }));
   try {
-    const data = await ctx.local.api('POST', `${BASE}/${what}`, {});
+    const data = await ctx.local.api('POST', `${GOOGLE_BUTTONS_BASE}/${what}`, {});
     // An answer to an earlier question must not draw over this one.
     ctx.state.account.seq++;
-    ctx.update((st) => Object.assign(st.account, { busy: false, data }));
+    ctx.update((st) => Object.assign(st.account, { busy: false, data: { google: data?.google ?? null } }));
   } catch (err) {
     ctx.update((st) => Object.assign(st.account, { busy: false, error: err.message }));
   }
@@ -353,8 +356,8 @@ function marketTabs(ctx) {
  * The Google login in the top bar, the same as on the Amazon screen: one
  * state at a time, its button when one is needed, and what to do in a soft
  * box under the bar. The screenshots on Google Drive are downloaded through
- * this login. When Google will not let anyone log in inside the Flipkart
- * Google Browser window, a normal Chrome window on the same saved profile is
+ * this login. When Google will not let anyone log in inside the Live Amazon
+ * Browser window, a normal Chrome window on the same saved profile is
  * offered. A button's refusal, or a server that cannot be asked, is said
  * under the bar too, as the Amazon login line says it.
  */

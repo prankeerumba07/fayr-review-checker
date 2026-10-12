@@ -239,7 +239,9 @@ export async function startDashboard({ port = PORT, dataDir = join(ROOT, 'data')
   // Every try at sending an email, kept in data/email-log.txt: the time, the row, what happened and the reason; never the email's words or address.
   const emailLines = createLineLog(join(store.dataDir, EMAIL_LOG), { log });
   const local = createAmazonRoutes({ store, live, images, log, login, google, emailLog: emailLines, auth: (req) => sessions.verify(bearerOf(req)) });
-  const flipkart = createFlipkartRoutes({ dataDir, log, auth: (req) => sessions.verify(bearerOf(req)) });
+  // Flipkart's top bar shows this same Google login, and its Google Drive screenshots are downloaded through the Live Amazon Browser's own download, without opening a page; Flipkart never changes that window.
+  const amazonGoogle = { view: () => google.view(), busy: () => google.busy, amazonLogin: () => ({ state: login.view().state, busy: login.busy }), loggedOut: () => google.loggedOut(), begin: () => live.begin(), fetch: (url, init) => live.fetch(url, init) };
+  const flipkart = createFlipkartRoutes({ dataDir, log, google: amazonGoogle, auth: (req) => sessions.verify(bearerOf(req)) });
   const server = createServer(createHandler({ sessions, local, flipkart }));
   await new Promise((resolve, reject) => {
     server.once('error', reject);

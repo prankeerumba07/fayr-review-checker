@@ -2,8 +2,7 @@
 // never served as a file): the uploaded file (upload.xlsx or upload.csv), the
 // rows made from it with the columns found (rows.json), the pictures placed
 // in its cells and the screenshots got for a row (pictures/), Flipkart's own
-// settings with the columns chosen last and the name of the Google account
-// logged in to the Flipkart Google Browser (settings.json), the campaigns with what was read from their products'
+// settings with the columns chosen last (settings.json), the campaigns with what was read from their products'
 // Flipkart pages (campaigns.json), and each product's public reviews
 // (reviews/<product ID>.json). Nothing here writes anywhere else in data/.
 // Copied from the Amazon store's way of writing (amazon/store.js): a file is
@@ -315,19 +314,6 @@ export function createFlipkartStore(dataDir) {
     pictureFile(row, which, index) {
       const f = row?.pictures?.[which]?.[index]?.file;
       return typeof f === 'string' && f ? join(picturesDir, basename(f)) : null;
-    },
-    /** The Google account seen when someone last logged in to Google in the Flipkart Google Browser: { name, email, at }, or null. Only the name and email, never a password or a cookie. Copied from the Amazon store. */
-    async googleAccount() {
-      const g = (await settings()).googleAccount;
-      return g && typeof g === 'object' && (g.name || g.email) ? { name: g.name ?? null, email: g.email ?? null, at: g.at ?? null } : null;
-    },
-    setGoogleAccount(account) {
-      return locked(async () => {
-        const s = await settings();
-        await mkdir(dir, { recursive: true, mode: 0o700 });
-        const googleAccount = account ? { name: cleanText(account.name, 120) || null, email: cleanText(account.email, 200) || null, at: account.at ?? new Date().toISOString() } : null;
-        await writeWhole(settingsFile, JSON.stringify({ ...s, googleAccount }, null, 2));
-      });
     },
     async columnChoice() {
       const c = (await settings()).columnChoice;

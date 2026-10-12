@@ -4,30 +4,26 @@
 // CORS headers. The routes: /local/flipkart/status (the checker is not ready
 // yet), /local/flipkart/sheet (GET the uploaded file's rows, POST a file to
 // upload), /local/flipkart/campaigns (GET them; POST to add one, to change
-// one, or to end, delete or read again one), /local/flipkart/account (GET:
-// the Google login, for the top bar) and /local/flipkart/google/… (POST: the
-// Google login's buttons, as on Amazon). The file is read on this
+// one, or to end, delete or read again one) and /local/flipkart/account
+// (GET: the Google login, for the top bar). The file is read on this
 // computer, its columns are found as on Amazon (or chosen on the screen when
 // a needed one cannot be found), and it is kept in data/flipkart/ with its
 // rows and the pictures placed in its cells; its links are only shown, never
 // opened, and nothing is downloaded. A campaign's products are read, after it
 // is saved, from their Flipkart pages in the Live Flipkart Browser
 // (browser.js), one page at a time; the window opens only then, never when
-// the dashboard starts. The Google login, for the screenshots on Google Drive,
-// has a window of its own, the Flipkart Google Browser (google-browser.js,
-// google-login.js): it opens only when "Log in to Google" is pressed (or a
-// Google Drive screenshot is downloaded, later), and the saved login is
-// checked without opening it. Both windows close when the dashboard stops.
+// the dashboard starts, and it closes when the dashboard stops. The Google
+// login, for the screenshots on Google Drive, is the Amazon screen's own, in
+// the Live Amazon Browser, handed over by serve.mjs: the top bar shows its
+// state, and its buttons are the Amazon screen's own routes, so logging in on
+// either screen counts for both. Nothing here changes that login or that
+// window.
 
 import { openWorkbook, guessColumns, columnProblems, rememberedChoice, sheetRows, SheetError, FIELDS, RESULT_FIELDS, RESULT_HEADERS, columnLetter, resultColumns, dayFirst } from './workbook.js';
 import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS } from './store.js';
 import { cellLinks, linkLabel, linksIn } from './links.js';
 import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct } from './campaigns.js';
 import { FlipkartBrowser } from './browser.js';
-import { FlipkartGoogleBrowser } from './google-browser.js';
-import { createGoogleLogin } from './google-login.js';
-import { createLineLog, LOGIN_LOG } from './line-log.js';
-import { join } from 'node:path';
 
 const TOO_BIG = `The file is larger than ${MAX_SHEET_BYTES / (1024 * 1024)} megabytes, so save a smaller copy (only the Flipkart tab, for example), then upload that.`;
 const MAX_JSON_BYTES = 64 * 1024;
@@ -236,18 +232,14 @@ export function sheetView(saved) {
  * browser — tests only: the Live Flipkart Browser to read products with;
  * else makeBrowser() makes one the first time a product is read (tests give
  * one that counts, to show that no window opens before then).
- * googleBrowser — the Flipkart Google Browser (tests give a pretend one);
- * google — the Google login (tests may give their own); its lines go to the
- * Terminal window and to data/flipkart/login-log.txt.
+ * google — the Amazon screen's Google login, handed over by serve.mjs: the
+ * top bar shows its state (view), and screenshots.js says what else of it
+ * the downloads use; tests give a pretend one.
  * The answer is the routes' handler; its close() closes the Live Flipkart
- * Browser, the Flipkart Google Browser and a normal Chrome window still open
- * for the Google login, when the dashboard stops.
+ * Browser, when the dashboard stops.
  */
-export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = null, makeBrowser = () => new FlipkartBrowser({ dataDir }), now = () => new Date(), googleBrowser = new FlipkartGoogleBrowser({ dataDir }), google = null }) {
+export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = null, makeBrowser = () => new FlipkartBrowser({ dataDir }), now = () => new Date(), google = null }) {
   const store = createFlipkartStore(dataDir);
-  // The Google login in its own window, the way the Amazon checker's works; checked the first time the screen asks.
-  const googleLogin = google ?? createGoogleLogin({ live: googleBrowser, store, log: createLineLog(join(dataDir, 'flipkart', LOGIN_LOG), { log }) });
-  let googleChecked = false;
   let live = browser;
   let closing = false; // the dashboard is stopping: no window is made, and no product is read
   const liveBrowser = () => {
@@ -493,28 +485,10 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
     return sendJson(res, 200, { made: saved.rows.length, tab: tab.name, unplaced: made.unplaced, ...sheetView(saved) });
   }
 
-  // ---- the Google login (copied from the Amazon routes, amazon/routes.js, and changed for Flipkart) ----
+  // ---- the Google login: the Amazon screen's own ----
 
-  /** The top bar: the Google login's one state ({ state, name, says, chrome }). The first time the screen asks, the saved login is checked, without opening the window. */
-  function accountView() {
-    if (!googleChecked && !closing) {
-      googleChecked = true;
-      if (!googleLogin.busy) googleLogin.check('when the Flipkart screen first asked').catch((err) => log(`Google login failed: ${err?.name ?? 'Error'}`));
-    }
-    return { google: googleLogin.view() };
-  }
-
-  /** The Google login's buttons: started here, followed through the top bar; one at a time. "I have logged in" answers once the login has been read, so the top bar is right at once. */
-  async function googleRoute(req, res, flow, { wait = false } = {}) {
-    await readBody(req, MAX_JSON_BYTES, 'That is too large to send here.');
-    if (closing) throw new HttpError(409, 'The dashboard is stopping.');
-    googleChecked = true;
-    if (!googleLogin.busy) {
-      const going = flow().catch((err) => log(`Google login failed: ${err?.name ?? 'Error'}`));
-      if (wait) await going;
-    }
-    return sendJson(res, 200, accountView());
-  }
+  /** The top bar: the Google login's one state ({ state, name, says, chrome }), read as it is, the same as on the Amazon screen; null when none was handed over. */
+  const accountView = () => ({ google: google ? google.view() : null });
 
   /** True when the path was one of these routes (answered or refused). */
   async function handle(req, res, url) {
@@ -540,20 +514,6 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         if (method === 'GET') return sendJson(res, 200, accountView()), true;
         res.setHeader('Allow', 'GET, HEAD');
         return refuse(res, 405, 'Only GET and HEAD are answered here.'), true;
-      }
-      const google = /^google\/(log-in|check-login|log-in-in-chrome|logged-in)$/.exec(path);
-      if (google) {
-        if (method !== 'POST') {
-          res.setHeader('Allow', 'POST');
-          return refuse(res, 405, 'Only POST is answered here.'), true;
-        }
-        const flows = {
-          'log-in': () => googleLogin.logIn('when "Log in to Google" was pressed'),
-          'check-login': () => googleLogin.check('when "Check the Google login again" was pressed'),
-          'log-in-in-chrome': () => googleLogin.logInInChrome('when "Log in to Google in a normal Chrome window" was pressed'),
-          'logged-in': () => googleLogin.done('when "I have logged in" was pressed'),
-        };
-        return (await googleRoute(req, res, flows[google[1]], { wait: google[1] === 'logged-in' })), true;
       }
       if (path === 'sheet') {
         if (method === 'GET') return sendJson(res, 200, sheetView(await store.sheet())), true;
@@ -587,16 +547,10 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       return true;
     }
   }
-  /**
-   * Only when the dashboard stops: a normal Chrome window still open for the
-   * Google login is asked to quit, the Live Flipkart Browser and the Flipkart
-   * Google Browser are closed properly, when they were opened, and neither
-   * opens again; no product is read after that.
-   */
+  /** Only when the dashboard stops: the Live Flipkart Browser is closed properly, when it was opened, and no product is read after that. */
   handle.close = async () => {
     closing = true;
-    await googleLogin.close();
-    await Promise.allSettled([live ? live.close() : null, googleBrowser.stop()]);
+    if (live) await live.close();
   };
   return handle;
 }

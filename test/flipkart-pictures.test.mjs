@@ -45,15 +45,15 @@ test("the picture websites besides Google Drive are the Amazon checker's own lis
   assert.deepEqual(ALLOWED, ['storage.googleapis.com', 'tryboxs.in', 'www.tryboxs.in']);
 });
 
-test('Google Drive: a file open to everyone with the link is downloaded from its direct-download address, with the fetch given (the Flipkart Google Browser\'s)', async () => {
+test('Google Drive: a file open to everyone with the link is downloaded from its direct-download address, with the fetch given (the Live Amazon Browser\'s)', async () => {
   const { out, calls } = await get(DRIVE, () => answer(200, PNG, { 'Content-Type': 'application/octet-stream' }));
   assert.deepEqual([out.ok, out.type, out.site, out.data.equals(PNG)], [true, 'image/png', 'Google Drive', true]);
   assert.deepEqual(calls.map((c) => c.url), [driveDownloadUrl(ID)]);
   assert.equal(calls[0].init.redirect, 'manual', 'a redirect is never followed without being looked at');
   assert.equal((await get('https://drive.google.com/file/d/1TestFlipkartOrder03abcd/view?usp=drivesdk', answer(200, JPG))).out.type, 'image/jpeg');
-  // The Flipkart Google Browser not open: said plainly.
+  // The Live Amazon Browser not open: said plainly, as on Amazon.
   const closed = await get(DRIVE, () => Promise.reject(Object.assign(new Error('closed'), { code: 'CLOSED' })));
-  assert.deepEqual([closed.out.ok, closed.out.kind, closed.out.says], [false, 'busy', 'the Flipkart Google Browser is not open, so it could not be downloaded']);
+  assert.deepEqual([closed.out.ok, closed.out.kind, closed.out.says], [false, 'busy', 'the Live Amazon Browser is not open, so it could not be downloaded']);
 });
 
 test('Google Drive: a file that can be viewed but whose download is refused is opened through the picture Drive shows of it; a PDF and a large picture are downloaded as they are; the "Download anyway" form is sent once', async () => {
