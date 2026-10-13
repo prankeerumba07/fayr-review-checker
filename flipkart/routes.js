@@ -37,6 +37,7 @@ import { createScreenshots, downloadable } from './screenshots.js';
 import { runCheck, PAUSE_SAYS } from './check.js';
 import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct, campaignsFound, campaignsFor, brandIn } from './campaigns.js';
 import { readOrderShot, readDeliveryShot } from './shot-read.js';
+import { readReviewShot } from './review-read.js';
 import { SettingsError } from './settings.js';
 import { FlipkartBrowser } from './browser.js';
 
@@ -348,9 +349,9 @@ export function sheetView(saved, campaigns = []) {
  * top bar shows its state (view), and screenshots.js says what else of it
  * the downloads use; tests give a pretend one.
  * shotOptions — tests only: the downloads' own options (screenshots.js).
- * readers — tests only: { order(files, opts), delivery(files, opts) } in
- * place of reading the purchase and delivery screenshots with Tesseract
- * (shot-read.js).
+ * readers — tests only: { order(files, opts), delivery(files, opts),
+ * review(files, opts) } in place of reading the purchase, delivery and
+ * review screenshots with Tesseract (shot-read.js, review-read.js).
  * The answer is the routes' handler; its close() closes the Live Flipkart
  * Browser, when the dashboard stops.
  */
@@ -359,6 +360,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   // What a purchase screenshot and a delivery screenshot say, read on this computer.
   const readOrder = readers?.order ?? ((files, opts) => readOrderShot(files, opts));
   const readDelivery = readers?.delivery ?? ((files, opts) => readDeliveryShot(files, opts));
+  const readReview = readers?.review ?? ((files, opts) => readReviewShot(files, opts));
   // A row's screenshots, downloaded when it is checked; the ones on Google Drive through the Amazon screen's Google login.
   const screenshots = createScreenshots({ store, google, ...shotOptions });
   let checking = null; // the row being checked: { rowId, stop }, with all: true while the rows are checked one by one. One check at a time.
@@ -642,6 +644,8 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   /** The file's columns a check needs to know about: { orderDate, amount, product, orderShot, deliveryShot, reviewShot, reviewLink }, each true when the file has it. */
   const hasColumns = (mapping) => Object.fromEntries(['orderDate', 'amount', 'product', 'orderShot', 'deliveryShot', 'reviewShot', 'reviewLink'].map((k) => [k, Number.isInteger(mapping?.[k])]));
   /** The live campaigns a row uses, as on Amazon: by the brand in its product name, or else in the file's name or the tab's name; each with its products' real names read from Flipkart. */
+  /** The reviewer named in the row's cell of the file's reviewer column, which finds the user's review among several on a review screenshot. */
+  const reviewerOf = (row, saved) => (Number.isInteger(saved?.sheet?.mapping?.reviewer) ? row.values?.[saved.sheet.mapping.reviewer]?.text ?? null : null);
   const campaignsOf = (row, saved, campaigns) => campaignsFor(row.product?.text ?? '', campaigns, [saved?.sheet?.fileName, saved?.sheet?.tab].filter(Boolean));
   /** Flipkart's passing marks, from its own settings; a mark that is wrong is refused with its plain sentence, and nothing is checked. -> the marks, or null when refused. */
   async function marksOr(res) {
@@ -692,7 +696,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       const before = googleBefore(row);
       if (before) return pause(before.kind, before.says);
       const saved = await store.sheet();
-      const result = await runCheck({ row, has: hasColumns(saved?.sheet?.mapping), screenshots, marks, campaigns: campaignsOf(row, saved, await store.campaigns()), readOrder, readDelivery, emit, signal: run.stop.signal, now });
+      const result = await runCheck({ row, has: hasColumns(saved?.sheet?.mapping), screenshots, marks, campaigns: campaignsOf(row, saved, await store.campaigns()), readOrder, readDelivery, readReview, reviewer: reviewerOf(row, saved), emit, signal: run.stop.signal, now });
       if (result.paused) pause(result.paused.kind, result.paused.says);
       else if (!result.stopped) await store.saveCheck(id, result);
     } catch (err) {
@@ -771,7 +775,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         // A row with a Google Drive screenshot to download, while a login is using the Live Amazon Browser or no one is logged in to Google: checking pauses before it.
         const before = googleBefore(r);
         if (before) return paused(before.kind, before.says);
-        const result = await runCheck({ row: r, has, screenshots, marks, campaigns: campaignsOf(r, saved, campaigns), readOrder, readDelivery, emit, signal: run.stop.signal, now });
+        const result = await runCheck({ row: r, has, screenshots, marks, campaigns: campaignsOf(r, saved, campaigns), readOrder, readDelivery, readReview, reviewer: reviewerOf(r, saved), emit, signal: run.stop.signal, now });
         if (result.stopped) break;
         if (result.paused) return paused(result.paused.kind, result.paused.says);
         const kept = await store.saveCheck(r.id, result);

@@ -74,6 +74,31 @@ function keptRead(o) {
   };
 }
 
+/** What the review screenshot says, as read (check.js step 6), as kept with the row's last check: its words cut to length. Null when it was not read. */
+function keptReview(o) {
+  if (!o || typeof o !== 'object') return null;
+  const words = (v, n) => (v ? cleanText(v, n) : null);
+  return {
+    ok: Boolean(o.ok),
+    problem: words(o.problem, 300),
+    confidence: Number.isFinite(o.confidence) ? Math.round(o.confidence) : null,
+    wordCount: Number.isInteger(o.wordCount) && o.wordCount >= 0 ? o.wordCount : 0,
+    hindi: Boolean(o.hindi),
+    kind: ['written', 'rating', 'refused', 'unknown'].includes(o.kind) ? o.kind : 'unknown',
+    stars: Number.isInteger(o.stars) && o.stars >= 1 && o.stars <= 5 ? o.stars : null,
+    title: words(o.title, 300),
+    body: words(o.body, 5000),
+    name: words(o.name, 200),
+    dateText: words(o.dateText, 60),
+    message: words(o.message, 500),
+    own: Boolean(o.own),
+    form: Boolean(o.form),
+    others: Number.isInteger(o.others) && o.others >= 0 ? o.others : 0,
+    why: words(o.why, 500),
+    text: cleanText(o.text, 20000),
+  };
+}
+
 /** The comparison table (check.js buildComparison), as kept with the row's last check: its words cut to length. */
 function keptComparison(rows) {
   const ok = (v) => (v === true || v === false ? v : null);
@@ -348,10 +373,11 @@ export function createFlipkartStore(dataDir) {
     /**
      * A row's last check, kept with the row, so its page shows the check's
      * steps after a reload too: { checkId, startedAt, finishedAt, seconds,
-     * steps: [{ n, name, state, detail }], order, delivery, shotsHad,
-     * comparison } (order and delivery: what the purchase and the delivery
-     * screenshots say, as read; comparison: the sheet and the two side by
-     * side, for the screenshots the file has). The check before goes.
+     * steps: [{ n, name, state, detail }], order, delivery, review,
+     * shotsHad, comparison } (order, delivery and review: what the purchase,
+     * the delivery and the review screenshots say, as read; comparison: the
+     * sheet and the two side by side, for the screenshots the file has). The
+     * check before goes.
      */
     saveCheck(id, result) {
       return locked(async () => {
@@ -366,6 +392,7 @@ export function createFlipkartStore(dataDir) {
           steps: (Array.isArray(result?.steps) ? result.steps : []).slice(0, 20).map((s, i) => ({ n: i + 1, name: cleanText(s?.name, 200), state: STEP_STATES.has(s?.state) ? s.state : 'waiting', detail: s?.detail ? cleanText(s.detail) : null })),
           order: keptRead(result?.order),
           delivery: keptRead(result?.delivery),
+          review: keptReview(result?.review),
           shotsHad: (Array.isArray(result?.shotsHad) ? result.shotsHad : []).filter((w) => w === 'order' || w === 'delivery'),
           comparison: keptComparison(result?.comparison),
         };

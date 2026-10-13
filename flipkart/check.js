@@ -14,7 +14,11 @@
 // product are each the same, different or not shown; and step 4, which reads
 // the delivery screenshot the same way, as the Amazon checker's step 5 does:
 // it must say Delivered, and when the two screenshots show different order
-// IDs, it says both (FLIPKART-PLAN.md point 6). The product is compared by
+// IDs, it says both (FLIPKART-PLAN.md point 6); and step 6, which reads the
+// review screenshot (review-read.js), as the Amazon checker's step 7 reads
+// one: the rating, the review's title and words, the reviewer's name and the
+// date, or Flipkart's message that the review was not accepted or that only a
+// rating was given; of several reviews, only the user's. The product is compared by
 // its name with the products of the live campaigns the row uses, by their
 // real names read from Flipkart, or, with no live campaign, with its product
 // name in the sheet. A detail that is not shown, or could not be read, is
@@ -31,6 +35,7 @@ import { randomBytes } from 'node:crypto';
 import { downloadable } from './screenshots.js';
 import { readOrderShot, readDeliveryShot } from './shot-read.js';
 import { NOT_DELIVERED_WORDS } from './delivery-read.js';
+import { readReviewShot } from './review-read.js';
 import { DEFAULT_MARKS } from './settings.js';
 import { shortName } from './campaigns.js';
 import { wordsOf, productWords } from './text.js';
@@ -163,10 +168,12 @@ class Paused extends Error {
  *   campaigns — the live campaigns the row uses (campaigns.js campaignsFor): { name, brand, products: [{ pid, name, short, variants }] }
  *   readOrder(files, { want }) — what the purchase screenshot says (shot-read.js readOrderShot)
  *   readDelivery(files, { want }) — what the delivery screenshot says (shot-read.js readDeliveryShot)
+ *   readReview(files, { reviewer, productIs }) — what the review screenshot says (review-read.js readReviewShot)
+ *   reviewer — the reviewer named in the sheet, which finds the user's review among several on the review screenshot
  *   emit(event) — started, action, step and done lines for the screen; a step's line carries what was read so far (partial)
- * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, steps, sheet, order, delivery, compared, shotsHad, comparison, paused, stopped }
+ * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, steps, sheet, order, delivery, review, compared, shotsHad, comparison, paused, stopped }
  */
-export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_MARKS, campaigns = [], readOrder = readOrderShot, readDelivery = readDeliveryShot, emit = () => {}, signal = null, checkId = newCheckId(), now = () => new Date() }) {
+export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_MARKS, campaigns = [], readOrder = readOrderShot, readDelivery = readDeliveryShot, readReview = readReviewShot, reviewer = null, emit = () => {}, signal = null, checkId = newCheckId(), now = () => new Date() }) {
   const had = { orderDate: true, amount: true, product: true, orderShot: true, deliveryShot: true, reviewShot: true, reviewLink: true, ...Object.fromEntries(Object.entries(has ?? {}).map(([k, v]) => [k, v !== false])) };
   /** A detail with no column in the file is not compared at all. */
   const compared = DETAILS.filter((k) => k === 'orderId' || had[k]);
@@ -190,6 +197,8 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     // What each screenshot says, as read on this computer, with each detail compared (steps 2 and 4).
     order: null,
     delivery: null,
+    // What the review screenshot says, as read on this computer (step 6).
+    review: null,
     // What was compared, and the screenshots the file has: the comparison shows only those.
     compared,
     shotsHad: SHOTS.filter((w) => had[SHOT_COLUMN[w]]),
@@ -213,7 +222,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const s = result.steps[n - 1];
     s.state = state;
     s.detail = detail ? clean(detail) : null;
-    emit({ event: 'step', step: { ...s }, partial: { order: result.order, delivery: result.delivery } });
+    emit({ event: 'step', step: { ...s }, partial: { order: result.order, delivery: result.delivery, review: result.review } });
   }
   /** A step that is not part of the check yet: it says it comes in a later step. */
   function later(n) {
@@ -319,6 +328,17 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const words = new Set(keyWords(name));
     const mine = campaignProducts.filter((c) => keyWords(c.name).some((w) => words.has(w) && !campaignProducts.some((o) => o !== c && keyWords(o.name).includes(w))));
     return mine.length === 1 ? mine[0] : null;
+  }
+  /**
+   * True when some lines show the product ordered: the campaign's product the purchase screenshot shows (any of the
+   * campaign's products when it showed none), or, with no campaign, the product named in the sheet.
+   */
+  function productIs(texts) {
+    if (!byCampaign) return Boolean(label) && (productShown(label, texts)?.share ?? 0) >= mark;
+    const hit = campaignProductOn(texts);
+    if (hit.state !== 'same') return false;
+    const bought = result.order?.details?.product?.state === 'same' ? result.order.details.product.product?.pid : null;
+    return !bought || hit.product?.pid === bought || (hit.all ?? []).includes(bought);
   }
   /** True when some lines tell the product: one of the campaign's products or another product's name, or (with no campaign) the product named in the sheet. */
   const productTold = (texts) => (byCampaign ? campaignProductOn(texts).state !== NOT_SHOWN : !label || (productShown(label, texts)?.share ?? 0) >= mark);
@@ -487,12 +507,61 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     return finish(n, fails ? 'fail' : 'pass', said);
   }
 
+  /**
+   * Step 6: the review screenshot read on this computer, as the Amazon
+   * checker reads one in its step 7 (amazon/check.js): the rating, the
+   * review's title and words, the reviewer's name and the date, or Flipkart's
+   * message that the review was not accepted or that only a rating was given.
+   * Of several reviews, only the user's is read. A part not read clearly is
+   * not shown, never guessed.
+   */
+  async function readReviewStep(n, which) {
+    const was = shot[which]?.state;
+    if (was !== 'opened') {
+      const why = was === 'no column' ? `The file has no ${WHAT[which]} column, so there is nothing to read.` : was === 'missing' ? `There is no ${WHAT[which]} to read.` : `The ${WHAT[which]} could not be opened, so it was not read.`;
+      return finish(n, 'not-reached', why);
+    }
+    start(n, 'Reading the review screenshot');
+    const r = await readReview(shot[which].files, { reviewer: reviewer || null, productIs });
+    checkStop();
+    const text = (v) => (v ? clean(v) : null);
+    result.review = {
+      ok: Boolean(r.ok),
+      problem: r.problem ?? null,
+      confidence: r.confidence ?? null,
+      wordCount: r.wordCount ?? 0,
+      hindi: Boolean(r.hindi),
+      kind: r.kind ?? 'unknown',
+      stars: Number.isInteger(r.stars) ? r.stars : null,
+      title: text(r.title),
+      body: text(r.body),
+      name: text(r.name),
+      dateText: text(r.dateText),
+      message: text(r.message),
+      own: Boolean(r.own),
+      form: Boolean(r.form),
+      others: Number.isInteger(r.others) ? r.others : 0,
+      why: text(r.why),
+      text: clean(r.text ?? ''),
+    };
+    const v = result.review;
+    if (!r.ok) return finish(n, 'fail', `It could not be read: ${r.problem ?? 'its words are not clear enough to read'}.`);
+    if (v.kind === 'refused') return finish(n, 'fail', `It shows a message from Flipkart that the review was not accepted: ${quoted(v.message, 200)}.`);
+    if (v.kind === 'rating') return finish(n, 'pass', `${v.stars} stars and no written words.`);
+    const among = v.others ? `, one of ${v.others + 1} reviews it shows` : '';
+    // As the Amazon checker says it: the review's own words, quoted, end its line.
+    if (v.kind === 'written' && v.form) return finish(n, 'pass', `The review being written: ${quoted(v.body ?? v.title, 100)}`);
+    if (v.kind === 'written') return finish(n, 'pass', `A written review${v.name && !/flipkart\s+customer/i.test(v.name) ? ` by ${quoted(v.name, 40)}` : ''}${among}: ${quoted(v.body ?? v.title, 100)}`);
+    return finish(n, 'fail', `It does not clearly show a written review, a star rating only or a message from Flipkart, because ${v.why}.`);
+  }
+
   emit({ event: 'started', checkId, steps: STEP_NAMES, rowId: row.id, row: row.row ?? null, name: result.name });
   try {
     for (let n = 1; n <= STEP_NAMES.length; n++) {
       const which = n === 5 ? reviewCell(row, had) : OPENS[n];
       if (which) await step(n, () => openShot(n, which));
       else if (READS[n]) await step(n, () => readShot(n, READS[n]));
+      else if (n === 6) await step(n, () => readReviewStep(n, reviewCell(row, had)));
       else later(n);
     }
   } catch (err) {

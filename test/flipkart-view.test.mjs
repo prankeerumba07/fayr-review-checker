@@ -650,7 +650,7 @@ test('a row\'s page shows what the purchase screenshot says, as on Amazon ("Read
   const all = findAll(card(s.page()), (n) => n.tag === 'details')[0];
   assert.deepEqual([textOf(findAll(all, (n) => n.tag === 'summary')[0]), textOf(findAll(all, (n) => n.tag === 'pre')[0]), findAll(all, (n) => n.tag === 'pre')[0].attrs.class], ['Everything read from it', ORDER_READ.text, 'fk-ocr-text']);
   // The left side as on Amazon: the Type and Note, the details from the sheet, then what the purchase and delivery screenshots say.
-  assert.deepEqual(findAll(byId(s.page(), 'row-page'), (n) => n.attrs?.class === 'fk-left')[0].children.filter(Boolean).map((n) => n.attrs['data-id']), ['card-result', 'row-details', 'card-order', 'card-delivery']);
+  assert.deepEqual(findAll(byId(s.page(), 'row-page'), (n) => n.attrs?.class === 'fk-left')[0].children.filter(Boolean).map((n) => n.attrs['data-id']), ['card-result', 'row-details', 'card-order', 'card-delivery', 'card-review']);
   // Not read: it says so; a picture whose words are not clear says why.
   const none = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK } } }));
   assert.equal(textOf(card(none.page())), 'Read from the purchase screenshotNot read yet.');
@@ -732,6 +732,73 @@ test('a row\'s page shows what the delivery screenshot says ("Read from the deli
   // A file with no delivery screenshot column has no card for it, as on Amazon.
   const noColumn = { ...SAVED, sheet: { ...SAVED.sheet, mapping: { ...SAVED.sheet.mapping, deliveryShot: null } } };
   assert.equal(card((await rowScreen(fakeLocal({ saved: noColumn, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK_READ } } }))).page()), null);
+});
+
+/** What the review screenshot says, as step 6 keeps it (check.js), made up. */
+const REVIEW_READ = {
+  ok: true,
+  problem: null,
+  confidence: 88,
+  wordCount: 30,
+  hindi: false,
+  kind: 'written',
+  stars: 5,
+  title: 'Terrific purchase',
+  body: 'Keeps water cold all day and the grip is good.',
+  name: 'Test Reviewer One',
+  dateText: '12 Sep, 2026',
+  message: null,
+  own: false,
+  form: false,
+  others: 1,
+  why: null,
+  text: 'Ratings and Reviews\n5.0 • Terrific purchase\nKeeps water cold all day and the grip is good.\nTest Reviewer One, Test City',
+};
+
+test('a row\'s page shows what the review screenshot says ("Read from the review screenshot"), as on Amazon: after a reload, and live; a part not read is "Not shown"; with no review screenshot or review link column, no card for it', async () => {
+  const card = (tree) => byId(tree, 'card-review');
+  const fields = (tree) => findAll(card(tree), (n) => n.tag === 'div' && n.attrs?.class === 'field-row').map((n) => [textOf(findAll(n, (x) => x.tag === 'dt')[0]), textOf(findAll(n, (x) => x.tag === 'dd')[0])]);
+  const page = (result, saved = SAVED) => rowScreen(fakeLocal({ saved, pages: { r000000000001: { row: PICTURED, result } } }));
+  const s = await page({ ...LAST_CHECK_READ, review: REVIEW_READ });
+  assert.equal(textOf(findAll(card(s.page()), (n) => n.tag === 'h3')[0]), 'Read from the review screenshot');
+  assert.deepEqual(fields(s.page()), [
+    ['What it shows', 'A written review'],
+    ['Stars', '5 of 5'],
+    ['Title', 'Terrific purchase'],
+    ['Written words', 'Keeps water cold all day and the grip is good.'],
+    ["Reviewer's name", 'Test Reviewer One'],
+    ['Date', '12 Sep, 2026'],
+    ['Other reviews on it', '1'],
+    ['Read by', 'Read on this computer, in English only: 30 words, read with 88 percent certainty.'],
+  ]);
+  const all = findAll(card(s.page()), (n) => n.tag === 'details')[0];
+  assert.deepEqual([textOf(findAll(all, (n) => n.tag === 'summary')[0]), textOf(findAll(all, (n) => n.tag === 'pre')[0])], ['Everything read from it', REVIEW_READ.text]);
+  // Not certain: every part not read is "Not shown", and why is said; Flipkart's words for a review not accepted are shown as they are.
+  const unsure = await page({ ...LAST_CHECK_READ, review: { ...REVIEW_READ, kind: 'unknown', stars: null, title: null, body: null, name: null, dateText: null, others: 0, why: 'it shows no review, no rating and no message from Flipkart' } });
+  assert.deepEqual(fields(unsure.page()).filter(([k]) => k !== 'Read by'), [['What it shows', 'Not certain'], ['Stars', 'Not shown'], ['Title', 'Not shown'], ['Written words', 'Not shown'], ["Reviewer's name", 'Not shown'], ['Date', 'Not shown'], ['Why not certain', 'it shows no review, no rating and no message from Flipkart']]);
+  const refused = await page({ ...LAST_CHECK_READ, review: { ...REVIEW_READ, kind: 'refused', stars: null, title: null, body: null, name: null, dateText: null, others: 0, message: 'Your review was rejected' } });
+  assert.deepEqual([fields(refused.page())[0], fields(refused.page()).find(([k]) => k === "Flipkart's words")], [['What it shows', 'Flipkart not accepting the review'], ["Flipkart's words", 'Your review was rejected']]);
+  // Not read yet, and live as soon as step 6 has read it.
+  assert.equal(textOf(card((await page(LAST_CHECK)).page())), 'Read from the review screenshotNot read yet.');
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const local = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: null } } });
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
+    onEvent({ event: 'step', step: { n: 6, name: STEP_NAMES[5], state: 'pass', detail: 'A written review.' }, partial: { order: ORDER_READ, delivery: DELIVERY_READ, review: REVIEW_READ } });
+    await gate;
+    onEvent({ event: 'done', result: { ...LAST_CHECK_READ, review: REVIEW_READ } });
+    return { ok: true };
+  };
+  const live = await rowScreen(local);
+  byId(live.page(), 'check').attrs.onclick();
+  await settle();
+  assert.deepEqual(fields(live.page())[0], ['What it shows', 'A written review'], 'shown at once, while the check runs');
+  release();
+  await settle();
+  // A file with no review screenshot column and no review link column has no card for it.
+  const noColumn = { ...SAVED, sheet: { ...SAVED.sheet, mapping: { ...SAVED.sheet.mapping, reviewShot: null, reviewLink: null } } };
+  assert.equal(card((await page({ ...LAST_CHECK_READ, review: REVIEW_READ }, noColumn)).page()), null);
 });
 
 /** What the server says when no one is logged in to Google before a row, for "Start checking". */

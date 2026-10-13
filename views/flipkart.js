@@ -1290,13 +1290,14 @@ function amountsSaid(amounts) {
   return out.join(', ');
 }
 
-/** What the purchase and delivery screenshots say, as read on this computer: the Amazon screen's cards, for Flipkart's screenshots. A screenshot the file has no column for has no card. */
+/** What the purchase, delivery and review screenshots say, as read on this computer: the Amazon screen's cards, for Flipkart's screenshots. A screenshot the file has no column for has no card. */
 function readCards(ctx, res) {
   const { h, words, state } = ctx;
   const mapping = state.saved?.sheet ? obj(state.saved.sheet.mapping) : null;
   const shows = (key) => !mapping || Number.isInteger(mapping[key]);
   const o = res?.order;
   const d = res?.delivery;
+  const v = res?.review;
   const read = (x) => `Read on this computer, in ${x.hindi ? 'English and Hindi' : 'English only'}: ${x.wordCount ?? 0} words, read with ${x.confidence ?? 0} percent certainty.`;
   const everything = (t) => (t ? h('details', null, h('summary', null, 'Everything read from it'), h('pre', { class: 'fk-ocr-text' }, t)) : null);
   return [
@@ -1318,6 +1319,34 @@ function readCards(ctx, res) {
           h('h3', null, 'Read from the delivery screenshot'),
           d
             ? h('div', null, d.problem ? words.notice(h, 'warn', d.problem) : null, words.fields(h, [['Delivered', d.delivered ? d.deliveredText : 'Not shown'], ['Order IDs', arr(d.orderIds).join(', ') || 'None shown'], ['Order dates', arr(d.dates).join(', ') || 'None shown'], ['Amounts', amountsSaid(d.amounts) || 'None shown'], ['Product', d.product], ['Read by', read(d)]]), everything(d.text))
+            : h('p', { class: 'muted' }, 'Not read yet.'),
+        ),
+    // The Amazon screen's card for what the review screenshot shows, with Flipkart's parts of a review.
+    !shows('reviewShot') && !shows('reviewLink')
+      ? null
+      : h(
+          'section',
+          { class: 'card fk-read', key: 'card-review', 'data-id': 'card-review' },
+          h('h3', null, 'Read from the review screenshot'),
+          v
+            ? h(
+                'div',
+                null,
+                v.problem ? words.notice(h, 'warn', v.problem) : null,
+                words.fields(h, [
+                  ['What it shows', { refused: 'Flipkart not accepting the review', rating: 'A star rating only', written: v.form ? 'A review being written' : 'A written review', unknown: 'Not certain' }[v.kind] ?? v.kind],
+                  ['Stars', v.stars ? `${v.stars} of 5` : 'Not shown'],
+                  ['Title', v.title || 'Not shown'],
+                  ['Written words', v.body || 'Not shown'],
+                  ["Reviewer's name", v.name || 'Not shown'],
+                  ['Date', v.dateText || 'Not shown'],
+                  ...(v.message ? [["Flipkart's words", v.message]] : []),
+                  ...(v.others ? [['Other reviews on it', String(v.others)]] : []),
+                  ...(v.why ? [['Why not certain', v.why]] : []),
+                  ['Read by', read(v)],
+                ]),
+                everything(v.text),
+              )
             : h('p', { class: 'muted' }, 'Not read yet.'),
         ),
   ];
