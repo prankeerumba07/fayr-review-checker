@@ -37,7 +37,7 @@ import { stat } from 'node:fs/promises';
 import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS, ROW_ID } from './store.js';
 import { cellLinks, linkLabel, linksIn, isDriveLink, linkKey } from './links.js';
 import { createScreenshots, downloadable } from './screenshots.js';
-import { runCheck, PAUSE_SAYS } from './check.js';
+import { runCheck, PAUSE_SAYS, keptDay } from './check.js';
 import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct, campaignsFound, campaignsFor, brandIn } from './campaigns.js';
 import { readOrderShot, readDeliveryShot } from './shot-read.js';
 import { readReviewShot } from './review-read.js';
@@ -53,10 +53,14 @@ const CHECKING_ALL = 'Rows are being checked.';
 const GONE = 'This campaign is no longer saved. Reload the page.';
 /** The button that checks the rows one by one, once a row is checked, as a pause names it. */
 const RUN_BUTTON = '"Carry on checking"';
-/** How long a copy of Flipkart's reviews read for one row's Check serves the next row's Check. */
+/** How long a copy of Flipkart's reviews read in full serves the next check, whichever button started it. */
 const KEPT_REVIEWS_MS = 60 * 60 * 1000;
+/** How long a copy of Flipkart's reviews stopped part way is gone on from, instead of reading again from page 1. */
+const KEPT_PART_MS = 24 * 60 * 60 * 1000;
 /** A reading of Flipkart's reviews that went as far as it was meant to (reviews.js). */
 const wholeReading = (r) => ['date', 'last page', 'limit'].includes(r?.end);
+/** A reading of Flipkart's reviews stopped part way (by Flipkart, a page too slow, the window closed, Stop…) after reading a page or more. */
+const partReading = (r) => Boolean(r?.link && Number.isInteger(r.pages) && r.pages > 0 && Array.isArray(r.reviews) && r.end && r.end !== 'none' && !wholeReading(r));
 
 /** A row counts as checked once its last check finished: only a finished check is kept with the row (store.js saveCheck). */
 const isChecked = (r) => Boolean(r?.check);
@@ -676,47 +680,44 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   const hasReviewProof = (r) => Boolean(r.shots?.reviewShot?.links?.length || r.shots?.reviewShot?.picture || r.shots?.review?.links?.length);
   /**
    * How far back step 7 reads Flipkart's reviews: to the oldest day a row of
-   * the file needs (its delivery day, else its order day, as its last check
-   * found them; for the row being checked, `day`), or null, as far as allowed
-   * (50 pages), while a row with a review to search for has not been checked
-   * that way yet.
+   * the file with a review to search for needs, from what its last check found
+   * (its delivery day, else its order day; check.js keptDay), and for the row
+   * being checked, `day`; null (as far as allowed, 50 pages) when no day is
+   * known. A row not checked yet counts once it is checked: the reading then
+   * goes on from where it stopped, when the row needs an older day.
    */
   function oldestDay(rows, rowId, day) {
-    const days = [day];
-    for (const r of rows) {
-      if (r.id === rowId) continue;
-      if (r.check?.reviewsFrom) days.push(r.check.reviewsFrom.day);
-      else if (hasReviewProof(r)) return null;
-    }
+    const days = [day, ...rows.filter((r) => r.id !== rowId && hasReviewProof(r)).map((r) => keptDay(r.check, now()))];
     return days.filter(Boolean).sort()[0] ?? null;
-  }
-  /** A copy of a product's reviews kept on this computer, when it was read in full in the last hour; else null. */
-  async function reviewsReadLately(pid) {
-    const kept = await store.reviews(pid).catch(() => null);
-    return kept && wholeReading(kept) && now().getTime() - Date.parse(kept.readAt ?? '') < KEPT_REVIEWS_MS ? kept : null;
   }
   /**
    * Flipkart's public reviews of a campaign's product, for step 7 of the
    * check: read once in a checking run in the Live Flipkart Browser (its own
    * page, then "See all reviews", newest first; reviews.js
-   * readProductReviews) and kept on this computer, in
-   * data/flipkart/reviews/<product ID>.json; every row of the run searches
-   * that copy, and Flipkart is not opened again. A copy that stopped at a
-   * newer day than a row needs is read on from where it stopped. One row's
-   * Check (single) also uses a copy read in the last hour. A reading stopped
-   * part way (a robot check, a block, a page too slow) is kept only when it
-   * has more reviews than the copy kept before.
+   * readProductReviews), back to the oldest day the rows need (oldestDay),
+   * and kept on this computer, in data/flipkart/reviews/<product ID>.json;
+   * every row of the run searches that copy, and Flipkart is not opened
+   * again. A copy read in full in the last hour serves too. A copy that
+   * stopped at a newer day than a row needs is read on from where it stopped,
+   * and so is one stopped part way in the last day (a robot check, a refusal,
+   * an error, a page too slow, Stop), its pages kept. A reading stopped part
+   * way is kept only when it has at least as many reviews as the copy kept
+   * before; else only what Flipkart's refused page showed is added to that
+   * copy.
    */
-  function reviewsSource(single) {
+  function reviewsSource() {
     const run = new Map();
     const covers = (r, since) => r.end === 'last page' || r.end === 'limit' || (r.end === 'date' && since !== null && r.since !== null && r.since <= since);
     return async (pid, { rowId = null, day = null, onPage, signal = null } = {}) => {
       const since = oldestDay(await keptRows(), rowId, day);
-      const prior = run.get(pid) ?? (single ? await reviewsReadLately(pid) : null);
-      if (prior && covers(prior, since)) return { ...prior, reused: true };
-      const read = await readReviewsOf(liveBrowser(), pid, { since, now, onPage, signal, from: prior?.end === 'date' ? prior : null });
       const kept = await store.reviews(pid).catch(() => null);
-      if (read.reviews?.length && (wholeReading(read) || read.reviews.length > (kept?.reviews?.length ?? 0))) await store.saveReviews(pid, read);
+      const age = now().getTime() - Date.parse(kept?.readAt ?? '');
+      const prior = run.get(pid) ?? (wholeReading(kept) && age < KEPT_REVIEWS_MS ? kept : null);
+      if (prior && covers(prior, since)) return { ...prior, reused: true };
+      const from = prior?.end === 'date' ? prior : partReading(kept) && age < KEPT_PART_MS ? kept : null;
+      const read = await readReviewsOf(liveBrowser(), pid, { since, now, onPage, signal, from });
+      if (read.reviews?.length && (wholeReading(read) || read.reviews.length >= (kept?.reviews?.length ?? 0))) await store.saveReviews(pid, read);
+      else if (read.refused && kept) await store.saveReviews(pid, { ...kept, refused: read.refused });
       if (wholeReading(read)) run.set(pid, read);
       return { ...read, reused: false };
     };
@@ -756,7 +757,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       const before = googleBefore(row);
       if (before) return pause(before.kind, before.says);
       const saved = await store.sheet();
-      const result = await runCheck({ row, has: hasColumns(saved?.sheet?.mapping), screenshots, marks, campaigns: campaignsOf(row, saved, await store.campaigns()), readOrder, readDelivery, readReview, reviewer: reviewerOf(row, saved), reviews: reviewsSource(true), emit, signal: run.stop.signal, now });
+      const result = await runCheck({ row, has: hasColumns(saved?.sheet?.mapping), screenshots, marks, campaigns: campaignsOf(row, saved, await store.campaigns()), readOrder, readDelivery, readReview, reviewer: reviewerOf(row, saved), reviews: reviewsSource(), emit, signal: run.stop.signal, now });
       if (result.paused) pause(result.paused.kind, result.paused.says);
       else if (!result.stopped) await store.saveCheck(id, result);
     } catch (err) {
@@ -822,7 +823,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       // Nothing changes a campaign while rows are checked.
       const campaigns = await store.campaigns();
       // Flipkart's reviews are read once for the whole run, and every row searches that copy.
-      const reviews = reviewsSource(false);
+      const reviews = reviewsSource();
       let rows = Array.isArray(saved?.rows) ? saved.rows : [];
       emit({ event: 'run-started', again, ...tally(rows) });
       for (;;) {

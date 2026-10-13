@@ -4,8 +4,8 @@
 // reaches Flipkart: the saved product's two saved review pages (real pages,
 // every reviewer's name made up) and a made-up third, newest first, until the
 // given date; "Read more"; a login box covering the page; a product with no
-// reviews; and a robot check on page 2. One page at a time, at least 3
-// seconds apart.
+// reviews; and a robot check on page 2, with what that page showed. One page
+// at a time, pages of reviews at least 8 seconds apart.
 // Run: node test/flipkart-reviews-browser.test.mjs
 
 import { test, after } from 'node:test';
@@ -101,17 +101,17 @@ test('a product with no reviews: its first review page shows none, so no other p
   assert.deepEqual([none.end, none.reviews, site.visits.length], ['none', [], before + 1]);
 });
 
-test('a robot check on page 2: "Flipkart prevented this check" at page 2, the reviews of page 1 are kept, and nothing more is opened', { timeout: 120_000 }, async () => {
+test('a robot check on page 2: "Flipkart prevented this check" at page 2, with the page\'s status number, its title and whether it showed any reviews; the reviews of page 1 are kept, and nothing more is opened', { timeout: 120_000 }, async () => {
   const before = site.visits.length;
   const out = await readAndKeepReviews({ browser: live, store, product: readOne('FCPTESTROBO00001', ALL_REVIEWS.robot), now });
   assert.deepEqual(visited().slice(before), [URLS.robotReviews1, URLS.robotReviews2]);
-  assert.deepEqual([out.end, out.stoppedAt, out.pages, out.reviews.length, out.says], ['prevented', 2, 1, 4, 'Flipkart prevented this check at page 2 of the reviews: it showed a robot check, which this dashboard never answers. The reviews of page 1 were kept.']);
+  assert.deepEqual([out.end, out.stoppedAt, out.pages, out.reviews.length, out.refused, out.says], ['prevented', 2, 1, 4, { page: 2, status: 200, title: 'Flipkart', reviews: 0 }, 'Flipkart prevented this check at page 2 of the reviews: it showed a robot check, which this dashboard never answers. The page Flipkart sent had status 200, the title "Flipkart" and no reviews on it. The reviews of page 1 were kept.']);
   assert.deepEqual((await store.reviews('FCPTESTROBO00001')).reviews.map((r) => [r.page, r.name]), [[1, 'Made-up Reviewer A'], [1, 'Made-up Reviewer B'], [1, 'Made-up Reviewer C'], [1, 'Made-up Reviewer D']]);
 });
 
-test('one page at a time, at least 3 seconds apart, in one window with its own profile; only the pages asked for were opened, and nothing else reached Flipkart', () => {
+test('one page at a time, pages of reviews at least 8 seconds apart, in one window with its own profile; only the pages asked for were opened, and nothing else reached Flipkart', () => {
   assert.deepEqual(visited(), [URLS.reviews1, URLS.reviews2, URLS.reviews3, URLS.readMore, URLS.loginBox, URLS.noReviews, URLS.robotReviews1, URLS.robotReviews2]);
-  for (let i = 1; i < site.visits.length; i++) assert.ok(site.visits[i].at - site.visits[i - 1].at >= 3000, `page ${i + 1} opened ${site.visits[i].at - site.visits[i - 1].at} ms after the one before`);
+  for (let i = 1; i < site.visits.length; i++) assert.ok(site.visits[i].at - site.visits[i - 1].at >= 8000, `page ${i + 1} opened ${site.visits[i].at - site.visits[i - 1].at} ms after the one before`);
   assert.equal(live.launches, 1);
   assert.equal(live.profileDir, join(dataDir, 'flipkart', 'browser-profile'));
 });

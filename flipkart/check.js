@@ -40,7 +40,7 @@
 import { randomBytes } from 'node:crypto';
 import { downloadable } from './screenshots.js';
 import { readOrderShot, readDeliveryShot } from './shot-read.js';
-import { NOT_DELIVERED_WORDS } from './delivery-read.js';
+import { NOT_DELIVERED_WORDS, parseDelivery } from './delivery-read.js';
 import { readReviewShot } from './review-read.js';
 import { indiaDay } from './review-page.js';
 import { linkLabel, isShortLink } from './links.js';
@@ -127,6 +127,38 @@ function orderDates(which, dates) {
   const marked = all.filter((d) => d.labelled);
   if (which === 'delivery' || marked.length) return marked;
   return all.filter((d) => !d.delivery);
+}
+/** A day read from a screenshot as YYYY-MM-DD: its own year, else the most recent such day that is not after today (India's). */
+function dayOf(d, today) {
+  if (!d) return null;
+  if (d.day) return d.day;
+  const [y] = today.split('-').map(Number);
+  for (let year = y; year >= y - 4; year--) {
+    const t = new Date(Date.UTC(year, d.month - 1, d.date));
+    const day = t.toISOString().slice(0, 10);
+    if (t.getUTCMonth() === d.month - 1 && day <= today) return day;
+  }
+  return null;
+}
+/** A date as a check keeps it (dateWords): "17-08-2026", or "17-08, with no year shown". */
+function keptDate(w) {
+  const m = String(w ?? '').match(/^(\d{2})-(\d{2})(?:-(\d{4}))?/);
+  return !m ? null : m[3] ? { day: `${m[3]}-${m[2]}-${m[1]}` } : { month: Number(m[2]), date: Number(m[1]) };
+}
+/**
+ * From which day a review on Flipkart can be the user's, as a row's last
+ * check found it: step 7's own day, else the day on the delivery screenshot's
+ * Delivered line, else the earliest order day on the purchase screenshot (a
+ * day with no year: the most recent such day by the time of the check). For
+ * how far back Flipkart's reviews are read (routes.js). -> YYYY-MM-DD, or
+ * null when the check found none.
+ */
+export function keptDay(check, now = new Date()) {
+  if (!check) return null;
+  if (check.reviewsFrom) return check.reviewsFrom.day ?? null;
+  const today = indiaDay(new Date(Date.parse(check.finishedAt ?? '') || now.getTime()));
+  const delivered = check.delivery?.deliveredText ? dayOf(parseDelivery([check.delivery.deliveredText]).deliveredOn, today) : null;
+  return delivered ?? (check.order?.dates ?? []).map((w) => dayOf(keptDate(w), today)).filter(Boolean).sort()[0] ?? null;
 }
 /** A product's name cut short on the screen: "Test Brand Steel Bottle 1 L Bla...". */
 const cutShort = (t) => /\.\.\.|…/.test(String(t ?? ''));
@@ -589,18 +621,6 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
 
   // ---- step 7: finding the review among Flipkart's public reviews (FLIPKART-PLAN.md point 4) ----
 
-  /** A day read from a screenshot as YYYY-MM-DD: its own year, else the most recent such day that is not after today (India's). */
-  function dayOf(d, today) {
-    if (!d) return null;
-    if (d.day) return d.day;
-    const [y] = today.split('-').map(Number);
-    for (let year = y; year >= y - 4; year--) {
-      const t = new Date(Date.UTC(year, d.month - 1, d.date));
-      const day = t.toISOString().slice(0, 10);
-      if (t.getUTCMonth() === d.month - 1 && day <= today) return day;
-    }
-    return null;
-  }
   /**
    * From which day a review on Flipkart can be the user's: the day the order
    * was delivered, on the delivery screenshot; when it shows none ("Delivered
@@ -672,8 +692,8 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const pause = got.end === 'prevented' ? `flipkart-${got.prevented ?? 'blocked'}` : READING_PAUSES[got.end];
     if (pause) pauseAt(n, pause, PAUSE_SAYS[pause], `${got.says} The check paused here; nothing was got around.`);
     if (got.end === 'none' || !kept) return finish(n, 'fail', got.says ?? "Flipkart's reviews could not be read.");
-    const how = got.reused ? ' They were read earlier and kept on this computer, so Flipkart was not opened again.' : '';
-    const back = got.end === 'last page' ? 'all the reviews Flipkart shows' : oldest ? `back to ${dayFirst(oldest)}${got.end === 'limit' ? ', the most read at one time' : ''}` : 'their dates could not be read';
+    const how = got.reused || (got.wentOn && !got.opened) ? ' They were read earlier and kept on this computer, so Flipkart was not opened again.' : got.wentOn ? ` The reading went on from page ${got.wentOn}, where it had stopped, keeping the ${got.wentOn === 2 ? 'page' : 'pages'} read before.` : '';
+    const back = got.end === 'last page' ? 'all the reviews Flipkart shows' : oldest ? `back to ${dayFirst(oldest)}${got.end === 'limit' ? ', the most read at one time' : got.end === 'date' && got.since ? `; the rows need reviews back to ${dayFirst(got.since)}` : ''}` : 'their dates could not be read';
     const rule = result.reviewsFrom.day ? `Reviews posted on or after ${result.reviewsFrom.said} can be the user's.` : `The date is not used for this row: ${result.reviewsFrom.said}.`;
     return finish(n, 'later', `Read ${kept === 1 ? '1 review' : `${kept} reviews`} of the product from ${got.pages === 1 ? '1 page' : `${got.pages} pages`} of "See all reviews" on Flipkart, newest first (${back}).${how} ${rule} Searching them for this review comes in a later step.`);
   }

@@ -31,23 +31,24 @@ export const ONLY_FLIPKART_NAMES = 'MAP * ~NOTFOUND, EXCLUDE flipkart.com, EXCLU
 const LABEL_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${LIVE_BROWSER_NAME}</title>
 <style>body{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#2b2a27;background:#fbf8f3;margin:0}main{max-width:640px;margin:48px auto;padding:0 24px}h1{font-size:24px}</style></head>
 <body><main><h1>${LIVE_BROWSER_NAME}</h1>
-<p>This Chrome window is driven by the dashboard, so that staff can watch each Flipkart product being read. Flipkart pages open in the next tab, one at a time, at least 3 seconds apart.</p>
+<p>This Chrome window is driven by the dashboard, so that staff can watch each Flipkart product being read. Flipkart pages open in the next tab, one at a time, at least 3 seconds apart, and pages of reviews at least 8 seconds apart.</p>
 <p>It is always signed out. It never types into Flipkart, and it never gets around a robot check or a block: when Flipkart stops a page, the dashboard says so.</p>
 <p>This window keeps its own Chrome profile, apart from the Live Amazon Browser. Keep it open while products are read.</p>
 </main></body></html>`;
 
 /**
  * One Flipkart page at a time, each at least `gapMs` after the last one
- * ended. Copied from the Amazon one (amazon/browsers.js).
+ * ended, or longer when a page asks for it (`gap`: pages of reviews).
+ * Copied from the Amazon one (amazon/browsers.js).
  */
 export function createGate({ gapMs = PAGE_GAP_MS, now = () => Date.now(), sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   let lastEnd = null;
   let chain = Promise.resolve();
   return {
     gapMs,
-    run(fn, onWait = () => {}) {
+    run(fn, onWait = () => {}, gap = 0) {
       const turn = chain.then(async () => {
-        const wait = lastEnd === null ? 0 : Math.max(0, lastEnd + gapMs - now());
+        const wait = lastEnd === null ? 0 : Math.max(0, lastEnd + Math.max(gapMs, gap) - now());
         if (wait > 0) {
           onWait(wait);
           await sleep(wait);
@@ -168,10 +169,11 @@ export class FlipkartBrowser {
    * Open one Flipkart page, through the gate, and read it. read — what is
    * read inside the page (a product page's facts unless said); prepare — run
    * inside the page first, to close Flipkart's login box or press "Read more"
-   * (it never types); html — also give back the page as Flipkart sent it.
-   * Never throws: says what went wrong instead.
+   * (it never types); html — also give back the page as Flipkart sent it;
+   * gap — how long after the last page this one waits, when longer than the
+   * gate's own. Never throws: says what went wrong instead.
    */
-  async open(url, { onWait, read = readFlipkartPage, prepare = null, html = false } = {}) {
+  async open(url, { onWait, read = readFlipkartPage, prepare = null, html = false, gap = 0 } = {}) {
     if (!this.isOpen()) return { ok: false, error: 'closed', message: 'The Live Flipkart Browser was closed.' };
     return this.gate.run(async () => {
       this.leftSite = null;
@@ -192,7 +194,7 @@ export class FlipkartBrowser {
         const timeout = /timeout/i.test(String(err?.message ?? ''));
         return { ok: false, error: timeout ? 'timeout' : 'network', message: timeout ? 'The page took too long to open.' : 'The page could not be opened.' };
       }
-    }, onWait);
+    }, onWait, gap);
   }
 
   /** Only when the dashboard stops. Chrome is asked to close and waited for, and the window never opens again. */

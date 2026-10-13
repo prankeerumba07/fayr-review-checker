@@ -12,7 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { runCheck, buildComparison, STEP_NAMES, PAUSE_SAYS, newCheckId } from '../flipkart/check.js';
+import { runCheck, buildComparison, STEP_NAMES, PAUSE_SAYS, newCheckId, keptDay } from '../flipkart/check.js';
 import { CHECK_ID } from '../flipkart/store.js';
 import { DEFAULT_MARKS } from '../flipkart/settings.js';
 import { orderIdsIn, datesIn, amountsIn } from '../flipkart/screen-text.js';
@@ -277,6 +277,13 @@ test("step 7, its first part: Flipkart's reviews of the campaign's product, read
   // Read earlier and kept: Flipkart is not opened again.
   const kept = await go({ answer: { ...READ, reused: true } });
   assert.match(kept.result.steps[6].detail, / They were read earlier and kept on this computer, so Flipkart was not opened again\. Reviews posted/);
+  // Back to the oldest day the rows need; gone on from where an earlier reading stopped, or not even that when what was kept reaches it.
+  const dated = await go({ answer: { ...READ, end: 'date', since: '2026-07-20' } });
+  assert.match(dated.result.steps[6].detail, /newest first \(back to 15-07-2026; the rows need reviews back to 20-07-2026\)\. Reviews posted/);
+  const wentOn = await go({ answer: { ...READ, end: 'date', since: '2026-07-20', wentOn: 3, opened: 1 } });
+  assert.match(wentOn.result.steps[6].detail, /\)\. The reading went on from page 3, where it had stopped, keeping the pages read before\. Reviews posted/);
+  const reached = await go({ answer: { ...READ, end: 'date', since: '2026-07-20', wentOn: 4, opened: 0 } });
+  assert.match(reached.result.steps[6].detail, /\)\. They were read earlier and kept on this computer, so Flipkart was not opened again\. Reviews posted/);
   // The days: no delivery day ("Delivered before time"), so the order's; a date with no year in the future is last year's; neither.
   const early = await go({ delivery: deliveryReading(['< Order Details Help', BOTTLE, `Order #${ID}`, 'Delivered before time', 'Delivery details']) });
   assert.deepEqual([early.result.reviewsFrom.day, asked.at(-1).day], ['2026-07-20', '2026-07-20']);
@@ -303,6 +310,17 @@ test("step 7, its first part: Flipkart's reviews of the campaign's product, read
   assert.deepEqual([slow.result.paused.kind, slow.result.paused.says], ['flipkart-slow', 'Flipkart is very slow to show its pages just now. Wait a while, then press "Carry on checking".']);
   const none = await go({ answer: { ...READ, end: 'none', pages: 0, reviews: [], says: "The product's page on Flipkart showed no way to see all its reviews, so they could not be read." } });
   assert.deepEqual([none.result.paused, none.result.steps[6].state, none.result.steps[6].detail], [null, 'fail', "The product's page on Flipkart showed no way to see all its reviews, so they could not be read."]);
+});
+
+test("how far back Flipkart's reviews are read, from what each row's last check kept: step 7's own day, else the day on the Delivered line, else the earliest order day, a day with no year being the most recent such day by the time of the check; none when it found none", () => {
+  const at = '2026-10-13T05:00:00.000Z';
+  assert.equal(keptDay({ finishedAt: at, reviewsFrom: { day: '2026-07-23', from: 'delivery', said: '…' }, delivery: { deliveredText: 'Delivered, Thu 9th Jul' } }), '2026-07-23');
+  assert.equal(keptDay({ finishedAt: at, reviewsFrom: { day: null, from: null, said: '…' } }), null);
+  assert.equal(keptDay({ finishedAt: at, delivery: { delivered: true, deliveredText: 'Delivered, Thu 9th Jul' }, order: { dates: ['05-07-2026'] } }), '2026-07-09', 'a check made before step 7: its delivery day');
+  assert.equal(keptDay({ finishedAt: at, delivery: { delivered: true, deliveredText: 'Delivered before time' }, order: { dates: ['08-07-2026', '05-07, with no year shown'] } }), '2026-07-05', 'no delivery day: the earliest order day');
+  assert.equal(keptDay({ finishedAt: '2026-01-05T05:00:00.000Z', delivery: { delivered: true, deliveredText: 'Delivered, Fri 25th Dec' } }), '2025-12-25', 'not after the day of the check');
+  assert.equal(keptDay({ finishedAt: at, delivery: { delivered: true, deliveredText: 'Delivered (its date could not be read)' }, order: { dates: [] } }), null);
+  assert.deepEqual([keptDay(null), keptDay(undefined)], [null, null], 'a row not checked yet');
 });
 
 test("what the boxes and the comparison show is cleaned, never what is compared: a Delivered line whose date is not a real date says only Delivered; each date once; a number with no rupee sign or label only when it is the sheet's amount, and an amount with no label not again beside its label; the product's name without the marks and the price read around it", async () => {
