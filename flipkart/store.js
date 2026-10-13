@@ -101,6 +101,31 @@ function keptReview(o) {
   };
 }
 
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** From which day a review can be the user's (check.js reviewsFrom), as kept with the row's last check. */
+function keptFrom(o) {
+  if (!o || typeof o !== 'object') return null;
+  return { day: DAY.test(String(o.day ?? '')) ? o.day : null, from: o.from === 'delivery' || o.from === 'order' ? o.from : null, said: o.said ? cleanText(o.said, 300) : null };
+}
+/** What step 7 read of Flipkart's reviews for the row, as kept with its last check: how many, how far back, never the reviews themselves (they are kept in reviews/<product ID>.json). */
+function keptReading(o) {
+  if (!o || typeof o !== 'object') return null;
+  const count = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
+  return {
+    pid: ANY_PID.test(String(o.pid ?? '')) ? o.pid : null,
+    name: o.name ? cleanText(o.name, 500) : null,
+    readAt: timeOrNull(o.readAt),
+    reused: Boolean(o.reused),
+    pages: count(o.pages) ?? 0,
+    count: count(o.count) ?? 0,
+    total: count(o.total),
+    end: o.end ? cleanText(o.end, 20) : null,
+    since: DAY.test(String(o.since ?? '')) ? o.since : null,
+    oldest: DAY.test(String(o.oldest ?? '')) ? o.oldest : null,
+    says: o.says ? cleanText(o.says, 500) : null,
+  };
+}
+
 /** The comparison table (check.js buildComparison), as kept with the row's last check: its words cut to length. */
 function keptComparison(rows) {
   const ok = (v) => (v === true || v === false ? v : null);
@@ -376,10 +401,12 @@ export function createFlipkartStore(dataDir) {
      * A row's last check, kept with the row, so its page shows the check's
      * steps after a reload too: { checkId, startedAt, finishedAt, seconds,
      * steps: [{ n, name, state, detail }], order, delivery, review,
-     * shotsHad, comparison } (order, delivery and review: what the purchase,
-     * the delivery and the review screenshots say, as read; comparison: the
-     * sheet and the two side by side, for the screenshots the file has). The
-     * check before goes.
+     * reviewsFrom, flipkart, shotsHad, comparison } (order, delivery and
+     * review: what the purchase, the delivery and the review screenshots say,
+     * as read; reviewsFrom: from which day a review can be the user's;
+     * flipkart: what step 7 read of Flipkart's reviews; comparison: the sheet
+     * and the two side by side, for the screenshots the file has). The check
+     * before goes.
      */
     saveCheck(id, result) {
       return locked(async () => {
@@ -395,6 +422,8 @@ export function createFlipkartStore(dataDir) {
           order: keptRead(result?.order),
           delivery: keptRead(result?.delivery),
           review: keptReview(result?.review),
+          reviewsFrom: keptFrom(result?.reviewsFrom),
+          flipkart: keptReading(result?.flipkart),
           shotsHad: (Array.isArray(result?.shotsHad) ? result.shotsHad : []).filter((w) => w === 'order' || w === 'delivery'),
           comparison: keptComparison(result?.comparison),
         };

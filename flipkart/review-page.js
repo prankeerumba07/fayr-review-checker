@@ -205,6 +205,35 @@ export function reviewsPageLink(allReviews, n) {
   return `${FLIPKART_ORIGIN}${u.pathname.replace(/\/$/, '')}?${q}`;
 }
 
+/**
+ * The link to all of a product's reviews, from its page as Flipkart sent it,
+ * whose own data names it even when the page shows it only further down: the
+ * first "/<name>/product-reviews/<item ID>" in it that is for this product and
+ * not only about one thing ("aid="); else one made from the first
+ * "/<name>/p/<item ID>?pid=<this product ID>" in it. As
+ * https://www.flipkart.com/<name>/product-reviews/<item
+ * ID>?pid=<product ID>&marketplace=FLIPKART; null when there is neither.
+ */
+export function reviewsLinkInPage(html, pid) {
+  const t = String(html ?? '')
+    .replace(/\\u002[fF]/g, '/')
+    .replace(/\\\//g, '/')
+    .replace(/&amp;/g, '&');
+  const queryOf = (q) => new URLSearchParams(String(q ?? '').replace(/^\?/, ''));
+  const made = (name, item) => `${FLIPKART_ORIGIN}/${name.toLowerCase()}/product-reviews/${item.toLowerCase()}?pid=${pid}&marketplace=FLIPKART`;
+  if (!pid) return null;
+  for (const m of t.matchAll(/\/([a-z0-9][a-z0-9-]{0,200})\/product-reviews\/(itm[0-9a-z]{6,20})(?![0-9a-z])(\?[^"'\s<>\\]*)?/gi)) {
+    const q = queryOf(m[3]);
+    if (q.has('aid')) continue;
+    const p = String(q.get('pid') ?? '').toUpperCase();
+    if (!p || p === pid) return made(m[1], m[2]);
+  }
+  for (const m of t.matchAll(/\/([a-z0-9][a-z0-9-]{0,200})\/p\/(itm[0-9a-z]{6,20})(?![0-9a-z])(\?[^"'\s<>\\]*)?/gi)) {
+    if (String(queryOf(m[3]).get('pid') ?? '').toUpperCase() === pid) return made(m[1], m[2]);
+  }
+  return null;
+}
+
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const FULL_MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
 

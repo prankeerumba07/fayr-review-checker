@@ -20,8 +20,11 @@
 // (shot-read.js), with Flipkart's own passing marks (settings.js). A
 // campaign's products are read, after it
 // is saved, from their Flipkart pages in the Live Flipkart Browser
-// (browser.js), one page at a time; the window opens only then, never when
-// the dashboard starts, and it closes when the dashboard stops. The Google
+// (browser.js), one page at a time; the window opens only then, or when a
+// check reads the campaign product's public reviews (step 7: its own page,
+// then "See all reviews", read once in a checking run, kept on this computer
+// and searched for every row), never when the dashboard starts, and it
+// closes when the dashboard stops. The Google
 // login, for the screenshots on Google Drive, is the Amazon screen's own, in
 // the Live Amazon Browser, handed over by serve.mjs: the top bar shows its
 // state, and its buttons are the Amazon screen's own routes, so logging in on
@@ -40,6 +43,7 @@ import { readOrderShot, readDeliveryShot } from './shot-read.js';
 import { readReviewShot } from './review-read.js';
 import { SettingsError } from './settings.js';
 import { FlipkartBrowser } from './browser.js';
+import { readProductReviews } from './reviews.js';
 
 const TOO_BIG = `The file is larger than ${MAX_SHEET_BYTES / (1024 * 1024)} megabytes, so save a smaller copy (only the Flipkart tab, for example), then upload that.`;
 const MAX_JSON_BYTES = 64 * 1024;
@@ -49,6 +53,10 @@ const CHECKING_ALL = 'Rows are being checked.';
 const GONE = 'This campaign is no longer saved. Reload the page.';
 /** The button that checks the rows one by one, once a row is checked, as a pause names it. */
 const RUN_BUTTON = '"Carry on checking"';
+/** How long a copy of Flipkart's reviews read for one row's Check serves the next row's Check. */
+const KEPT_REVIEWS_MS = 60 * 60 * 1000;
+/** A reading of Flipkart's reviews that went as far as it was meant to (reviews.js). */
+const wholeReading = (r) => ['date', 'last page', 'limit'].includes(r?.end);
 
 /** A row counts as checked once its last check finished: only a finished check is kept with the row (store.js saveCheck). */
 const isChecked = (r) => Boolean(r?.check);
@@ -350,8 +358,9 @@ export function sheetView(saved, campaigns = []) {
  * the downloads use; tests give a pretend one.
  * shotOptions — tests only: the downloads' own options (screenshots.js).
  * readers — tests only: { order(files, opts), delivery(files, opts),
- * review(files, opts) } in place of reading the purchase, delivery and
- * review screenshots with Tesseract (shot-read.js, review-read.js).
+ * review(files, opts), reviews(browser, pid, opts) } in place of reading the
+ * purchase, delivery and review screenshots with Tesseract (shot-read.js,
+ * review-read.js) and a product's reviews on Flipkart (reviews.js).
  * The answer is the routes' handler; its close() closes the Live Flipkart
  * Browser, when the dashboard stops.
  */
@@ -361,6 +370,8 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   const readOrder = readers?.order ?? ((files, opts) => readOrderShot(files, opts));
   const readDelivery = readers?.delivery ?? ((files, opts) => readDeliveryShot(files, opts));
   const readReview = readers?.review ?? ((files, opts) => readReviewShot(files, opts));
+  // A campaign product's public reviews, read in the Live Flipkart Browser: its own page, then "See all reviews".
+  const readReviewsOf = readers?.reviews ?? ((b, pid, opts) => readProductReviews(b, pid, opts));
   // A row's screenshots, downloaded when it is checked; the ones on Google Drive through the Amazon screen's Google login.
   const screenshots = createScreenshots({ store, google, ...shotOptions });
   let checking = null; // the row being checked: { rowId, stop }, with all: true while the rows are checked one by one. One check at a time.
@@ -661,6 +672,55 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   const checkButton = (row) => (isChecked(row) ? '"Check again"' : 'Check');
   /** The button that checks the rows one by one: "Carry on checking" once a row is checked. */
   const runButton = (rows) => (rows.some(isChecked) ? RUN_BUTTON : '"Start checking"');
+  /** True when a row has a review to search Flipkart's reviews for: a review screenshot, or a review link. */
+  const hasReviewProof = (r) => Boolean(r.shots?.reviewShot?.links?.length || r.shots?.reviewShot?.picture || r.shots?.review?.links?.length);
+  /**
+   * How far back step 7 reads Flipkart's reviews: to the oldest day a row of
+   * the file needs (its delivery day, else its order day, as its last check
+   * found them; for the row being checked, `day`), or null, as far as allowed
+   * (50 pages), while a row with a review to search for has not been checked
+   * that way yet.
+   */
+  function oldestDay(rows, rowId, day) {
+    const days = [day];
+    for (const r of rows) {
+      if (r.id === rowId) continue;
+      if (r.check?.reviewsFrom) days.push(r.check.reviewsFrom.day);
+      else if (hasReviewProof(r)) return null;
+    }
+    return days.filter(Boolean).sort()[0] ?? null;
+  }
+  /** A copy of a product's reviews kept on this computer, when it was read in full in the last hour; else null. */
+  async function reviewsReadLately(pid) {
+    const kept = await store.reviews(pid).catch(() => null);
+    return kept && wholeReading(kept) && now().getTime() - Date.parse(kept.readAt ?? '') < KEPT_REVIEWS_MS ? kept : null;
+  }
+  /**
+   * Flipkart's public reviews of a campaign's product, for step 7 of the
+   * check: read once in a checking run in the Live Flipkart Browser (its own
+   * page, then "See all reviews", newest first; reviews.js
+   * readProductReviews) and kept on this computer, in
+   * data/flipkart/reviews/<product ID>.json; every row of the run searches
+   * that copy, and Flipkart is not opened again. A copy that stopped at a
+   * newer day than a row needs is read on from where it stopped. One row's
+   * Check (single) also uses a copy read in the last hour. A reading stopped
+   * part way (a robot check, a block, a page too slow) is kept only when it
+   * has more reviews than the copy kept before.
+   */
+  function reviewsSource(single) {
+    const run = new Map();
+    const covers = (r, since) => r.end === 'last page' || r.end === 'limit' || (r.end === 'date' && since !== null && r.since !== null && r.since <= since);
+    return async (pid, { rowId = null, day = null, onPage, signal = null } = {}) => {
+      const since = oldestDay(await keptRows(), rowId, day);
+      const prior = run.get(pid) ?? (single ? await reviewsReadLately(pid) : null);
+      if (prior && covers(prior, since)) return { ...prior, reused: true };
+      const read = await readReviewsOf(liveBrowser(), pid, { since, now, onPage, signal, from: prior?.end === 'date' ? prior : null });
+      const kept = await store.reviews(pid).catch(() => null);
+      if (read.reviews?.length && (wholeReading(read) || read.reviews.length > (kept?.reviews?.length ?? 0))) await store.saveReviews(pid, read);
+      if (wholeReading(read)) run.set(pid, read);
+      return { ...read, reused: false };
+    };
+  }
   /** The kept file's rows, as kept; none when no file is kept. */
   const keptRows = async () => {
     const saved = await store.sheet();
@@ -696,7 +756,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       const before = googleBefore(row);
       if (before) return pause(before.kind, before.says);
       const saved = await store.sheet();
-      const result = await runCheck({ row, has: hasColumns(saved?.sheet?.mapping), screenshots, marks, campaigns: campaignsOf(row, saved, await store.campaigns()), readOrder, readDelivery, readReview, reviewer: reviewerOf(row, saved), emit, signal: run.stop.signal, now });
+      const result = await runCheck({ row, has: hasColumns(saved?.sheet?.mapping), screenshots, marks, campaigns: campaignsOf(row, saved, await store.campaigns()), readOrder, readDelivery, readReview, reviewer: reviewerOf(row, saved), reviews: reviewsSource(true), emit, signal: run.stop.signal, now });
       if (result.paused) pause(result.paused.kind, result.paused.says);
       else if (!result.stopped) await store.saveCheck(id, result);
     } catch (err) {
@@ -761,6 +821,8 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       const has = hasColumns(saved?.sheet?.mapping);
       // Nothing changes a campaign while rows are checked.
       const campaigns = await store.campaigns();
+      // Flipkart's reviews are read once for the whole run, and every row searches that copy.
+      const reviews = reviewsSource(false);
       let rows = Array.isArray(saved?.rows) ? saved.rows : [];
       emit({ event: 'run-started', again, ...tally(rows) });
       for (;;) {
@@ -775,7 +837,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         // A row with a Google Drive screenshot to download, while a login is using the Live Amazon Browser or no one is logged in to Google: checking pauses before it.
         const before = googleBefore(r);
         if (before) return paused(before.kind, before.says);
-        const result = await runCheck({ row: r, has, screenshots, marks, campaigns: campaignsOf(r, saved, campaigns), readOrder, readDelivery, readReview, reviewer: reviewerOf(r, saved), emit, signal: run.stop.signal, now });
+        const result = await runCheck({ row: r, has, screenshots, marks, campaigns: campaignsOf(r, saved, campaigns), readOrder, readDelivery, readReview, reviewer: reviewerOf(r, saved), reviews, emit, signal: run.stop.signal, now });
         if (result.stopped) break;
         if (result.paused) return paused(result.paused.kind, result.paused.says);
         const kept = await store.saveCheck(r.id, result);

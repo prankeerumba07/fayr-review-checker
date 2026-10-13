@@ -18,24 +18,32 @@
 // review screenshot (review-read.js), as the Amazon checker's step 7 reads
 // one: the rating, the review's title and words, the reviewer's name and the
 // date, or Flipkart's message that the review was not accepted or that only a
-// rating was given; of several reviews, only the user's. The product is compared by
+// rating was given; of several reviews, only the user's; and the first part
+// of step 7, finding the review among Flipkart's public reviews: the campaign
+// product's own page on Flipkart, then "See all reviews", newest first, read
+// once in a checking run and kept on this computer for every row (routes.js,
+// reviews.js), with the day from which a review can be the user's (the
+// delivery day, else the order day). The product is compared by
 // its name with the products of the live campaigns the row uses, by their
 // real names read from Flipkart, or, with no live campaign, with its product
 // name in the sheet. A detail that is not shown, or could not be read, is
 // never called different and never passes. Both screenshots are read, even
 // when the first has a problem; then the comparison table puts the sheet and
-// the two screenshots side by side. Every other step says it comes in a later
-// step, and the row gets no Status: it stays "Not checked yet". No one
+// the two screenshots side by side. Every other step, and searching the
+// reviews read, says it comes in a later step, and the row gets no Status: it
+// stays "Not checked yet". No one
 // logged in to Google, a login using the Live Amazon Browser,
-// Google's login page, a robot check or a block pauses the check, as on
-// Amazon: the row gets no result, nothing is got around, and the row can be
-// checked again later.
+// Google's login page, or Flipkart's robot check, a block or a page too slow
+// pauses the check, as on Amazon: the row gets no result, nothing is got
+// around, and the row can be checked again later.
 
 import { randomBytes } from 'node:crypto';
 import { downloadable } from './screenshots.js';
 import { readOrderShot, readDeliveryShot } from './shot-read.js';
 import { NOT_DELIVERED_WORDS } from './delivery-read.js';
 import { readReviewShot } from './review-read.js';
+import { indiaDay } from './review-page.js';
+import { linkLabel, isShortLink } from './links.js';
 import { DEFAULT_MARKS } from './settings.js';
 import { shortName } from './campaigns.js';
 import { wordsOf, productWords } from './text.js';
@@ -63,7 +71,17 @@ export const PAUSE_SAYS = {
   'google-signin': 'Google asked to log in, so the screenshots on Google Drive cannot be downloaded. Press "Log in to Google" in the top bar and log in there, then press "Carry on checking".',
   'google-robot': 'Google showed a robot check while a screenshot was being downloaded. This dashboard never answers a robot check. Press "Carry on checking" when you are ready.',
   'google-blocked': 'Google Drive refused to give a screenshot just now. Wait a while, then press "Carry on checking".',
+  // While Flipkart's reviews are read in the Live Flipkart Browser (step 7), as the Amazon checker pauses for Amazon's pages.
+  'flipkart-captcha': 'Flipkart showed a robot check. This dashboard never answers a robot check. Press "Carry on checking" when you are ready.',
+  'flipkart-blocked': 'Flipkart refused a page. Wait a while, then press "Carry on checking".',
+  'flipkart-error': 'Flipkart showed an error page. Wait a while, then press "Carry on checking".',
+  'flipkart-slow': 'Flipkart is very slow to show its pages just now. Wait a while, then press "Carry on checking".',
+  'flipkart-closed': 'The Live Flipkart Browser was closed or could not be opened. Press "Carry on checking" to open it again.',
+  'flipkart-network': 'The Live Flipkart Browser could not open a Flipkart page. Check that this computer is online, then press "Carry on checking".',
+  'flipkart-elsewhere': 'A Flipkart page tried to go to another website, which this dashboard never opens. Press "Carry on checking" to try again.',
 };
+/** The pause for each way a reading of Flipkart's reviews can stop part way (reviews.js). */
+const READING_PAUSES = { slow: 'flipkart-slow', closed: 'flipkart-closed', network: 'flipkart-network', elsewhere: 'flipkart-elsewhere' };
 const WHAT = { order: 'purchase screenshot', delivery: 'delivery screenshot', review: 'review screenshot', reviewShot: 'review screenshot' };
 /** Each cell's column, as the file's columns are named (workbook.js). */
 const SHOT_COLUMN = { order: 'orderShot', delivery: 'deliveryShot', review: 'reviewLink', reviewShot: 'reviewShot' };
@@ -170,10 +188,11 @@ class Paused extends Error {
  *   readDelivery(files, { want }) — what the delivery screenshot says (shot-read.js readDeliveryShot)
  *   readReview(files, { reviewer, productIs }) — what the review screenshot says (review-read.js readReviewShot)
  *   reviewer — the reviewer named in the sheet, which finds the user's review among several on the review screenshot
+ *   reviews(pid, { rowId, day, onPage, signal }) — Flipkart's public reviews of a campaign's product, read once in a checking run and kept on this computer (routes.js, reviews.js readProductReviews); day is the oldest day this row needs
  *   emit(event) — started, action, step and done lines for the screen; a step's line carries what was read so far (partial)
- * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, steps, sheet, order, delivery, review, compared, shotsHad, comparison, paused, stopped }
+ * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, steps, sheet, order, delivery, review, reviewsFrom, flipkart, compared, shotsHad, comparison, paused, stopped }
  */
-export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_MARKS, campaigns = [], readOrder = readOrderShot, readDelivery = readDeliveryShot, readReview = readReviewShot, reviewer = null, emit = () => {}, signal = null, checkId = newCheckId(), now = () => new Date() }) {
+export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_MARKS, campaigns = [], readOrder = readOrderShot, readDelivery = readDeliveryShot, readReview = readReviewShot, reviewer = null, reviews = null, emit = () => {}, signal = null, checkId = newCheckId(), now = () => new Date() }) {
   const had = { orderDate: true, amount: true, product: true, orderShot: true, deliveryShot: true, reviewShot: true, reviewLink: true, ...Object.fromEntries(Object.entries(has ?? {}).map(([k, v]) => [k, v !== false])) };
   /** A detail with no column in the file is not compared at all. */
   const compared = DETAILS.filter((k) => k === 'orderId' || had[k]);
@@ -199,6 +218,9 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     delivery: null,
     // What the review screenshot says, as read on this computer (step 6).
     review: null,
+    // From which day a review can be the user's, and Flipkart's reviews as read for this row (step 7).
+    reviewsFrom: null,
+    flipkart: null,
     // What was compared, and the screenshots the file has: the comparison shows only those.
     compared,
     shotsHad: SHOTS.filter((w) => had[SHOT_COLUMN[w]]),
@@ -246,6 +268,8 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
 
   /** Each screenshot's cell as its opening step left it: 'no column', 'missing', 'unopened' or 'opened', with its pictures. */
   const shot = {};
+  /** The days steps 2 and 4 read: { order: the purchase screenshot's dates that can be the order's, delivery: the Delivered line's date }. */
+  const daysRead = {};
   /** A cell's pictures, downloading again any that could not be had; a download that cannot be made just now pauses the check here. */
   async function fetchCell(n, which) {
     const g = await screenshots.forCell(row.id, which, { signal });
@@ -455,6 +479,8 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const want = { orderId: sheetId || null, amount: sheetAmount, tolerance, allowance, product: which === 'order' && had.product ? productTold : null };
     const r = await (which === 'order' ? readOrder : readDelivery)(shot[which].files, { want });
     checkStop();
+    // The days read, for step 7: the order's on the purchase screenshot, the delivery's on the delivery screenshot.
+    daysRead[which] = which === 'order' ? orderDates('order', r.dates ?? []) : r.deliveredOn ?? null;
     const near = (v) => sheetAmount !== null && Number.isFinite(v) && Math.abs(v - sheetAmount) <= tolerance + 1e-9;
     // A number read with no rupee sign and no label is shown only when it is the sheet's amount, the only time it counts.
     const amounts = (r.amounts ?? [])
@@ -561,6 +587,97 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     return finish(n, 'fail', `It does not clearly show a written review, a star rating only or a message from Flipkart, because ${v.why}.${note}`);
   }
 
+  // ---- step 7: finding the review among Flipkart's public reviews (FLIPKART-PLAN.md point 4) ----
+
+  /** A day read from a screenshot as YYYY-MM-DD: its own year, else the most recent such day that is not after today (India's). */
+  function dayOf(d, today) {
+    if (!d) return null;
+    if (d.day) return d.day;
+    const [y] = today.split('-').map(Number);
+    for (let year = y; year >= y - 4; year--) {
+      const t = new Date(Date.UTC(year, d.month - 1, d.date));
+      const day = t.toISOString().slice(0, 10);
+      if (t.getUTCMonth() === d.month - 1 && day <= today) return day;
+    }
+    return null;
+  }
+  /**
+   * From which day a review on Flipkart can be the user's: the day the order
+   * was delivered, on the delivery screenshot; when it shows none ("Delivered
+   * before time"), the day the order was placed, on the purchase screenshot
+   * (the one marked as the order's, else the earliest). The file has no order
+   * date to use. -> { day, from ('delivery', 'order' or null), said }; day is
+   * null when neither shows one: then no date is used for the row.
+   */
+  function reviewsFrom() {
+    const today = indiaDay(now());
+    const delivered = dayOf(daysRead.delivery, today);
+    if (delivered) return { day: delivered, from: 'delivery', said: `the day the order was delivered (${dayFirst(delivered)}, on the delivery screenshot)` };
+    const dates = daysRead.order ?? [];
+    const marked = dates.filter((d) => d.labelled).map((d) => dayOf(d, today)).find(Boolean);
+    const ordered = marked ?? dates.map((d) => dayOf(d, today)).filter(Boolean).sort()[0] ?? null;
+    if (ordered) return { day: ordered, from: 'order', said: `the day the order was placed (${dayFirst(ordered)}, on the purchase screenshot, as the delivery screenshot shows no delivery day)` };
+    return { day: null, from: null, said: 'neither the delivery screenshot nor the purchase screenshot shows a day' };
+  }
+  /** The campaign's product the row is for: the one the purchase screenshot shows, else the campaign's only one; null when it cannot be told. */
+  function boughtProduct() {
+    const shown = result.order?.details?.product?.state === 'same' ? result.order.details.product.product : null;
+    if (shown?.pid) return campaignProducts.find((p) => p.pid === shown.pid) ?? shown;
+    const all = campaignProducts.filter((p) => p.pid);
+    return new Set(all.map((p) => p.pid)).size === 1 ? all[0] : null;
+  }
+  /** The review link's cell holds a link to one review on Flipkart, or one of Flipkart's short links that may lead to one. */
+  const reviewLinked = () => had.reviewLink && (row.shots?.review?.links ?? []).some((l) => linkLabel(l) === 'Flipkart review' || isShortLink(l));
+  /** Why the row has nothing to search Flipkart's reviews with, or null: a review screenshot with no review by the user, or none at all, and no link to one review. */
+  function nothingToSearch() {
+    const v = result.review;
+    if (v?.kind === 'written' && (v.body || v.title)) return null;
+    if (reviewLinked()) return null;
+    if (!v) return 'There is no review screenshot to read and no link to one review';
+    if (v.kind === 'rating') return 'The review screenshot shows a star rating only, with no words to search for, and there is no link to one review';
+    if (v.kind === 'refused') return "The review screenshot shows Flipkart's message that the review was not accepted, and there is no link to one review";
+    return `The review screenshot shows no review by the user (${v.why ?? 'none could be read'}), and there is no link to one review`;
+  }
+
+  /**
+   * Step 7: finding the review among Flipkart's public reviews, as staff
+   * would: the campaign product's own page on Flipkart, then "See all
+   * reviews", newest first (reviews.js readProductReviews), read once in a
+   * checking run and kept on this computer for every row (routes.js). Reviews
+   * posted on or after the day the order was delivered (else placed) can be
+   * the user's (reviewsFrom). Searching them for this row's review comes next;
+   * for now the step says what was read. A row with nothing to search with
+   * opens nothing. A robot check, a block or a page that takes too long
+   * pauses the check, as on Amazon, and nothing is got around.
+   */
+  async function findReviewStep(n) {
+    if (!reviews) return later(n);
+    start(n, "Finding the review among Flipkart's public reviews");
+    result.reviewsFrom = reviewsFrom();
+    const nothing = nothingToSearch();
+    if (nothing) return finish(n, 'not-reached', `${nothing}, so there is nothing to search with.`);
+    if (!byCampaign) return finish(n, 'not-reached', "The row uses no live campaign with a product read from Flipkart, so there is no product's page to find the review on.");
+    const product = boughtProduct();
+    if (!product) return finish(n, 'not-reached', "Which of the campaign's products was bought could not be told from the purchase screenshot, so it is not known whose reviews to search.");
+    const got = await reviews(product.pid, {
+      rowId: row.id,
+      signal,
+      day: result.reviewsFrom.day,
+      onPage: (p) => say(p === 0 ? "Opening the product's page on Flipkart" : `Reading page ${p} of Flipkart's reviews, newest first`),
+    });
+    checkStop();
+    const kept = (got.reviews ?? []).length;
+    const oldest = (got.reviews ?? []).map((r) => r.date).filter(Boolean).sort()[0] ?? null;
+    result.flipkart = { pid: product.pid, name: got.product?.name ?? product.name ?? null, readAt: got.readAt ?? null, reused: Boolean(got.reused), pages: got.pages ?? 0, count: kept, total: got.total ?? null, end: got.end ?? null, since: got.since ?? null, oldest, says: got.says ?? null };
+    const pause = got.end === 'prevented' ? `flipkart-${got.prevented ?? 'blocked'}` : READING_PAUSES[got.end];
+    if (pause) pauseAt(n, pause, PAUSE_SAYS[pause], `${got.says} The check paused here; nothing was got around.`);
+    if (got.end === 'none' || !kept) return finish(n, 'fail', got.says ?? "Flipkart's reviews could not be read.");
+    const how = got.reused ? ' They were read earlier and kept on this computer, so Flipkart was not opened again.' : '';
+    const back = got.end === 'last page' ? 'all the reviews Flipkart shows' : oldest ? `back to ${dayFirst(oldest)}${got.end === 'limit' ? ', the most read at one time' : ''}` : 'their dates could not be read';
+    const rule = result.reviewsFrom.day ? `Reviews posted on or after ${result.reviewsFrom.said} can be the user's.` : `The date is not used for this row: ${result.reviewsFrom.said}.`;
+    return finish(n, 'later', `Read ${kept === 1 ? '1 review' : `${kept} reviews`} of the product from ${got.pages === 1 ? '1 page' : `${got.pages} pages`} of "See all reviews" on Flipkart, newest first (${back}).${how} ${rule} Searching them for this review comes in a later step.`);
+  }
+
   emit({ event: 'started', checkId, steps: STEP_NAMES, rowId: row.id, row: row.row ?? null, name: result.name });
   try {
     for (let n = 1; n <= STEP_NAMES.length; n++) {
@@ -568,6 +685,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       if (which) await step(n, () => openShot(n, which));
       else if (READS[n]) await step(n, () => readShot(n, READS[n]));
       else if (n === 6) await step(n, () => readReviewStep(n, reviewCell(row, had)));
+      else if (n === 7) await step(n, () => findReviewStep(n));
       else later(n);
     }
   } catch (err) {

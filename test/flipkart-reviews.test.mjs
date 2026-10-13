@@ -12,8 +12,9 @@ import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { readReviews, readAndKeepReviews, MAX_REVIEW_PAGES } from '../flipkart/reviews.js';
-import { dateFromWords, indiaDay, reviewsPageLink, reviewsInPageData, pageData } from '../flipkart/review-page.js';
+import { readReviews, readAndKeepReviews, readProductReviews, MAX_REVIEW_PAGES } from '../flipkart/reviews.js';
+import { dateFromWords, indiaDay, reviewsPageLink, reviewsInPageData, pageData, reviewsLinkInPage } from '../flipkart/review-page.js';
+import { pageForPid } from '../flipkart/links.js';
 import { whatPageIs } from '../flipkart/page-read.js';
 import { createFlipkartStore } from '../flipkart/store.js';
 
@@ -187,4 +188,61 @@ test('the reviews are kept only in data/flipkart/reviews/<product ID>.json, with
   await assert.rejects(store.saveReviews('../../escape', {}), /Not a Flipkart product ID\./);
   assert.equal(await store.reviews('../rows'), null);
   assert.equal(await store.reviews('FCPTESTNONE00001'), null, 'none read yet');
+});
+
+/** A made-up product page as the Live Flipkart Browser reads it: its JSON-LD's name and product ID, and its links to all its reviews. */
+const productPage = (url, { pid = PID, links = [], html = '', status = 200, text = '', name = 'Test Glow Face Mask 100 g' } = {}) => ({
+  ok: true,
+  status,
+  url,
+  facts: { url, title: `${name} - Price in India`, text, canonical: null, product: name ? { name, brand: 'Test Glow', sku: pid, rating: 4.2, ratings: 120, reviews: 30 } : null, reviewLinks: links, variants: [], robotFrame: false, robotForm: false },
+  html,
+});
+/** A pretend Live Flipkart Browser that also has the product's own page (found by its product ID). */
+function siteBrowser(productOf, pageOf) {
+  const b = {
+    opened: [],
+    async begin() {},
+    async open(url) {
+      b.opened.push(url);
+      return /\/product\/p\/itme\?/.test(url) ? productOf(url) : pageOf(Number(new URL(url).searchParams.get('page')), url);
+    },
+  };
+  return b;
+}
+
+test('the link to all of a product\'s reviews, from its page as Flipkart sent it: the first one for this product that is not about one thing, else one made from its own product page\'s address; none for another product', () => {
+  const data = `<script>window.__INITIAL_STATE__ = {"a":"\\/test-glow-face-mask\\/product-reviews\\/itmtestglow0001?pid=${PID}&aid=overall","b":"\\u002Ftest-glow-face-mask\\u002Fproduct-reviews\\u002Fitmtestglow0001?pid=${PID}&amp;lid=LST1"};</script>`;
+  assert.deepEqual([reviewsLinkInPage(data, PID), reviewsLinkInPage(`<a href="/test-glow-face-mask/p/itmtestglow0001?pid=${PID}&amp;lid=1">`, PID), reviewsLinkInPage('<a href="/test-clay/p/itmtestclay00001?pid=FCPTESTCLAY00001">', PID), reviewsLinkInPage('', PID)], [GLOW, GLOW, null, null]);
+});
+
+test('a campaign product\'s reviews as staff find them: its own page found by its product ID, then its "See all reviews" link (the page\'s own, else the one its own data names), newest first, told before each page; a reading stopped at a date goes on from where it stopped; the product\'s page that cannot be had, is not the product\'s or shows no way to its reviews reads nothing', async () => {
+  const told = [];
+  const b = siteBrowser((url) => productPage(url, { links: [GLOW] }), onePage);
+  const out = await readProductReviews(b, PID, { now, onPage: (n) => told.push(n) });
+  assert.deepEqual([b.opened, told, out.link, out.end, out.reviews.length, out.product], [[pageForPid(PID), pageUrl(1), pageUrl(2)], [0, 1, 2], GLOW, 'last page', 2, { pid: PID, name: 'Test Glow Face Mask 100 g', rating: 4.2, ratings: 120, reviews: 30 }]);
+  const named = siteBrowser((url) => productPage(url, { html: `<script>window.__INITIAL_STATE__ = {"x":"\\/test-glow-face-mask\\/product-reviews\\/itmtestglow0001?pid=${PID}"};</script>` }), onePage);
+  assert.deepEqual([(await readProductReviews(named, PID, { now })).link], [GLOW], "the link its own data names, when the page shows none");
+  // Stopped at a day; then read on from its next page, back to an older day, without opening the product's page again.
+  const dated = (n, url) => reviewPage(url, [shown(`${n}-1`, `${n * 10} days ago`), shown(`${n}-2`, `${n * 10} days ago`)]);
+  const first = await readProductReviews(siteBrowser((url) => productPage(url, { links: [GLOW] }), dated), PID, { now, since: '2026-09-25' });
+  assert.deepEqual([first.end, first.pages, first.reviews.length, first.since], ['date', 2, 4, '2026-09-25']);
+  const more = siteBrowser(() => assert.fail("the product's page is not opened again"), dated);
+  const on = await readProductReviews(more, PID, { now, since: '2026-09-05', from: first });
+  assert.deepEqual([more.opened, on.end, on.pages, on.reviews.length, on.reviews.map((r) => r.page), on.product.name], [[pageUrl(3), pageUrl(4)], 'date', 4, 8, [1, 1, 2, 2, 3, 3, 4, 4], 'Test Glow Face Mask 100 g']);
+  // The product's page: a robot check, too slow, another product, no way to its reviews; then a review page too slow.
+  const product = async (answer) => readProductReviews(siteBrowser(answer, onePage), PID, { now });
+  const robot = await product((url) => productPage(url, { text: 'Are you a human? Please confirm that you are a human.', name: null }));
+  assert.deepEqual([robot.end, robot.prevented, robot.stoppedAt, robot.reviews, robot.says], ['prevented', 'captcha', 0, [], "Flipkart prevented this check at the product's page: it showed a robot check, which this dashboard never answers. No review was read; try again later."]);
+  assert.deepEqual([(await product(() => ({ ok: false, error: 'timeout', message: 'The page took too long to open.' }))).end, (await product((url) => productPage(url, { pid: 'FCPTESTCLAY00001', links: [GLOW] }))).says, (await product((url) => productPage(url))).says], ['slow', "Flipkart's page for the product's ID did not show the product, so its reviews could not be read.", "The product's page on Flipkart showed no way to see all its reviews, so they could not be read."]);
+  const slow = await readProductReviews(siteBrowser((url) => productPage(url, { links: [GLOW] }), (n, url) => (n === 1 ? reviewPage(url, [shown(1, 'Today')]) : { ok: false, error: 'timeout', message: 'The page took too long to open.' })), PID, { now });
+  assert.deepEqual([slow.end, slow.stoppedAt, slow.reviews.length, slow.says], ['slow', 2, 1, 'Flipkart took too long to show page 2 of the reviews, so the reading stopped there. The reviews of page 1 were kept.']);
+  assert.deepEqual([(await readProductReviews(siteBrowser(() => assert.fail('nothing is opened'), onePage), 'not a product ID', { now })).end], ['none']);
+  // Stop: no page is opened after it.
+  const stopped = new AbortController();
+  stopped.abort();
+  assert.equal((await readProductReviews(siteBrowser(() => assert.fail('nothing is opened'), onePage), PID, { now, signal: stopped.signal })).end, 'stopped');
+  const midway = new AbortController();
+  const half = await readProductReviews(siteBrowser((url) => productPage(url, { links: [GLOW] }), onePage), PID, { now, signal: midway.signal, onPage: (n) => n === 1 && midway.abort() });
+  assert.deepEqual([half.end, half.pages, half.stoppedAt, half.says], ['stopped', 1, 2, 'The check was stopped, so the reading stopped before page 2 of the reviews. The reviews of page 1 were kept.']);
 });

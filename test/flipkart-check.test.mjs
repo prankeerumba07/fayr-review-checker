@@ -254,6 +254,57 @@ test("step 6, as the Amazon checker's step 7 reads a review screenshot: the rati
   assert.deepEqual([noColumn.result.steps[5].state, noColumn.result.steps[5].detail], ['not-reached', 'The file has no review screenshot column, so there is nothing to read.']);
 });
 
+test("step 7, its first part: Flipkart's reviews of the campaign's product, read once in a checking run (a pretend reading) for every row; reviews from the day the order was delivered count, else from the day it was placed, a date with no year being the most recent such day not in the future, and with neither no date is used; a row with nothing to search with reads nothing; a reading stopped by a robot check, a block or a slow page pauses the check", async () => {
+  const NOW = () => new Date('2026-10-13T05:00:00.000Z');
+  const made = (i, date) => ({ id: `made-up-${i}`, name: `Made-up Reviewer ${i}`, stars: 4, title: 'Nice', text: `Made-up review number ${i}.`, dateSaid: '3 days ago', date, dateLatest: date, city: 'Test Town', certified: true, reviewFor: null, page: 1 });
+  const READ = { pid: 'TESTPID0000001', link: 'https://www.flipkart.com/test-brand-steel-bottle/product-reviews/itmtestbottle01?pid=TESTPID0000001&marketplace=FLIPKART', readAt: '2026-10-13T05:00:00.000Z', since: null, pages: 3, total: 40, end: 'limit', stoppedAt: null, says: '3 reviews read from 3 pages, the most read at one time; older reviews were not read.', reviews: [made(1, '2026-10-10'), made(2, '2026-08-01'), made(3, '2026-07-15')], product: { pid: 'TESTPID0000001', name: BOTTLE, rating: 4.2, ratings: 100, reviews: 40 } };
+  const asked = [];
+  const told = [];
+  const source = (answer = READ) => async (pid, o) => {
+    asked.push({ pid, rowId: o.rowId, day: o.day });
+    o.onPage?.(0);
+    o.onPage?.(1);
+    return typeof answer === 'function' ? answer() : answer;
+  };
+  const go = (opts = {}) => run(opts.row ?? ROW, {}, { reviewer: REVIEWER, campaigns: [CAMPAIGN], now: NOW, reviews: source(opts.answer), ...opts });
+  const one = await go();
+  one.events.filter((e) => e.event === 'action').forEach((e) => told.push(e.says));
+  assert.deepEqual([one.result.steps[6].state, one.result.steps[6].detail], ['later', 'Read 3 reviews of the product from 3 pages of "See all reviews" on Flipkart, newest first (back to 15-07-2026, the most read at one time). Reviews posted on or after the day the order was delivered (23-07-2026, on the delivery screenshot) can be the user\'s. Searching them for this review comes in a later step.']);
+  assert.deepEqual(asked.at(-1), { pid: 'TESTPID0000001', rowId: ROW.id, day: '2026-07-23' }, "the product the purchase screenshot shows, and the row's day");
+  assert.deepEqual(told.filter((t) => /Flipkart/.test(t)), ["Finding the review among Flipkart's public reviews", "Opening the product's page on Flipkart", "Reading page 1 of Flipkart's reviews, newest first"]);
+  assert.deepEqual([one.result.reviewsFrom, one.result.flipkart], [{ day: '2026-07-23', from: 'delivery', said: 'the day the order was delivered (23-07-2026, on the delivery screenshot)' }, { pid: 'TESTPID0000001', name: BOTTLE, readAt: '2026-10-13T05:00:00.000Z', reused: false, pages: 3, count: 3, total: 40, end: 'limit', since: null, oldest: '2026-07-15', says: READ.says }]);
+  assert.deepEqual([one.result.steps[7].state, one.result.steps[8].state], ['later', 'later']);
+  // Read earlier and kept: Flipkart is not opened again.
+  const kept = await go({ answer: { ...READ, reused: true } });
+  assert.match(kept.result.steps[6].detail, / They were read earlier and kept on this computer, so Flipkart was not opened again\. Reviews posted/);
+  // The days: no delivery day ("Delivered before time"), so the order's; a date with no year in the future is last year's; neither.
+  const early = await go({ delivery: deliveryReading(['< Order Details Help', BOTTLE, `Order #${ID}`, 'Delivered before time', 'Delivery details']) });
+  assert.deepEqual([early.result.reviewsFrom.day, asked.at(-1).day], ['2026-07-20', '2026-07-20']);
+  assert.match(early.result.steps[6].detail, /Reviews posted on or after the day the order was placed \(20-07-2026, on the purchase screenshot, as the delivery screenshot shows no delivery day\) can be the user's\./);
+  const december = await go({ delivery: deliveryReading(['< Order Details Help', BOTTLE, `Order #${ID}`, '© Delivered, Fri 25th Dec', 'Delivery details']) });
+  assert.equal(december.result.reviewsFrom.day, '2025-12-25', 'not a day in the future');
+  const noDay = await go({ read: reading(PURCHASE.filter((t) => !/placed/.test(t))), delivery: deliveryReading(['< Order Details Help', BOTTLE, `Order #${ID}`, 'Delivered before time']) });
+  assert.deepEqual([noDay.result.reviewsFrom, asked.at(-1).day], [{ day: null, from: null, said: 'neither the delivery screenshot nor the purchase screenshot shows a day' }, null]);
+  assert.match(noDay.result.steps[6].detail, /The date is not used for this row: neither the delivery screenshot nor the purchase screenshot shows a day\. Searching/);
+  // Nothing to search with: no review by the user on the screenshot and no link to one review, a star rating only; then no campaign.
+  const noLink = { ...ROW, shots: { ...ROW.shots, review: cell() } };
+  const count = asked.length;
+  const LIST = ['5.0 • Wonderful', 'Keeps water cold all day.', 'Test Reviewer Two, Test City', '7 Helpful', 'Verified Purchase · 3 days ago', '4.0 • Nice product', 'The lid is a bit tight.', 'Test Reviewer Three, Test Town', '2 Helpful'];
+  const others = await go({ row: noLink, review: reviewReading(LIST, {}, { reviewer: REVIEWER }) });
+  assert.deepEqual([others.result.steps[6].state, others.result.steps[6].detail], ['not-reached', "The review screenshot shows no review by the user (it shows 2 reviews, and which one is the user's could not be told: none is under the reviewer's name in the sheet), and there is no link to one review, so there is nothing to search with."]);
+  const stars = await go({ row: noLink, review: reviewReading([BOTTLE, '4.0 •', `${REVIEWER} @ Certified Buyer 12 Sep, 2026`]) });
+  assert.equal(stars.result.steps[6].detail, 'The review screenshot shows a star rating only, with no words to search for, and there is no link to one review, so there is nothing to search with.');
+  const noCampaign = await go({ campaigns: [] });
+  assert.deepEqual([noCampaign.result.steps[6].state, noCampaign.result.steps[6].detail, asked.length], ['not-reached', "The row uses no live campaign with a product read from Flipkart, so there is no product's page to find the review on.", count], 'Flipkart is not opened for any of these');
+  // A reading stopped part way pauses the check at step 7, saying why; nothing is got around.
+  const robot = await go({ answer: { ...READ, end: 'prevented', prevented: 'captcha', pages: 1, reviews: [made(1, '2026-10-10')], says: 'Flipkart prevented this check at page 2 of the reviews: it showed a robot check, which this dashboard never answers. The reviews of page 1 were kept.' } });
+  assert.deepEqual([robot.result.paused, robot.result.steps[6].state, robot.result.steps[6].detail, robot.result.steps[7].state], [{ kind: 'flipkart-captcha', says: PAUSE_SAYS['flipkart-captcha'], step: 7 }, 'fail', 'Flipkart prevented this check at page 2 of the reviews: it showed a robot check, which this dashboard never answers. The reviews of page 1 were kept. The check paused here; nothing was got around.', 'waiting']);
+  const slow = await go({ answer: { ...READ, end: 'slow', pages: 0, reviews: [], says: "Flipkart took too long to show the product's page, so no review was read." } });
+  assert.deepEqual([slow.result.paused.kind, slow.result.paused.says], ['flipkart-slow', 'Flipkart is very slow to show its pages just now. Wait a while, then press "Carry on checking".']);
+  const none = await go({ answer: { ...READ, end: 'none', pages: 0, reviews: [], says: "The product's page on Flipkart showed no way to see all its reviews, so they could not be read." } });
+  assert.deepEqual([none.result.paused, none.result.steps[6].state, none.result.steps[6].detail], [null, 'fail', "The product's page on Flipkart showed no way to see all its reviews, so they could not be read."]);
+});
+
 test("what the boxes and the comparison show is cleaned, never what is compared: a Delivered line whose date is not a real date says only Delivered; each date once; a number with no rupee sign or label only when it is the sheet's amount, and an amount with no label not again beside its label; the product's name without the marks and the price read around it", async () => {
   const odd = await run(ROW, {}, { campaigns: [CAMPAIGN], delivery: deliveryReading(['© Delivered Fri, 2l5 O', BOTTLE, `Order #${ID}`]) });
   assert.deepEqual([odd.result.steps[3].state, odd.result.steps[3].detail], ['pass', 'It says "Delivered" (its date could not be read). Order ID: the same. Order date: not shown. Amount: not shown. Product: one of the campaign\'s products.']);
@@ -270,7 +321,9 @@ test("what the boxes and the comparison show is cleaned, never what is compared:
 });
 
 test("no one logged in to Google, a login using the Live Amazon Browser, or Google's login page pauses the check at its step, saying why; nothing more is opened, and the row can be checked again; Stop stops it", async () => {
-  assert.deepEqual(PAUSE_SAYS, Object.fromEntries(Object.entries(AMAZON_PAUSE_SAYS).filter(([k]) => k.startsWith('google-'))), "the Amazon checker's words");
+  assert.deepEqual(Object.fromEntries(Object.entries(PAUSE_SAYS).filter(([k]) => k.startsWith('google-'))), Object.fromEntries(Object.entries(AMAZON_PAUSE_SAYS).filter(([k]) => k.startsWith('google-'))), "the Amazon checker's words");
+  // Flipkart's robot check and refused page, in the Amazon checker's words for Amazon's.
+  assert.deepEqual([PAUSE_SAYS['flipkart-captcha'], PAUSE_SAYS['flipkart-blocked']], [AMAZON_PAUSE_SAYS.captcha.replace('Amazon', 'Flipkart'), AMAZON_PAUSE_SAYS.blocked.replace('Amazon', 'Flipkart')]);
   const out = await run(ROW, { delivery: { pause: 'google-out' } });
   assert.deepEqual(out.asked, ['order', 'delivery'], 'nothing more is opened');
   assert.deepEqual(out.result.paused, { kind: 'google-out', says: PAUSE_SAYS['google-out'], step: 3 });
