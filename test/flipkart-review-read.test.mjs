@@ -69,6 +69,8 @@ test("Flipkart's review screens, read from their lines: the rating as Flipkart w
 
 test('the reviewer named in the sheet fits a name on the screenshot when one is a shorter form of the other, either way (a word left out, cut short or an initial), or read with a slip; never "Flipkart Customer"; of several reviews, the only one that fits, none when two fit, else the user\'s own for the product ordered', () => {
   assert.deepEqual([nameFits(REVIEWER, REVIEWER), nameFits(REVIEWER, 'Test Revi...'), nameFits(REVIEWER, 'Test R'), nameFits(REVIEWER, 'Tesl Reviewer'), nameFits(REVIEWER, 'Flipkart Customer'), nameFits(REVIEWER, 'Other Person'), nameFits(REVIEWER, 'T R'), nameFits('', REVIEWER)], [true, true, true, true, false, false, false, false]);
+  // The same initial on both sides fits too, with a whole word the same ("T Reviewer Test…" and "T Reviewer Testname"); initials alone never do.
+  assert.deepEqual([nameFits('T Reviewer Test', 'T Reviewer Testname'), nameFits('Reviewer T', 'Reviewer T'), nameFits('T R', 'T R'), nameFits('T Reviewer', 'R Reviewer')], [true, true, false, false]);
   // Either way: the sheet's name shorter (only the first name, a surname cut short, an initial) or the screenshot's.
   assert.deepEqual([nameFits('Test', 'Test Reviewer'), nameFits('Test Rev', 'Test Reviewer'), nameFits('T Reviewer', 'Test Reviewer'), nameFits('Test Reviewer', 'Test'), nameFits('Testrev Reviewer', 'Test Reviewer'), nameFits('Test Reviewer One', 'Test Reviewer Two'), nameFits('Test', 'Other Reviewer'), nameFits('Flipkart Customer', 'Flipkart Customer')], [true, true, true, true, true, false, false, false]);
   const a = { name: REVIEWER, own: false, lines: ['a'] };

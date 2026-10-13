@@ -654,11 +654,13 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   const PID = 'TESTPID0000001';
   const LINK = `https://www.flipkart.com/test-brand-steel-bottle/product-reviews/itmtestbottle01?pid=${PID}&marketplace=FLIPKART`;
   const made = (i, date = '2026-10-13') => ({ id: `made-up-${i}`, name: `Made-up Reviewer ${i}`, stars: 4, title: 'Nice', text: `Made-up review number ${i}.`, dateSaid: 'Today', date, dateLatest: date, city: 'Test Town', certified: true, reviewFor: null, page: 1 });
+  // The review on every made-up review screenshot (pretendReader), as Flipkart shows it.
+  const MINE = { ...made('mine', '2026-10-01'), name: 'Test Reviewer', stars: 5, title: 'Wonderful', text: 'Good product, works well.', dateSaid: '12 days ago' };
   const asked = [];
   let answer = null;
   const reviews = async (browser, pid, opts) => {
     asked.push({ pid, since: opts.since, from: opts.from?.pages ?? null });
-    return answer ?? { pid, link: LINK, readAt: clock.toISOString(), since: opts.since, pages: 2, total: 20, end: opts.since ? 'date' : 'limit', stoppedAt: null, says: 'Made-up.', loginBox: false, reviews: [made(1), made(2), made(3, '2026-07-01')], product: { pid, name: 'Test Brand Steel Bottle', rating: 4.2, ratings: 100, reviews: 20 } };
+    return answer ?? { pid, link: LINK, readAt: clock.toISOString(), since: opts.since, pages: 2, total: 20, end: opts.since ? 'date' : 'limit', stoppedAt: null, says: 'Made-up.', loginBox: false, reviews: [made(1), MINE, made(2), made(3, '2026-07-01')], product: { pid, name: 'Test Brand Steel Bottle', rating: 4.2, ratings: 100, reviews: 20 } };
   };
   const routes = createFlipkartRoutes({ dataDir: dir, auth, google, shotOptions: { gapMs: 0 }, readers: { ...reader, reviews }, now: () => clock });
   const at = await serve({ flipkart: routes });
@@ -672,10 +674,14 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   const check = async (row) => lines(await call('POST', `/local/flipkart/rows/${row.id}/check`, { at, body: Buffer.from('{}'), type: 'application/json' }));
   const step7 = (events) => events.at(-1).result?.steps?.[6];
   const keptCount = async () => (await store.reviews(PID))?.reviews?.length ?? 0;
-  // Row 2's Check: no other row has been checked yet, so back to the row's own day; kept.
-  const first = step7(await check(rows[1]));
-  assert.deepEqual([first.state, first.detail], ['later', 'Read 3 reviews of the product from 2 pages of "See all reviews" on Flipkart, newest first (back to 01-07-2026; the rows need reviews back to 23-07-2026). Reviews posted on or after the day the order was delivered (23-07-2026, on the delivery screenshot) can be the user\'s. Searching them for this review comes in a later step.']);
-  assert.deepEqual([asked, await keptCount(), (await store.reviews(PID)).readAt], [[{ pid: PID, since: '2026-07-23', from: null }], 3, '2026-10-13T05:00:00.000Z']);
+  // Row 2's Check: no other row has been checked yet, so back to the row's own day; kept; the review found in it.
+  const firstCheck = await check(rows[1]);
+  const first = step7(firstCheck);
+  assert.deepEqual([first.state, first.detail], ['pass', 'Found the review among Flipkart\'s public reviews (page 1 of "See all reviews"): its words match the review screenshot\'s, and it is under the name on the review screenshot. On Flipkart it has 5 stars, and it was posted 12 days ago (01-10-2026). Read 4 reviews of the product from 2 pages of "See all reviews" on Flipkart, newest first (back to 01-07-2026; the rows need reviews back to 23-07-2026). Reviews posted on or after the day the order was delivered (23-07-2026, on the delivery screenshot) can be the user\'s.']);
+  assert.deepEqual([asked, await keptCount(), (await store.reviews(PID)).readAt], [[{ pid: PID, since: '2026-07-23', from: null }], 4, '2026-10-13T05:00:00.000Z']);
+  // What was found is kept with the row's check, for its page.
+  const keptFound = (await store.sheet()).rows.find((r) => r.id === rows[1].id).check.found;
+  assert.deepEqual([keptFound.how, keptFound.review.id, keptFound.review.stars, keptFound.review.page], ['found', 'made-up-mine', 5, 1]);
   // Row 3's Check soon after: its own day is older, so the reading goes on from where the first one stopped.
   await check(rows[2]);
   const day3 = (await store.sheet()).rows.find((r) => r.id === rows[2].id).check.reviewsFrom.day;
@@ -691,7 +697,7 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   later(2);
   const run = lines(await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from(JSON.stringify({ again: true })), type: 'application/json' }));
   assert.equal(run.at(-1).event, 'run-done');
-  assert.deepEqual([asked.length, asked.at(-1).since, run.filter((e) => e.event === 'done').map((e) => e.result.steps[6].state).filter((st) => st === 'later').length > 1], [4, run.find((e) => e.event === 'done').result.reviewsFrom.day, true], 'one reading for every row of the run, back to the first row\'s day, as the others were cleared');
+  assert.deepEqual([asked.length, asked.at(-1).since, run.filter((e) => e.event === 'done').map((e) => e.result.steps[6].state).filter((st) => st === 'pass').length > 1], [4, run.find((e) => e.event === 'done').result.reviewsFrom.day, true], 'one reading for every row of the run, back to the first row\'s day, as the others were cleared');
   // Every row checked this way: the next reading goes back only to the oldest day a row needs.
   later(2);
   await check(rows[1]);
@@ -709,7 +715,7 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   answer = stoppedAt(1, 'captcha', 1);
   const paused = await check(rows[1]);
   assert.deepEqual(paused.find((e) => e.event === 'paused'), { event: 'paused', kind: 'flipkart-captcha', says: 'Flipkart showed a robot check. This dashboard never answers a robot check. Press "Check again" when you are ready.' });
-  assert.deepEqual([await keptCount(), (await store.reviews(PID)).refused], [3, { page: 2, status: 200, title: 'Flipkart', reviews: 0 }], 'not replaced by a reading stopped part way with fewer reviews');
+  assert.deepEqual([await keptCount(), (await store.reviews(PID)).refused], [4, { page: 2, status: 200, title: 'Flipkart', reviews: 0 }], 'not replaced by a reading stopped part way with fewer reviews');
   // Stopped by an error with as many reviews or more: kept; the next try goes on from where it stopped, and never from page 1.
   answer = stoppedAt(4, 'error', 4);
   assert.equal((await check(rows[1])).find((e) => e.event === 'paused').kind, 'flipkart-error');
@@ -726,6 +732,12 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   later(25);
   await check(rows[1]);
   assert.deepEqual([asked.length, asked.at(-1).from], [11, null]);
+  // A reading stopped part way serves the rest of the run as it is: the rows whose review is in it pass, and Flipkart is not asked again in the run.
+  later(2);
+  answer = { ...stoppedAt(2, 'error', 2), reviews: [made(20), MINE] };
+  const partRun = lines(await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from(JSON.stringify({ again: true })), type: 'application/json' }));
+  const passed = partRun.filter((e) => e.event === 'done').filter((e) => e.result.steps[6].state === 'pass');
+  assert.deepEqual([asked.length, partRun.at(-1).event, passed.length > 1, passed.every((e) => !e.result.paused && /The review was found among the pages read before that\./.test(e.result.steps[6].detail))], [12, 'run-done', true, true]);
 });
 
 /** "Start checking" as the page sends it, its lines read as they come; stop() closes it, as Stop does. */

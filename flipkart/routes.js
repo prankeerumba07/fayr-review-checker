@@ -701,9 +701,11 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
    * stopped at a newer day than a row needs is read on from where it stopped,
    * and so is one stopped part way in the last day (a robot check, a refusal,
    * an error, a page too slow, Stop), its pages kept. A reading stopped part
-   * way is kept only when it has at least as many reviews as the copy kept
-   * before; else only what Flipkart's refused page showed is added to that
-   * copy.
+   * way serves the rest of the run as it is (a row whose review is found in
+   * it passes; one whose review is not pauses the check), so Flipkart is not
+   * asked again in the same run; it is kept only when it has at least as many
+   * reviews as the copy kept before, else only what Flipkart's refused page
+   * showed is added to that copy.
    */
   function reviewsSource() {
     const run = new Map();
@@ -713,12 +715,12 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       const kept = await store.reviews(pid).catch(() => null);
       const age = now().getTime() - Date.parse(kept?.readAt ?? '');
       const prior = run.get(pid) ?? (wholeReading(kept) && age < KEPT_REVIEWS_MS ? kept : null);
-      if (prior && covers(prior, since)) return { ...prior, reused: true };
+      if (prior && (covers(prior, since) || partReading(prior))) return { ...prior, reused: true };
       const from = prior?.end === 'date' ? prior : partReading(kept) && age < KEPT_PART_MS ? kept : null;
       const read = await readReviewsOf(liveBrowser(), pid, { since, now, onPage, signal, from });
       if (read.reviews?.length && (wholeReading(read) || read.reviews.length >= (kept?.reviews?.length ?? 0))) await store.saveReviews(pid, read);
       else if (read.refused && kept) await store.saveReviews(pid, { ...kept, refused: read.refused });
-      if (wholeReading(read)) run.set(pid, read);
+      if (wholeReading(read) || partReading(read)) run.set(pid, read);
       return { ...read, reused: false };
     };
   }

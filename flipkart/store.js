@@ -125,6 +125,25 @@ function keptReading(o) {
     says: o.says ? cleanText(o.says, 500) : null,
   };
 }
+const FOUND_HOW = new Set(['found', 'several', 'otherName', 'noName', 'noNameToCheck', 'notFound', 'noWords']);
+/** What step 7's search found among Flipkart's reviews (review-match.js), as kept with the row's last check: how, and the review it points at, its words cut to length. */
+function keptFound(o) {
+  if (!o || typeof o !== 'object' || !FOUND_HOW.has(o.how)) return null;
+  const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+  const share = (v) => (Number.isFinite(v) && v >= 0 && v <= 1 ? Math.round(v * 1000) / 1000 : null);
+  const r = o.review && typeof o.review === 'object' ? o.review : null;
+  return {
+    how: o.how,
+    count: count(o.count),
+    nameFrom: o.nameFrom === 'screenshot' || o.nameFrom === 'sheet' ? o.nameFrom : null,
+    counted: count(o.counted),
+    nameOnly: count(o.nameOnly),
+    before: count(o.before),
+    share: share(o.share),
+    rareShare: share(o.rareShare),
+    review: r ? { id: r.id ? cleanText(r.id, 100) : null, name: r.name ? cleanText(r.name, 100) : null, stars: Number.isInteger(r.stars) && r.stars >= 1 && r.stars <= 5 ? r.stars : null, title: r.title ? cleanText(r.title, 300) : null, text: r.text ? cleanText(r.text, 3000) : null, dateSaid: r.dateSaid ? cleanText(r.dateSaid, 60) : null, date: DAY.test(String(r.date ?? '')) ? r.date : null, page: Number.isInteger(r.page) && r.page > 0 ? r.page : null } : null,
+  };
+}
 
 /** The comparison table (check.js buildComparison), as kept with the row's last check: its words cut to length. */
 function keptComparison(rows) {
@@ -424,6 +443,7 @@ export function createFlipkartStore(dataDir) {
           review: keptReview(result?.review),
           reviewsFrom: keptFrom(result?.reviewsFrom),
           flipkart: keptReading(result?.flipkart),
+          found: keptFound(result?.found),
           shotsHad: (Array.isArray(result?.shotsHad) ? result.shotsHad : []).filter((w) => w === 'order' || w === 'delivery'),
           comparison: keptComparison(result?.comparison),
         };

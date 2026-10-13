@@ -1,6 +1,7 @@
 // Comparing words read from a screenshot with words in the sheet, copied from
 // the Amazon checker's text helpers (amazon/text.js): only what reading a
-// purchase screenshot needs. Pure. Nothing here opens a page or reads a file.
+// screenshot and finding its review among Flipkart's reviews need. Pure.
+// Nothing here opens a page or reads a file.
 
 /** Lower case, NFKC, punctuation and symbols gone, spaces collapsed. Letters, marks and digits stay (Hindi matras are marks). */
 export function normalizeText(s) {
@@ -87,4 +88,47 @@ export function productWords(name) {
   const words = wordsOf(raw.replace(CUT, ''));
   if (cut && words.length > 1) words.pop();
   return words;
+}
+
+// ---- distinctive words, copied from amazon/text.js ----
+
+const COMMON = new Set(
+  (
+    'about above after again against also although always among another because before being below between both ' +
+    'could didnt does doesnt doing done down during each enough even every first from further have having here ' +
+    'into itself just know like made make many more most much must never only other ours over quite really same ' +
+    'should since some still such than that their them then there these they thing things this those though ' +
+    'through under until very want were what when where which while with within without would your yours ' +
+    'amazing amazon awesome bought brand buying cheap colour color comfortable delivery design excellent flipkart ' +
+    'fantastic product products quality price prices value money worth recommend recommended highly great ' +
+    'nice good best better perfect super happy satisfied overall using used useful works working worked ' +
+    'easily item items purchase purchased review reviews stars star months month weeks week years year days ' +
+    'little looks looking lovely loved order ordered received package packing seller service size sizes ' +
+    'totally truly usage simple performance experience features feature okay thanks ' +
+    'बहुत अच्छा अच्छी अच्छे प्रोडक्ट बिल्कुल बढ़िया लेकिन क्योंकि इसका इसकी इसके उसका सामान'
+  )
+    .split(' ')
+    .map((w) => w.normalize('NFKC')),
+);
+const VERY_RARE_LETTERS = /[qxzj]/g;
+const RARE_LETTERS = /[kvwy]/g;
+
+/**
+ * Words worth searching a product's reviews by, rarest first: long, not common
+ * in reviews, not in the product's title or the reviewer's name, seen once.
+ */
+export function rareWords(text, avoid = []) {
+  const avoidSet = new Set(avoid.flatMap((a) => wordsOf(a)));
+  const counts = new Map();
+  for (const w of wordsOf(text)) counts.set(w, (counts.get(w) ?? 0) + 1);
+  const scored = [];
+  for (const [w, n] of counts) {
+    const letters = [...w].filter((c) => /\p{L}/u.test(c)).length;
+    if (letters < 5 && !(letters >= 3 && /\p{Script=Devanagari}/u.test(w))) continue;
+    if (/\d/.test(w) || COMMON.has(w) || avoidSet.has(w)) continue;
+    const score = [...w].length + 3 * (w.match(VERY_RARE_LETTERS)?.length ?? 0) + (w.match(RARE_LETTERS)?.length ?? 0) - 3 * (n - 1);
+    scored.push({ w, score });
+  }
+  scored.sort((a, b) => b.score - a.score || a.w.localeCompare(b.w));
+  return scored.map((s) => s.w);
 }

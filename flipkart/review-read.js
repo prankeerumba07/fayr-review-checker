@@ -131,10 +131,10 @@ const nameParts = (t) => normalizeText(String(t ?? '').replace(/(?:\.{2,}|…)\s
  * the same person: one name is the other, or a shorter form of it, either
  * way: a word left out (only the first name, or no surname), a word cut short
  * ("Test Revi..." on Flipkart, "Test Rev" in the sheet) or an initial ("Test
- * R"). Each word may be read with a slip, each is used once, and at least one
- * whole word of two letters or more is the same. "Flipkart Customer",
- * Flipkart's words for a name not shown, never is. Every step that compares
- * names uses this rule.
+ * R", the same initial on both sides too). Each word may be read with a slip,
+ * each is used once, and at least one whole word of two letters or more is
+ * the same. "Flipkart Customer", Flipkart's words for a name not shown, never
+ * is. Every step that compares names uses this rule.
  */
 export function nameFits(wanted, shown) {
   const a = nameParts(wanted);
@@ -148,7 +148,7 @@ export function nameFits(wanted, shown) {
   for (const x of short) {
     let hit = long.findIndex((y, i) => !used.has(i) && same(x, y));
     if (hit >= 0) whole = true;
-    else hit = long.findIndex((y, i) => !used.has(i) && (shorter(x, y) || shorter(y, x)));
+    else hit = long.findIndex((y, i) => !used.has(i) && (x === y || shorter(x, y) || shorter(y, x)));
     if (hit < 0) return false;
     used.add(hit);
   }
