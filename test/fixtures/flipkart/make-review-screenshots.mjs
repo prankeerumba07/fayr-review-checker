@@ -8,6 +8,9 @@
 //                        the words, "Name, City", "7 Helpful" and "Verified Purchase · 3 days ago", under the phone's top bar
 //   review-web-mine.png  the user's own reviews on Flipkart's website ("My Reviews"): the product's name, "5★ Title" in
 //                        a green badge, the words, "Name ✓ Certified Buyer 12 Sep, 2026" and "Edit Delete Share"
+//   review-app-mine-published.png  "My Reviews" in Flipkart's app with its Published tab open: both tab names on the blue
+//                        tab bar, the yellow bar under "Published" just below it, "Product Reviews written by you..", then
+//                        the product's name, the title, drawn stars with a light grey date, the words, "Delete" and "Edit"
 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,13 +70,46 @@ function webMine() {
   </div></body></html>`;
 }
 
-export async function makeReviewScreenshots() {
+function appMinePublished() {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${STYLE}
+    .wrap { width: 540px; padding: 0; background: #eeeeee; }
+    .top { background: #fff; padding: 14px 16px; font-size: 20px; }
+    .tabs { display: flex; background: #2874f0; color: #fff; font-size: 18px; }
+    .tabs div, .under div { flex: 1; text-align: center; }
+    .tabs div { padding: 14px 0; }
+    .under { display: flex; height: 6px; }
+    .open { background: #ffc200; }
+    .yours { text-align: center; font-weight: 600; font-size: 18px; padding: 18px 0; }
+    .card { background: #fff; margin: 0 10px 16px; padding: 14px; }
+    .what { color: #878787; font-size: 13px; }
+    .heading { font-size: 19px; margin: 6px 0; }
+    .rated { display: flex; justify-content: space-between; align-items: center; }
+    .drawn { color: #ffc200; font-size: 22px; }
+    .when { color: #bdbdbd; font-size: 12px; }
+    .acts { display: flex; border-top: 1px solid #eeeeee; font-size: 16px; }
+    .acts div { flex: 1; text-align: center; padding: 12px; }</style></head><body><div class="wrap">
+    <div class="top">&lt; My Reviews</div>
+    <div class="tabs"><div>Pending</div><div>Published</div></div>
+    <div class="under"><div></div><div class="open"></div></div>
+    <div class="yours">Product Reviews written by you..</div>
+    <div class="card">
+      <div class="what">${BOTTLE}</div>
+      <div class="heading">Terrific purchase</div>
+      <div class="rated"><span class="drawn">★★★★☆</span><span class="when">12 Sep 2026</span></div>
+      <div class="words">${WORDS}</div>
+      <div class="acts"><div style="color:#878787">Delete</div><div>Edit</div></div>
+    </div>
+  </div></body></html>`;
+}
+
+/** Draws the pictures; `only`, a file's name, draws that one alone, leaving the others as they are. */
+export async function makeReviewScreenshots(only = null) {
   const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--host-resolver-rules=MAP * ~NOTFOUND'] });
   try {
     const context = await browser.newContext({ deviceScaleFactor: 2, viewport: { width: 700, height: 1000 } });
     await context.route('**/*', (r) => r.abort());
     const p = await context.newPage();
-    for (const [file, html] of [['review-app-list.png', appList()], ['review-web-mine.png', webMine()]]) {
+    for (const [file, html] of [['review-app-list.png', appList()], ['review-web-mine.png', webMine()], ['review-app-mine-published.png', appMinePublished()]].filter(([f]) => !only || f === only)) {
       await p.setContent(html);
       await p.locator('.wrap').screenshot({ path: join(HERE, file) });
     }
@@ -83,6 +119,6 @@ export async function makeReviewScreenshots() {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  await makeReviewScreenshots();
+  await makeReviewScreenshots(process.argv[2] ?? null);
   console.log('written');
 }

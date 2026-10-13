@@ -807,21 +807,22 @@ test('a row\'s page shows what the review screenshot says ("Read from the review
   assert.equal(card((await page({ ...LAST_CHECK_READ, review: REVIEW_READ }, noColumn)).page()), null);
 });
 
-test('a row\'s page shows what step 7 found on Flipkart ("Found on Flipkart"), as the Amazon screen\'s "Found on Amazon": the review found, with its page of "See all reviews" to open; words under another name or under "Flipkart Customer" shown with why they do not count; not found; nothing read yet; live as soon as step 7 has its answer; with no review screenshot or review link column, no card', async () => {
+test('a row\'s page shows what step 7 found on Flipkart ("Found on Flipkart"), as the Amazon screen\'s "Found on Amazon": the review found, opened on Flipkart in one click by its own link, and never a page\'s number; words under another name or under "Flipkart Customer" shown with why they do not count; not found; nothing read yet; live as soon as step 7 has its answer; with no review screenshot or review link column, no card', async () => {
   const card = (tree) => byId(tree, 'card-flipkart');
   const fields = (tree) => findAll(card(tree), (n) => n.tag === 'div' && n.attrs?.class === 'field-row').map((n) => [textOf(findAll(n, (x) => x.tag === 'dt')[0]), textOf(findAll(n, (x) => x.tag === 'dd')[0])]);
   const warned = (tree) => findAll(card(tree), (n) => String(n.attrs?.class ?? '').includes('notice-warn')).map(textOf);
   const page = (result, saved = SAVED) => rowScreen(fakeLocal({ saved, pages: { r000000000001: { row: PICTURED, result } } }));
   const FLIPKART = { pid: 'TESTPID0000001', name: 'Test Brand Steel Bottle 1 L', readAt: '2026-10-13T13:31:38.587Z', reused: false, pages: 15, count: 150, total: 1519, end: 'last page', since: '2026-08-17', oldest: '2026-09-13', says: null };
-  const LINK = 'https://www.flipkart.com/test-brand-steel-bottle/product-reviews/itmtestbottle01?pid=TESTPID0000001&marketplace=FLIPKART&sortOrder=MOST_RECENT&page=9';
-  const MINE = { id: 'made-up-9', name: 'Test Reviewer One', stars: 5, title: 'Terrific purchase', text: 'Keeps water cold all day and the grip is good.', dateSaid: '1 month ago', date: '2026-09-13', dateLatest: '2026-09-28', page: 9, pageLink: LINK };
+  const LINK = 'https://www.flipkart.com/reviews/00000000-0000-4000-8000-000000000009';
+  const MINE = { id: '00000000-0000-4000-8000-000000000009', name: 'Test Reviewer One', stars: 5, title: 'Terrific purchase', text: 'Keeps water cold all day and the grip is good.', dateSaid: '1 month ago', date: '2026-09-13', dateLatest: '2026-09-28', link: LINK };
   const FOUND = { how: 'found', count: 1, nameFrom: 'screenshot', counted: 150, nameOnly: 0, before: 0, share: 1, rareShare: 1, review: MINE };
-  const READ = ['Read', `150 reviews from 15 pages, newest first, all that Flipkart shows, ${words.ist(FLIPKART.readAt)}`];
+  const READ = ['Read', `150 reviews, newest first, all that Flipkart shows, ${words.ist(FLIPKART.readAt)}`];
   const PRODUCT = [["Product's page", 'Test Brand Steel Bottle 1 L'], ['Reviews Flipkart counts', '1519']];
   const s = await page({ ...LAST_CHECK_READ, review: REVIEW_READ, flipkart: FLIPKART, found: FOUND });
   assert.equal(textOf(findAll(card(s.page()), (n) => n.tag === 'h3')[0]), 'Found on Flipkart');
   assert.equal(textOf(findAll(card(s.page()), (n) => n.tag === 'blockquote')[0]), MINE.text);
-  assert.deepEqual(fields(s.page()), [['Reviewer name', 'Test Reviewer One'], ['Stars', '5 of 5'], ['Title', 'Terrific purchase'], ['Date', '1 month ago'], ...PRODUCT, READ, ['Found', 'Yes, on page 9. Open that page on Flipkart']]);
+  assert.deepEqual(fields(s.page()), [['Reviewer name', 'Test Reviewer One'], ['Stars', '5 of 5'], ['Title', 'Terrific purchase'], ['Date', '1 month ago'], ...PRODUCT, READ, ['Found', 'Yes. Open the review on Flipkart']]);
+  assert.doesNotMatch(textOf(card(s.page())), /\bpage \d/i, 'no page\'s number anywhere');
   const open = findAll(card(s.page()), (n) => n.tag === 'a')[0];
   assert.deepEqual([open.attrs.href, open.attrs.target, open.attrs.rel], [LINK, '_blank', 'noopener noreferrer']);
   assert.deepEqual(warned(s.page()), []);
@@ -830,6 +831,8 @@ test('a row\'s page shows what step 7 found on Flipkart ("Found on Flipkart"), a
   // The words under another name, or under "Flipkart Customer": the review is shown, with why it is not counted as found.
   const other = await page({ ...LAST_CHECK_READ, flipkart: FLIPKART, found: { ...FOUND, how: 'otherName', review: { ...MINE, name: 'Test Reviewer Two' } } });
   assert.deepEqual([warned(other.page()), fields(other.page())[0], fields(other.page()).at(-1)], [['The words match this review, but it is under another name, so it is not counted as found.'], ['Reviewer name', 'Test Reviewer Two'], ['Found', 'No: the words match a review under another name']]);
+  // Its own link too, to see whose it is.
+  assert.deepEqual([fields(other.page())[4], findAll(card(other.page()), (n) => n.tag === 'a')[0].attrs.href], [['On Flipkart', 'Open this review on Flipkart'], LINK]);
   const customer = await page({ ...LAST_CHECK_READ, flipkart: FLIPKART, found: { ...FOUND, how: 'noName', review: { ...MINE, name: 'Flipkart Customer' } } });
   assert.deepEqual([warned(customer.page()), fields(customer.page()).at(-1)], [['The words match this review, but Flipkart shows no name for it ("Flipkart Customer"), so the name could not be checked; it is not counted as found.'], ['Found', 'No: the words match a review Flipkart shows as "Flipkart Customer", so the name could not be checked']]);
   // Not found, or two that fit: no review is shown.
@@ -852,7 +855,7 @@ test('a row\'s page shows what step 7 found on Flipkart ("Found on Flipkart"), a
   const live = await rowScreen(local);
   byId(live.page(), 'check').attrs.onclick();
   await settle();
-  assert.deepEqual(fields(live.page()).at(-1), ['Found', 'Yes, on page 9. Open that page on Flipkart'], 'shown at once, while the check runs');
+  assert.deepEqual(fields(live.page()).at(-1), ['Found', 'Yes. Open the review on Flipkart'], 'shown at once, while the check runs');
   release();
   await settle();
   // A file with no review screenshot column and no review link column has no card for it.

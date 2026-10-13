@@ -655,7 +655,8 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   const LINK = `https://www.flipkart.com/test-brand-steel-bottle/product-reviews/itmtestbottle01?pid=${PID}&marketplace=FLIPKART`;
   const made = (i, date = '2026-10-13') => ({ id: `made-up-${i}`, name: `Made-up Reviewer ${i}`, stars: 4, title: 'Nice', text: `Made-up review number ${i}.`, dateSaid: 'Today', date, dateLatest: date, city: 'Test Town', certified: true, reviewFor: null, page: 1 });
   // The review on every made-up review screenshot (pretendReader), as Flipkart shows it.
-  const MINE = { ...made('mine', '2026-10-01'), name: 'Test Reviewer', stars: 5, title: 'Wonderful', text: 'Good product, works well.', dateSaid: '12 days ago' };
+  const MINE_ID = '00000000-0000-4000-8000-000000000001';
+  const MINE = { ...made('mine', '2026-10-01'), id: MINE_ID, name: 'Test Reviewer', stars: 5, title: 'Wonderful', text: 'Good product, works well.', dateSaid: '12 days ago' };
   const asked = [];
   let answer = null;
   const reviews = async (browser, pid, opts) => {
@@ -677,11 +678,11 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   // Row 2's Check: no other row has been checked yet, so back to the row's own day; kept; the review found in it.
   const firstCheck = await check(rows[1]);
   const first = step7(firstCheck);
-  assert.deepEqual([first.state, first.detail], ['pass', 'Found the review among Flipkart\'s public reviews (page 1 of "See all reviews"): its words match the review screenshot\'s, and it is under the name on the review screenshot. On Flipkart it has 5 stars, and it was posted 12 days ago (01-10-2026). Read 4 reviews of the product from 2 pages of "See all reviews" on Flipkart, newest first (back to 01-07-2026; the rows need reviews back to 23-07-2026). Reviews posted on or after the day the order was delivered (23-07-2026, on the delivery screenshot) can be the user\'s.']);
+  assert.deepEqual([first.state, first.detail], ['pass', 'Found the review among Flipkart\'s public reviews: its words match the review screenshot\'s, and it is under the name on the review screenshot. On Flipkart it has 5 stars, and it was posted 12 days ago (01-10-2026). Read 4 reviews of the product from "See all reviews" on Flipkart, newest first (back to 01-07-2026; the rows need reviews back to 23-07-2026). Reviews posted on or after the day the order was delivered (23-07-2026, on the delivery screenshot) can be the user\'s.']);
   assert.deepEqual([asked, await keptCount(), (await store.reviews(PID)).readAt], [[{ pid: PID, since: '2026-07-23', from: null }], 4, '2026-10-13T05:00:00.000Z']);
   // What was found is kept with the row's check, for its page.
   const keptFound = (await store.sheet()).rows.find((r) => r.id === rows[1].id).check.found;
-  assert.deepEqual([keptFound.how, keptFound.review.id, keptFound.review.stars, keptFound.review.page], ['found', 'made-up-mine', 5, 1]);
+  assert.deepEqual([keptFound.how, keptFound.review.id, keptFound.review.stars, keptFound.review.link], ['found', MINE_ID, 5, `https://www.flipkart.com/reviews/${MINE_ID}`]);
   // Row 3's Check soon after: its own day is older, so the reading goes on from where the first one stopped.
   await check(rows[2]);
   const day3 = (await store.sheet()).rows.find((r) => r.id === rows[2].id).check.reviewsFrom.day;
@@ -737,7 +738,7 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   answer = { ...stoppedAt(2, 'error', 2), reviews: [made(20), MINE] };
   const partRun = lines(await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from(JSON.stringify({ again: true })), type: 'application/json' }));
   const passed = partRun.filter((e) => e.event === 'done').filter((e) => e.result.steps[6].state === 'pass');
-  assert.deepEqual([asked.length, partRun.at(-1).event, passed.length > 1, passed.every((e) => !e.result.paused && /The review was found among the pages read before that\./.test(e.result.steps[6].detail))], [12, 'run-done', true, true]);
+  assert.deepEqual([asked.length, partRun.at(-1).event, passed.length > 1, passed.every((e) => !e.result.paused && /The review was found among the reviews read before that\./.test(e.result.steps[6].detail))], [12, 'run-done', true, true]);
 });
 
 /** "Start checking" as the page sends it, its lines read as they come; stop() closes it, as Stop does. */

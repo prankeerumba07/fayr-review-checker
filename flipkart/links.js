@@ -117,6 +117,19 @@ export function isDriveLink(raw) {
   return driveFileId(raw) !== null;
 }
 
+/** A review's own ID, as Flipkart's reviews pages give it: a UUID. */
+const REVIEW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The link that opens one review on Flipkart, from its own ID, as Flipkart's
+ * "Share" gives it (www.flipkart.com/reviews/<ID>, the single-review links in
+ * the sheet); null for anything that is not a review's ID.
+ */
+export function reviewLink(id) {
+  const v = String(id ?? '').trim();
+  return REVIEW_ID.test(v) ? `${FLIPKART_ORIGIN}/reviews/${v.toLowerCase()}` : null;
+}
+
 /** The review ID in a link to one Flipkart review (/reviews/<product ID>:<n>?reviewId=…), in small letters, or null. */
 export function reviewIdFrom(raw) {
   const u = urlOf(raw);

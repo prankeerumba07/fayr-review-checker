@@ -49,7 +49,7 @@ test("the saved product's reviews, newest first: its two saved pages, then page 
   const out = await readAndKeepReviews({ browser: watched, store, product: readOne(PRODUCT.pid, PRODUCT.allReviews), since: '2026-04-01', now });
   assert.deepEqual(visited(), [URLS.reviews1, URLS.reviews2, URLS.reviews3]);
   assert.deepEqual([out.pid, out.link, out.readAt, out.since, out.pages, out.total, out.end, out.stoppedAt, out.loginBox], [PRODUCT.pid, PRODUCT.allReviews, AT, '2026-04-01', 3, 47, 'date', null, false]);
-  assert.equal(out.says, '24 reviews read from 3 pages, newest first, down to the first page whose reviews are all older than 01-04-2026.');
+  assert.equal(out.says, '24 reviews read, newest first, until they were all older than 01-04-2026.');
   assert.deepEqual(out.reviews.map((r) => r.page), [...Array(10).fill(1), ...Array(10).fill(2), 3, 3, 3, 3]);
   assert.deepEqual(out.reviews[0], { id: '2cbab026-f2f5-4d26-b521-d488e7394a9f', name: 'Flipkart Customer', stars: 5, title: 'Terrific', text: 'Works best when used overnight', dateSaid: '14 days ago', date: '2026-09-28', dateLatest: '2026-09-28', city: 'Rewa', certified: true, reviewFor: 'Quantity 50 ml', page: 1 }, 'the newest review of the saved page 1');
   assert.deepEqual(out.reviews.slice(0, 20).map((r) => r.dateSaid), ['14 days ago', '15 days ago', '19 days ago', '21 days ago', '1 month ago', '1 month ago', '1 month ago', '1 month ago', '3 months ago', '3 months ago', '4 months ago', '4 months ago', '4 months ago', '5 months ago', '5 months ago', '5 months ago', '5 months ago', '5 months ago', '5 months ago', '6 months ago']);
@@ -79,7 +79,7 @@ test('"Read more": pressed where a review\'s text is cut, so its whole text is r
     ['Made-up Reviewer E', 5, 'Terrific', 'This made-up mask feels light and cool on the skin, and after a week my skin looked brighter.', 'Today', '2026-10-12'],
     ['Made-up Reviewer F', 4, 'Good', 'Nice.', '2 days ago', '2026-10-10'],
   ]);
-  assert.deepEqual([out.pages, out.end, out.says], [1, 'last page', '2 reviews read from 1 page: all the reviews Flipkart shows.']);
+  assert.deepEqual([out.pages, out.end, out.says], [1, 'last page', '2 reviews read: all the reviews Flipkart shows.']);
 });
 
 test("Flipkart's login box covering the page: closed with its close button, nothing typed into it, and the review under it read", { timeout: 120_000 }, async () => {
@@ -105,7 +105,7 @@ test('a robot check on page 2: "Flipkart prevented this check" at page 2, with t
   const before = site.visits.length;
   const out = await readAndKeepReviews({ browser: live, store, product: readOne('FCPTESTROBO00001', ALL_REVIEWS.robot), now });
   assert.deepEqual(visited().slice(before), [URLS.robotReviews1, URLS.robotReviews2]);
-  assert.deepEqual([out.end, out.stoppedAt, out.pages, out.reviews.length, out.refused, out.says], ['prevented', 2, 1, 4, { page: 2, status: 200, title: 'Flipkart', reviews: 0 }, 'Flipkart prevented this check at page 2 of the reviews: it showed a robot check, which this dashboard never answers. The page Flipkart sent had status 200, the title "Flipkart" and no reviews on it. The reviews of page 1 were kept.']);
+  assert.deepEqual([out.end, out.stoppedAt, out.pages, out.reviews.length, out.refused, out.says], ['prevented', 2, 1, 4, { page: 2, status: 200, title: 'Flipkart', reviews: 0 }, 'Flipkart prevented this check while its reviews were read: it showed a robot check, which this dashboard never answers. The page Flipkart sent had status 200, the title "Flipkart" and no reviews on it. The 4 reviews read before were kept.']);
   assert.deepEqual((await store.reviews('FCPTESTROBO00001')).reviews.map((r) => [r.page, r.name]), [[1, 'Made-up Reviewer A'], [1, 'Made-up Reviewer B'], [1, 'Made-up Reviewer C'], [1, 'Made-up Reviewer D']]);
 });
 

@@ -1354,12 +1354,12 @@ function readCards(ctx, res) {
   ];
 }
 
-/** Step 7's answer for the "Found" line: the review found, on its page of "See all reviews", or why not. */
+/** Step 7's answer for the "Found" line: the review found, to open on Flipkart in one click, as on Amazon, or why not. */
 function foundWords(ctx, f) {
   const { h, words } = ctx;
   const r = f?.review;
   const reviews = (n) => (n === 1 ? 'a review' : `${n} reviews`);
-  if (f?.how === 'found') return r?.pageLink ? words.link(h, r.pageLink, `Yes, on page ${r.page}. Open that page on Flipkart`) : `Yes${r?.page ? `, on page ${r.page}` : ''}`;
+  if (f?.how === 'found') return r?.link ? words.link(h, r.link, 'Yes. Open the review on Flipkart') : 'Yes';
   if (f?.how === 'otherName') return `No: the words match ${reviews(f.count)} under another name`;
   if (f?.how === 'noName') return 'No: the words match a review Flipkart shows as "Flipkart Customer", so the name could not be checked';
   if (f?.how === 'noNameToCheck') return 'No: there is no name to check the review with';
@@ -1368,7 +1368,7 @@ function foundWords(ctx, f) {
   return 'No';
 }
 
-/** What step 7 found among Flipkart's public reviews: the Amazon screen's "Found on Amazon" box, for Flipkart. A review is shown when its words match, found or not, with why it is not counted. */
+/** What step 7 found among Flipkart's public reviews: the Amazon screen's "Found on Amazon" box, for Flipkart. A review is shown when its words match, found or not, with why it is not counted, and its own link to open it on Flipkart. No page's number is shown: Flipkart's website shows none. */
 function foundCard(ctx, res) {
   const { h, words } = ctx;
   const f = res?.found;
@@ -1383,13 +1383,13 @@ function foundCard(ctx, res) {
   const day = (d) => String(d).split('-').reverse().join('-');
   const when = shown?.dateSaid ? `${shown.dateSaid}${shown.date && shown.date === shown.dateLatest ? ` (${day(shown.date)})` : ''}` : null;
   const none = !k ? 'Nothing read from Flipkart yet. Flipkart is opened only to look for the review shown on the review screenshot.' : f?.how === 'several' ? 'Two or more reviews fit, so none is shown.' : f?.how === 'noWords' ? 'Not searched: the review screenshot shows no words to search for.' : 'Not found among the reviews read.';
-  const read = k ? `${words.plural(k.count ?? 0, 'review')} from ${words.plural(k.pages ?? 0, 'page')}, newest first${k.end === 'last page' ? ', all that Flipkart shows' : ''}${k.readAt ? `, ${words.ist(k.readAt)}` : ''}` : null;
+  const read = k ? `${words.plural(k.count ?? 0, 'review')}, newest first${k.end === 'last page' ? ', all that Flipkart shows' : ''}${k.readAt ? `, ${words.ist(k.readAt)}` : ''}` : null;
   return h(
     'section',
     { class: 'card', key: 'card-flipkart', 'data-id': 'card-flipkart' },
     h('h3', null, 'Found on Flipkart'),
     shown
-      ? h('div', null, notCounted ? words.notice(h, 'warn', notCounted) : null, words.quote(h, shown.text || shown.title), words.fields(h, [['Reviewer name', shown.name], ['Stars', shown.stars ? `${shown.stars} of 5` : null], ['Title', shown.title], ['Date', when]]))
+      ? h('div', null, notCounted ? words.notice(h, 'warn', notCounted) : null, words.quote(h, shown.text || shown.title), words.fields(h, [['Reviewer name', shown.name], ['Stars', shown.stars ? `${shown.stars} of 5` : null], ['Title', shown.title], ['Date', when], notCounted && shown.link ? ['On Flipkart', words.link(h, shown.link, 'Open this review on Flipkart')] : null]))
       : h('p', { class: 'muted' }, none),
     k ? words.fields(h, [["Product's page", k.name], ['Reviews Flipkart counts', Number.isInteger(k.total) ? String(k.total) : null]]) : null,
     k ? h('div', null, h('h4', null, 'Under "See all reviews"'), words.fields(h, [['Read', read], ['Found', foundWords(ctx, f)]])) : null,

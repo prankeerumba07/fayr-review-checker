@@ -94,6 +94,7 @@ function keptReview(o) {
     own: Boolean(o.own),
     form: Boolean(o.form),
     pending: Boolean(o.pending),
+    tab: o.tab === 'pending' || o.tab === 'published' ? o.tab : null,
     note: words(o.note, 300),
     others: Number.isInteger(o.others) && o.others >= 0 ? o.others : 0,
     why: words(o.why, 500),
@@ -135,7 +136,7 @@ function flipkartLink(v) {
     return null;
   }
 }
-/** What step 7's search found among Flipkart's reviews (review-match.js), as kept with the row's last check: how, and the review it points at, its words cut to length. */
+/** What step 7's search found among Flipkart's reviews (review-match.js), as kept with the row's last check: how, and the review it points at, its words cut to length, with its own link on Flipkart. */
 function keptFound(o) {
   if (!o || typeof o !== 'object' || !FOUND_HOW.has(o.how)) return null;
   const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
@@ -150,7 +151,7 @@ function keptFound(o) {
     before: count(o.before),
     share: share(o.share),
     rareShare: share(o.rareShare),
-    review: r ? { id: r.id ? cleanText(r.id, 100) : null, name: r.name ? cleanText(r.name, 100) : null, stars: Number.isInteger(r.stars) && r.stars >= 1 && r.stars <= 5 ? r.stars : null, title: r.title ? cleanText(r.title, 300) : null, text: r.text ? cleanText(r.text, 3000) : null, dateSaid: r.dateSaid ? cleanText(r.dateSaid, 60) : null, date: DAY.test(String(r.date ?? '')) ? r.date : null, dateLatest: DAY.test(String(r.dateLatest ?? '')) ? r.dateLatest : null, page: Number.isInteger(r.page) && r.page > 0 ? r.page : null, pageLink: flipkartLink(r.pageLink) } : null,
+    review: r ? { id: r.id ? cleanText(r.id, 100) : null, name: r.name ? cleanText(r.name, 100) : null, stars: Number.isInteger(r.stars) && r.stars >= 1 && r.stars <= 5 ? r.stars : null, title: r.title ? cleanText(r.title, 300) : null, text: r.text ? cleanText(r.text, 3000) : null, dateSaid: r.dateSaid ? cleanText(r.dateSaid, 60) : null, date: DAY.test(String(r.date ?? '')) ? r.date : null, dateLatest: DAY.test(String(r.dateLatest ?? '')) ? r.dateLatest : null, link: flipkartLink(r.link) } : null,
   };
 }
 

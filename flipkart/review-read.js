@@ -12,8 +12,10 @@
 //     under the user's own;
 //   - a customer's photo opened from a review in the app: the photo, then "5★ Title", the words and "Name 2 days ago";
 //   - "My Reviews" in the app: the product's name, the title, the stars Flipkart draws with the date beside them, the
-//     words, and "Delete" and "Edit" under it, with no name. Its "Pending" and "Published" tabs list pending reviews too,
-//     so it never shows that a review is live (which tab is open is not worked out);
+//     words, and "Delete" and "Edit" under it, with no name. Both its tab names, "Pending" and "Published", always show;
+//     the open one has a coloured bar under it (openTab, from the picture's colours). On the Published tab, the review
+//     is published; on the Pending tab, or when which tab is open cannot be told, it does not show that the review is
+//     live;
 //   - the review being written: "Share your experience" … "Tell us more" in the app (the phone's keyboard under it
 //     ends the words); "Review this product", "Description" and "Title (optional)" on the website, whose page address
 //     has "/write-review/". Neither shows a name, nor that the review was posted.
@@ -27,6 +29,7 @@
 // null. No API key, nothing sent anywhere.
 
 import { readText, SECOND_LOOK_SCALE } from './shot-read.js';
+import { picturePixels } from './ocr.js';
 import { wordsOf, closeWords, normalizeText } from './text.js';
 
 /** Flipkart's words for a review it did not accept. */
@@ -36,6 +39,8 @@ export const RATING_ONLY = /\bthanks?\s+(?:you\s+)?for\s+(?:the\s+|your\s+)?rati
 
 // The notes step 6 and the row's page add: what these screens do not show.
 export const PENDING_NOTE = 'This is the My Reviews page, which also lists pending reviews, so it does not show that the review is live.';
+export const PUBLISHED_NOTE = 'This is the Published tab of My Reviews, where Flipkart lists the reviews it has published.';
+export const PENDING_TAB_NOTE = 'This is the Pending tab of My Reviews: Flipkart had not published the review yet, so it does not show that the review is live.';
 export const TYPING_NOTE = 'This shows the words being typed, not that the review was posted.';
 
 // The lines that end a review: "Name ✓ Certified Buyer, City", "Verified Purchase · 1 day ago", "Edit Delete" under the
@@ -330,7 +335,56 @@ export function pickReview(list, { reviewer = null, productIs = null } = {}) {
   return { chosen: byProduct.length === 1 ? byProduct[0] : null, others, fitting: fits.length };
 }
 
-const NONE = { kind: 'unknown', stars: null, starsText: null, title: null, body: null, name: null, dateText: null, message: null, own: false, form: false, pending: false, note: null, others: 0, why: null };
+const NONE = { kind: 'unknown', stars: null, starsText: null, title: null, body: null, name: null, dateText: null, message: null, own: false, form: false, pending: false, tab: null, note: null, others: 0, why: null };
+
+/**
+ * Which tab of "My Reviews" in Flipkart's app is open, from the picture's
+ * colours: the open one has a coloured bar under its name (yellow in the app),
+ * across its half of the screen, in or just under the tab bar, while the other
+ * half there shows the tab bar's colour or the page's. pixels — { width,
+ * height, rgb(x, y) }; tabs — the "Pending Published" line's top and bottom,
+ * in the picture's own pixels. Only the first band of rows under the names
+ * whose two halves differ counts, and only when it touches the tab bar (the
+ * page's own words further down never do). -> 'pending', 'published', or null
+ * when it cannot be told.
+ */
+export function openTab(pixels, tabs) {
+  const { width, height } = pixels;
+  const tall = Math.max(4, tabs.bottom - tabs.top);
+  const mean = (y, from, to) => {
+    const sum = [0, 0, 0];
+    let n = 0;
+    for (let x = Math.round(from * width); x < Math.round(to * width); x += 2, n++) pixels.rgb(x, y).forEach((v, i) => (sum[i] += v));
+    return sum.map((v) => v / Math.max(1, n));
+  };
+  const far = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+  // The tab bar's own colour, beside the names, at both edges of the screen.
+  const middle = Math.round((tabs.top + tabs.bottom) / 2);
+  const [atLeft, atRight] = [mean(middle, 0.01, 0.06), mean(middle, 0.94, 0.99)];
+  if (far(atLeft, atRight) > 40) return null;
+  const rows = [];
+  for (let y = Math.round(tabs.bottom) + 1; y < Math.min(height, tabs.bottom + 4 * tall); y++) rows.push({ y, left: mean(y, 0.08, 0.42), right: mean(y, 0.58, 0.92) });
+  // The first band of rows whose two halves differ: the bar.
+  const first = rows.findIndex((r) => far(r.left, r.right) > 80);
+  if (first < 0) return null;
+  // It touches the tab bar: just above it (a blurred picture blends a few rows), one half still has the tab bar's colour.
+  if (first > 0 && !rows.slice(Math.max(0, first - 3), first).some((r) => far(r.left, atLeft) < 40 || far(r.right, atLeft) < 40)) return null;
+  let last = first;
+  while (last + 1 < rows.length && far(rows[last + 1].left, rows[last + 1].right) > 80) last++;
+  // The colours around the bar: the tab bar's, and the colour both halves share right under the band (the page's).
+  const after = rows.slice(last + 1).find((r) => far(r.left, r.right) < 20);
+  const around = [atLeft, ...(after ? [after.left] : [])];
+  const near = (c) => around.some((a) => far(c, a) < 40);
+  let pending = 0;
+  let published = 0;
+  for (const r of rows.slice(first, last + 1)) {
+    if (near(r.left) && !near(r.right)) published++;
+    else if (near(r.right) && !near(r.left)) pending++;
+  }
+  if (published >= 2 && !pending) return 'published';
+  if (pending >= 2 && !published) return 'pending';
+  return null;
+}
 
 /**
  * What a review screenshot shows, from its lines (Tesseract's line objects or
@@ -344,10 +398,11 @@ const NONE = { kind: 'unknown', stars: null, starsText: null, title: null, body:
  * `reviewer` is the reviewer named in the sheet; `productIs(lines)` says
  * whether some lines show the product ordered. Of several reviews, only the
  * user's is read (pickReview); others says how many more it shows. pending
- * is "My Reviews" in the app, form the review being written; note says what
- * either does not show.
+ * is "My Reviews" in the app, unless its Published tab is open (`tab`, which
+ * tab openTab saw open: then tab is 'published'), form the review being
+ * written; note says what either shows or does not show.
  */
-export function parseReviewShot(lines, { reviewer = null, productIs = null } = {}) {
+export function parseReviewShot(lines, { reviewer = null, productIs = null, tab = null } = {}) {
   const all = (lines ?? [])
     .map((l) => ({ text: String(typeof l === 'string' ? l : l?.text ?? '').replace(/\s+/g, ' ').trim(), left: Number.isFinite(l?.left) ? l.left : null }))
     .filter((l) => l.text);
@@ -357,11 +412,14 @@ export function parseReviewShot(lines, { reviewer = null, productIs = null } = {
   const refused = texts.find((t) => REVIEW_REFUSED.test(t));
   if (refused) return { ...NONE, kind: 'refused', message: tidy(refused) };
   const ownPage = texts.some((t) => OWN_PAGE.test(t));
-  const pending = texts.some((t) => TABS.test(t) || APP_OWN.test(t));
+  // "My Reviews" in the app: which tab is open, when it was told (both tab names show), else that it lists pending reviews too.
+  const open = texts.some((t) => TABS.test(t)) && (tab === 'pending' || tab === 'published') ? tab : null;
+  const pending = open !== 'published' && texts.some((t) => TABS.test(t) || APP_OWN.test(t));
+  const ownNote = open === 'published' ? PUBLISHED_NOTE : open === 'pending' ? PENDING_TAB_NOTE : PENDING_NOTE;
   const blocks = reviewBlocks(kept).map((b) => partsOf(kept.slice(b.start, b.end + 1), b.own || ownPage, productIs));
   if (blocks.length) {
     const { chosen, others, fitting } = pickReview(blocks, { reviewer, productIs });
-    const seen = { pending, note: pending ? PENDING_NOTE : null, others };
+    const seen = { pending, tab: open, note: pending || open ? ownNote : null, others };
     if (!chosen) {
       const why = fitting > 1 ? `${fitting} of them are under names that fit the reviewer's name in the sheet` : fitting ? 'the product ordered could not be told among them' : "none is under the reviewer's name in the sheet";
       return { ...NONE, ...seen, why: `it shows ${blocks.length} reviews, and which one is the user's could not be told: ${why}` };
@@ -375,7 +433,7 @@ export function parseReviewShot(lines, { reviewer = null, productIs = null } = {
   const form = formReview(kept, writing);
   if (form?.body || form?.title) return { ...NONE, ...form, kind: 'written', note: TYPING_NOTE };
   if (form) return { ...NONE, form: true, note: TYPING_NOTE, why: "it is Flipkart's page for writing a review, but no words are written in it" };
-  if (pending) return { ...NONE, pending: true, note: PENDING_NOTE, why: "it is the My Reviews page, but no review on it could be read" };
+  if (pending || open) return { ...NONE, pending, tab: open, note: ownNote, why: "it is the My Reviews page, but no review on it could be read" };
   const ratingOnly = texts.find((t) => RATING_ONLY.test(t));
   if (ratingOnly) return { ...NONE, message: tidy(ratingOnly), why: `it says "${tidy(ratingOnly)}", but the rating could not be read` };
   if (texts.some((t) => SUBMITTED.test(t))) return { ...NONE, why: "it is Flipkart's page saying a review was sent, which does not show the review" };
@@ -387,7 +445,7 @@ export function parseReviewShot(lines, { reviewer = null, productIs = null } = {
 /** How much a reading found: a review (or a message) at all, then each of its parts. */
 const found = (r) => (r.kind === 'unknown' ? 0 : 10) + ['stars', 'title', 'body', 'name', 'dateText'].filter((k) => r[k]).length;
 /** True when a reading lacks what its screen shows: no review told, or a review's name or date, or the date on "My Reviews". */
-const lacking = (r) => r.kind === 'unknown' || (r.kind !== 'refused' && !r.form && (r.pending ? !r.dateText : !r.name || !r.dateText));
+const lacking = (r) => r.kind === 'unknown' || (r.kind !== 'refused' && !r.form && (r.pending || r.tab ? !r.dateText : !r.name || !r.dateText));
 
 /**
  * Read a review screenshot (one picture or several) on this computer, as the
@@ -396,15 +454,34 @@ const lacking = (r) => r.kind === 'unknown' || (r.kind !== 'refused' && !r.form 
  * that lacks what the screen shows (Flipkart's small grey names and dates are
  * often missed), the picture is read once more with its letters told from the
  * background part by part (ocr.js LIGHT_LETTERS), and the reading that found
- * more is kept. A picture whose words cannot be read is unknown, and says why.
+ * more is kept. On "My Reviews" in the app, which tab is open is told from the
+ * picture's colours (openTab). A picture whose words cannot be read is
+ * unknown, and says why.
  */
-export async function readReviewShot(files, { reviewer = null, productIs = null, ...opts } = {}) {
+export async function readReviewShot(files, { reviewer = null, productIs = null, pixels = picturePixels, ...opts } = {}) {
   const read = await readText(files, { ...opts, looks: opts.looks ?? [{ scale: SECOND_LOOK_SCALE }] });
   if (!read.ok) return { ...read, ...NONE, unreadable: true, why: `its words could not be read (${read.problem})` };
-  const first = { ...read, ...parseReviewShot(read.lines, { reviewer, productIs }) };
+  const tab = await tabOf(files, read, pixels);
+  const first = { ...read, ...parseReviewShot(read.lines, { reviewer, productIs, tab }) };
   if (!lacking(first) || read.pictures.some((p) => p.scale !== 1)) return first;
   const again = await readText(files, { ...opts, first: { light: true }, looks: [] }).catch(() => null);
   if (!again?.ok) return first;
-  const second = { ...again, ...parseReviewShot(again.lines, { reviewer, productIs }) };
+  const second = { ...again, ...parseReviewShot(again.lines, { reviewer, productIs, tab: tab ?? (await tabOf(files, again, pixels)) }) };
   return found(second) > found(first) ? second : first;
+}
+
+/** Which tab of "My Reviews" is open, on the first picture whose words show both tab names; null when none does, or it cannot be told. */
+async function tabOf(files, read, pixels) {
+  const list = [].concat(files ?? []).filter(Boolean);
+  for (const [i, p] of (read?.pictures ?? []).entries()) {
+    const line = (p.lines ?? []).find((l) => TABS.test(String(l?.text ?? '').replace(/\s+/g, ' ').trim()));
+    if (!line || !list[i]) continue;
+    const scale = p.scale || 1;
+    try {
+      return openTab(await pixels(list[i]), { top: line.top / scale, bottom: line.bottom / scale });
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }

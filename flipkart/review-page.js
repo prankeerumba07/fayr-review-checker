@@ -155,7 +155,17 @@ export function pageData(html) {
   return null;
 }
 
-const words = (v, limit = 5000) => (typeof v === 'string' ? v.replace(/[^\S\n]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim().slice(0, limit) : '');
+/** The HTML codes Flipkart's page data leaves in a review's words, as the letters they stand for. */
+const CODES = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“', ndash: '–', mdash: '—', hellip: '…' };
+/** Words as a person reads them: "It&rsquo;s" is "It’s", "&#39;" is "'". */
+export function plainText(v) {
+  return String(v ?? '').replace(/&(?:#(\d{1,7})|#x([0-9a-f]{1,6})|([a-z]{2,8}));/gi, (m, dec, hex, name) => {
+    const code = dec ? Number(dec) : hex ? parseInt(hex, 16) : null;
+    if (code !== null) return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : m;
+    return CODES[name.toLowerCase()] ?? m;
+  });
+}
+const words = (v, limit = 5000) => (typeof v === 'string' ? plainText(v).replace(/[^\S\n]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim().slice(0, limit) : '');
 
 /**
  * The reviews in the page's own data, in the page's order: each one's own ID,

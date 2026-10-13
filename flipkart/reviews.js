@@ -35,10 +35,9 @@ const PREVENTED = {
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 /** A date as the dashboard writes it: 12-10-2026. */
 const written = (day) => day.split('-').reverse().join('-');
-const pagesSaid = (n) => (n === 1 ? '1 page' : `${n} pages`);
 const reviewsSaid = (n) => (n === 1 ? '1 review' : `${n} reviews`);
-/** What happens to the pages read before a stop. */
-const keptSaid = (n) => (n === 1 ? 'No review was read; try again later.' : `The reviews of ${n === 2 ? 'page 1' : `pages 1 to ${n - 1}`} were kept.`);
+/** What happens to the reviews read before a stop (never a page's number: Flipkart's website shows none). */
+const keptSaid = (n) => (n === 0 ? 'No review was read; try again later.' : n === 1 ? 'The review read before was kept.' : `The ${n} reviews read before were kept.`);
 
 /** A review read before, told from the others: its own ID, else all it shows. */
 const keyOf = (r) => r.id ?? `${r.name}|${r.stars}|${r.title}|${r.text}|${r.dateSaid}`;
@@ -62,7 +61,8 @@ function refusedSaid(r) {
  * earlier reading of the same "All reviews" link that stopped, at a date or
  * part way: its reviews are kept, and the reading goes on from the page after
  * its last one (none is opened when its last page is already all older than
- * the date); onPage(n) — told before each page is opened; signal — Stop: no
+ * the date); onPage(n, read) — told before each page is opened, with how
+ * many reviews were read before it; signal — Stop: no
  * page is opened after it. -> { pid, link, readAt, since, pages (how many
  * were read), total (how many reviews Flipkart says the product has), end
  * ('date', 'last page', 'limit', 'prevented', 'slow', 'closed', 'network',
@@ -81,7 +81,7 @@ export async function readReviews(browser, product, { since = null, maxPages = M
   const until = typeof since === 'string' && DAY.test(since) ? since : null;
   const link = product?.read?.allReviews ?? null;
   const out = { pid: product?.read?.pid ?? product?.pid ?? null, link, readAt: at.toISOString(), since: until, pages: 0, total: null, end: null, stoppedAt: null, says: null, loginBox: false, wentOn: null, opened: 0, reviews: [] };
-  const stop = (end, n, says) => Object.assign(out, { end, stoppedAt: n, says: `${says} ${keptSaid(n)}` });
+  const stop = (end, n, says) => Object.assign(out, { end, stoppedAt: n, says: `${says} ${keptSaid(out.reviews.length)}` });
   if (!reviewsPageLink(link, 1)) return Object.assign(out, { end: 'none', says: 'Flipkart shows no reviews for this product, so no page was opened.' });
   // Going on from where an earlier reading of the same link stopped: its reviews are kept, and the page after its last one is next.
   if (from && from.link === link && Number.isInteger(from.pages) && from.pages > 0 && Array.isArray(from.reviews)) Object.assign(out, { pages: from.pages, total: from.total ?? null, reviews: [...from.reviews], loginBox: Boolean(from.loginBox), wentOn: from.pages + 1 });
@@ -99,26 +99,26 @@ export async function readReviews(browser, product, { since = null, maxPages = M
     const seen = new Set(out.reviews.map(keyOf));
     const before = new Set(seen);
     for (let n = out.pages + 1; n <= maxPages; n++) {
-      if (signal?.aborted) return stop('stopped', n, `The check was stopped, so the reading stopped before page ${n} of the reviews.`);
-      onPage(n);
+      if (signal?.aborted) return stop('stopped', n, 'The check was stopped, so the reading of the reviews stopped there.');
+      onPage(n, out.reviews.length);
       out.opened++;
       const res = await browser.open(reviewsPageLink(link, n), { onWait, read: readReviewsPage, prepare: prepareReviewsPage, html: true, gap: REVIEW_PAGE_GAP_MS });
-      if (res?.error === 'elsewhere') return stop('elsewhere', n, `Page ${n} of the reviews led to ${res.host}, not to Flipkart, so the reading stopped there.`);
+      if (res?.error === 'elsewhere') return stop('elsewhere', n, `A page of the reviews led to ${res.host}, not to Flipkart, so the reading stopped there.`);
       if (!res?.ok) {
-        if (res?.error === 'closed') return stop('closed', n, `The Live Flipkart Browser was closed, so the reading stopped at page ${n} of the reviews.`);
-        if (res?.error === 'timeout') return stop('slow', n, `Flipkart took too long to show page ${n} of the reviews, so the reading stopped there.`);
-        return stop('network', n, `The Live Flipkart Browser could not open page ${n} of the reviews, so the reading stopped there. ${res?.message ?? ''}`.trim());
+        if (res?.error === 'closed') return stop('closed', n, 'The Live Flipkart Browser was closed, so the reading of the reviews stopped there.');
+        if (res?.error === 'timeout') return stop('slow', n, 'Flipkart took too long to show more reviews, so the reading stopped there.');
+        return stop('network', n, `The Live Flipkart Browser could not open more reviews, so the reading stopped there. ${res?.message ?? ''}`.trim());
       }
       if (res.prepared?.loginBox) out.loginBox = true;
       const u = parseUrl(res.url);
-      if (!u || !isFlipkart(u)) return stop('elsewhere', n, `Page ${n} of the reviews led to ${u ? u.hostname : 'another website'}, not to Flipkart, so the reading stopped there.`);
+      if (!u || !isFlipkart(u)) return stop('elsewhere', n, `A page of the reviews led to ${u ? u.hostname : 'another website'}, not to Flipkart, so the reading stopped there.`);
       // The page's own data has each review whole, with its own ID; else the reviews as the page shows them.
       const data = reviewsInPageData(res.html);
       const found = data.length ? data : (res.facts?.reviews ?? []).map((r) => ({ id: null, ...r }));
       const page = whatPageIs({ ...res.facts, reviews: found }, res.status);
       if (PREVENTED[page.kind]) {
         const refused = refusedPage(n, res, found);
-        return Object.assign(stop('prevented', n, `Flipkart prevented this check at page ${n} of the reviews: ${PREVENTED[page.kind]}. ${refusedSaid(refused)}`), { prevented: page.kind, refused });
+        return Object.assign(stop('prevented', n, `Flipkart prevented this check while its reviews were read: ${PREVENTED[page.kind]}. ${refusedSaid(refused)}`), { prevented: page.kind, refused });
       }
       out.total ??= Number.isInteger(res.facts?.total) ? res.facts.total : null;
       if (page.kind === 'not-found' && n === 1) return Object.assign(out, { end: 'none', says: 'Flipkart says this product has no reviews page.' });
@@ -144,9 +144,9 @@ export async function readReviews(browser, product, { since = null, maxPages = M
   out.end ??= 'last page';
   const count = reviewsSaid(out.reviews.length);
   out.says = {
-    date: `${count} read from ${pagesSaid(out.pages)}, newest first, down to the first page whose reviews are all older than ${until ? written(until) : ''}.`,
-    'last page': out.reviews.length ? `${count} read from ${pagesSaid(out.pages)}: all the reviews Flipkart shows.` : 'Flipkart shows no reviews for this product.',
-    limit: `${count} read from ${pagesSaid(out.pages)}, the most read at one time; older reviews were not read.`,
+    date: `${count} read, newest first, until they were all older than ${until ? written(until) : ''}.`,
+    'last page': out.reviews.length ? `${count} read: all the reviews Flipkart shows.` : 'Flipkart shows no reviews for this product.',
+    limit: `${count} read, the most read at one time; older reviews were not read.`,
   }[out.end];
   return out;
 }

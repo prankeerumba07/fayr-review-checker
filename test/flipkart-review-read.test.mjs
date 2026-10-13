@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseReviewShot, readReviewShot, nameFits, pickReview, isNoise, photoLine, PENDING_NOTE, TYPING_NOTE } from '../flipkart/review-read.js';
+import { parseReviewShot, readReviewShot, nameFits, pickReview, isNoise, photoLine, openTab, PENDING_NOTE, PUBLISHED_NOTE, PENDING_TAB_NOTE, TYPING_NOTE } from '../flipkart/review-read.js';
+import { bmpPixels } from '../flipkart/ocr.js';
 import { BOTTLE } from './fixtures/flipkart/make-purchase-screenshots.mjs';
 import { REVIEWER, OTHER_REVIEWER, WORDS } from './fixtures/flipkart/make-review-screenshots.mjs';
 
@@ -96,4 +97,56 @@ test("the made-up review screenshots, read by Tesseract on this computer: the ap
   assert.deepEqual(parts(mine), { kind: 'written', stars: 5, title: 'Terrific purchase', body: WORDS, name: REVIEWER, dateText: '12 Sep, 2026', own: true, form: false, others: 0, message: null, note: null });
   const missing = await readReviewShot([join(FIX, 'no-such-picture.png')]);
   assert.deepEqual([missing.ok, missing.kind, missing.unreadable], [false, 'unknown', true]);
+});
+
+test('"My Reviews" in the app: which tab is open, told from the coloured bar under its name, in the tab bar or just under it (a blurred edge too), never from the page\'s words further down; on the Published tab the review is published, on the Pending tab, or when it cannot be told, it does not show that the review is live', async () => {
+  // A made-up picture: rows of colours, the tab bar blue, the page grey, a yellow bar under one half.
+  const BLUE = [40, 116, 240];
+  const GREY = [238, 238, 238];
+  const YELLOW = [255, 194, 0];
+  const picture = (colourAt) => ({ width: 400, height: 300, rgb: (x, y) => colourAt(x, y) });
+  const TABS = { top: 40, bottom: 60 };
+  const inBar = picture((x, y) => (y < 100 ? (y >= 92 && x >= 200 ? YELLOW : BLUE) : GREY));
+  const underBar = picture((x, y) => (y < 90 ? BLUE : y < 98 && x < 200 ? YELLOW : GREY));
+  const blurred = picture((x, y) => (y < 90 ? BLUE : y < 92 ? (x >= 200 ? [140, 155, 120] : [139, 177, 239]) : y < 100 && x >= 200 ? YELLOW : GREY));
+  const none = picture((x, y) => (y < 90 ? BLUE : GREY));
+  const words = picture((x, y) => (y < 90 ? BLUE : y >= 150 && y < 160 && x < 200 ? [60, 60, 60] : GREY));
+  assert.deepEqual([openTab(inBar, TABS), openTab(underBar, TABS), openTab(blurred, TABS), openTab(none, TABS), openTab(words, TABS)], ['published', 'pending', 'published', null, null]);
+  // The tab told, from the lines as read: the note says what it shows.
+  const lines = ['< My Reviews', 'Pending Published', 'Product Reviews written by you..', BOTTLE, 'Terrific purchase', 'tok tok', WORDS, 'Delete Edit'];
+  const told = (tab) => parseReviewShot(lines, { tab });
+  assert.deepEqual([told('published').tab, told('published').pending, told('published').note, told('published').body], ['published', false, PUBLISHED_NOTE, WORDS]);
+  assert.deepEqual([told('pending').tab, told('pending').pending, told('pending').note], ['pending', true, PENDING_TAB_NOTE]);
+  assert.deepEqual([told(null).tab, told(null).pending, told(null).note], [null, true, PENDING_NOTE]);
+  assert.equal(parseReviewShot(lines.filter((t) => t !== 'Pending Published'), { tab: 'published' }).tab, null, 'no tab names read: no tab is told');
+  // A made-up picture, read by Tesseract and its colours read with the Mac's picture tool, on this computer.
+  const mine = await readReviewShot([join(FIX, 'review-app-mine-published.png')]);
+  assert.deepEqual([mine.kind, mine.tab, mine.pending, mine.note, mine.title, mine.body, mine.name], ['written', 'published', false, PUBLISHED_NOTE, 'Terrific purchase', WORDS, null]);
+  // A picture whose colours cannot be read: no tab is told.
+  const blind = await readReviewShot([join(FIX, 'review-app-mine-published.png')], { pixels: async () => { throw new Error('no picture tool'); } });
+  assert.deepEqual([blind.tab, blind.pending, blind.note], [null, true, PENDING_NOTE]);
+});
+
+test("a BMP picture's colours, as the Mac's picture tool writes it: rows from the bottom up, or from the top down; anything else is refused", () => {
+  // A made-up 2 × 2 picture, 24 bits a pixel, each row padded to 4 bytes: red, green on one row; blue, white on the other.
+  const bmp = (height) => {
+    const head = Buffer.alloc(54);
+    head.write('BM', 0, 'latin1');
+    head.writeUInt32LE(54 + 16, 2);
+    head.writeUInt32LE(54, 10);
+    head.writeUInt32LE(40, 14);
+    head.writeInt32LE(2, 18);
+    head.writeInt32LE(height, 22);
+    head.writeUInt16LE(1, 26);
+    head.writeUInt16LE(24, 28);
+    const row = (a, b) => Buffer.from([a[2], a[1], a[0], b[2], b[1], b[0], 0, 0]);
+    const top = row([255, 0, 0], [0, 255, 0]);
+    const bottom = row([0, 0, 255], [255, 255, 255]);
+    return Buffer.concat([head, ...(height > 0 ? [bottom, top] : [top, bottom])]);
+  };
+  for (const h of [2, -2]) {
+    const p = bmpPixels(bmp(h));
+    assert.deepEqual([p.width, p.height, p.rgb(0, 0), p.rgb(1, 0), p.rgb(0, 1), p.rgb(1, 1), p.rgb(9, 9)], [2, 2, [255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [255, 255, 255]], String(h));
+  }
+  assert.throws(() => bmpPixels(Buffer.from('not a picture')), /Not a BMP picture/);
 });

@@ -3,7 +3,7 @@
 // purchase screenshot needs. No API key, nothing sent anywhere.
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -88,6 +88,48 @@ export function parseTsv(tsv) {
     conf: ws.reduce((a, w) => a + w.conf, 0) / ws.length,
   }));
   return { words, lines: out };
+}
+
+/**
+ * A picture's colours, read on this computer: the Mac's own picture tool
+ * writes a plain BMP copy of it, read here and removed. -> { width, height,
+ * rgb(x, y) -> [red, green, blue] }. Throws when no copy could be made.
+ */
+export async function picturePixels(file, { sips = run } = {}) {
+  const dir = await mkdtemp(join(tmpdir(), 'arc-flipkart-pixels-'));
+  try {
+    const out = join(dir, 'picture.bmp');
+    await sips(SIPS, ['-s', 'format', 'bmp', file, '--out', out], { timeoutMs: 60_000 });
+    return bmpPixels(await readFile(out));
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** The colours of a BMP picture of 24 or 32 bits a pixel, not compressed, as the Mac's picture tool writes it: { width, height, rgb(x, y) }. Throws for any other picture. */
+export function bmpPixels(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 54 || buf.toString('latin1', 0, 2) !== 'BM') throw new Error('Not a BMP picture.');
+  const offset = buf.readUInt32LE(10);
+  const width = buf.readInt32LE(18);
+  const rows = buf.readInt32LE(22);
+  const bits = buf.readUInt16LE(28);
+  const packed = buf.readUInt32LE(30);
+  if (width <= 0 || rows === 0 || (bits !== 24 && bits !== 32) || (packed !== 0 && packed !== 3)) throw new Error('A kind of BMP picture this does not read.');
+  const height = Math.abs(rows);
+  const size = bits / 8;
+  const stride = Math.ceil((width * size) / 4) * 4;
+  if (offset + stride * height > buf.length) throw new Error('The BMP picture is cut short.');
+  return {
+    width,
+    height,
+    rgb(x, y) {
+      const col = Math.min(width - 1, Math.max(0, Math.round(x)));
+      const line = Math.min(height - 1, Math.max(0, Math.round(y)));
+      // Rows are kept from the bottom up unless the height is given below zero.
+      const i = offset + (rows > 0 ? height - 1 - line : line) * stride + col * size;
+      return [buf[i + 2], buf[i + 1], buf[i]];
+    },
+  };
 }
 
 /**
