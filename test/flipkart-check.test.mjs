@@ -324,7 +324,7 @@ test("step 7's search: found (the words and the name, with Flipkart's stars; for
   const mine = made(3, { name: REVIEWER, stars: 5, ...WORDS, dateSaid: '12 days ago', date: '2026-10-01', dateLatest: '2026-10-01', page: 2 });
   const found = await go([...READ.reviews, mine]);
   assert.deepEqual(step7(found), ['pass', `Found the review among Flipkart's public reviews (page 2 of "See all reviews"): its words match the review screenshot's, and it is under the name on the review screenshot. On Flipkart it has 5 stars, and it was posted 12 days ago (01-10-2026). ${READING}`]);
-  assert.deepEqual([found.result.found.how, found.result.found.review, found.result.found.share], ['found', { id: 'made-up-3', name: REVIEWER, stars: 5, ...WORDS, dateSaid: '12 days ago', date: '2026-10-01', page: 2 }, 1]);
+  assert.deepEqual([found.result.found.how, found.result.found.review, found.result.found.share], ['found', { id: 'made-up-3', name: REVIEWER, stars: 5, ...WORDS, dateSaid: '12 days ago', date: '2026-10-01', dateLatest: '2026-10-01', page: 2, pageLink: `${READ.link}&sortOrder=MOST_RECENT&page=2` }, 1]);
   const live = await go([...READ.reviews, mine], { review: reviewReading(REVIEW, { pending: true }) });
   assert.match(live.result.steps[6].detail, /\(01-10-2026\)\. Finding it among Flipkart's public reviews shows the review is live\. Read 3/);
   // Found before Flipkart stopped the reading: no pause; what Flipkart did is still said.
@@ -348,6 +348,11 @@ test("step 7's search: found (the words and the name, with Flipkart's stars; for
   const month = { dateSaid: '1 month ago', date: '2026-09-13', dateLatest: '2026-09-28' };
   const older = await go([made(1), made(2, month)], { answer: { end: 'limit', since: null } });
   assert.deepEqual(step7(older), ['fail', 'Not found among Flipkart\'s reviews: none of the 2 reviews that can be posted on or after 23-07-2026 has the review screenshot\'s words under the name on the review screenshot. The order was delivered on 23-07-2026, before the oldest review read, so the review may be among older reviews not read yet. Read 2 reviews of the product from 2 pages of "See all reviews" on Flipkart, newest first (back to about 13-09-2026, the most read at one time). Reviews posted on or after the day the order was delivered (23-07-2026, on the delivery screenshot) can be the user\'s.']);
+  // Flipkart shows fewer reviews than it counts: all it shows were read, and older ones cannot be.
+  const shown = await go([made(1), made(2, month)], { answer: { end: 'last page', since: null, total: 1519 } });
+  assert.equal(step7(shown)[1], 'Not found among Flipkart\'s reviews: none of the 2 reviews that can be posted on or after 23-07-2026 has the review screenshot\'s words under the name on the review screenshot. The order was delivered on 23-07-2026, before the oldest review Flipkart shows, so the review may be among the older ones it does not show. Read 2 reviews of the product from 2 pages of "See all reviews" on Flipkart, newest first (all the reviews Flipkart shows, 2 of the 1,519 it counts, back to about 13-09-2026). Reviews posted on or after the day the order was delivered (23-07-2026, on the delivery screenshot) can be the user\'s.');
+  const all = await go([made(1), made(2, month)], { answer: { end: 'last page', since: null, total: 2 } });
+  assert.match(step7(all)[1], /under the name on the review screenshot\. Read 2 reviews of the product from 2 pages of "See all reviews" on Flipkart, newest first \(all the reviews Flipkart shows, back to about 13-09-2026\)\. Reviews posted/);
 });
 
 test("how far back Flipkart's reviews are read, from what each row's last check kept: step 7's own day, else the day on the Delivered line, else the earliest order day, a day with no year being the most recent such day by the time of the check; none when it found none", () => {

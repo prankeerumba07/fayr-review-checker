@@ -126,6 +126,15 @@ function keptReading(o) {
   };
 }
 const FOUND_HOW = new Set(['found', 'several', 'otherName', 'noName', 'noNameToCheck', 'notFound', 'noWords']);
+/** A link to a page of Flipkart's own website, as it is; null for anything else. */
+function flipkartLink(v) {
+  try {
+    const u = new URL(String(v ?? ''));
+    return u.protocol === 'https:' && /^(?:www\.)?flipkart\.com$/i.test(u.hostname) ? u.href.slice(0, 1000) : null;
+  } catch {
+    return null;
+  }
+}
 /** What step 7's search found among Flipkart's reviews (review-match.js), as kept with the row's last check: how, and the review it points at, its words cut to length. */
 function keptFound(o) {
   if (!o || typeof o !== 'object' || !FOUND_HOW.has(o.how)) return null;
@@ -141,7 +150,7 @@ function keptFound(o) {
     before: count(o.before),
     share: share(o.share),
     rareShare: share(o.rareShare),
-    review: r ? { id: r.id ? cleanText(r.id, 100) : null, name: r.name ? cleanText(r.name, 100) : null, stars: Number.isInteger(r.stars) && r.stars >= 1 && r.stars <= 5 ? r.stars : null, title: r.title ? cleanText(r.title, 300) : null, text: r.text ? cleanText(r.text, 3000) : null, dateSaid: r.dateSaid ? cleanText(r.dateSaid, 60) : null, date: DAY.test(String(r.date ?? '')) ? r.date : null, page: Number.isInteger(r.page) && r.page > 0 ? r.page : null } : null,
+    review: r ? { id: r.id ? cleanText(r.id, 100) : null, name: r.name ? cleanText(r.name, 100) : null, stars: Number.isInteger(r.stars) && r.stars >= 1 && r.stars <= 5 ? r.stars : null, title: r.title ? cleanText(r.title, 300) : null, text: r.text ? cleanText(r.text, 3000) : null, dateSaid: r.dateSaid ? cleanText(r.dateSaid, 60) : null, date: DAY.test(String(r.date ?? '')) ? r.date : null, dateLatest: DAY.test(String(r.dateLatest ?? '')) ? r.dateLatest : null, page: Number.isInteger(r.page) && r.page > 0 ? r.page : null, pageLink: flipkartLink(r.pageLink) } : null,
   };
 }
 

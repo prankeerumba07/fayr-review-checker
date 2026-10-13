@@ -650,7 +650,7 @@ test('a row\'s page shows what the purchase screenshot says, as on Amazon ("Read
   const all = findAll(card(s.page()), (n) => n.tag === 'details')[0];
   assert.deepEqual([textOf(findAll(all, (n) => n.tag === 'summary')[0]), textOf(findAll(all, (n) => n.tag === 'pre')[0]), findAll(all, (n) => n.tag === 'pre')[0].attrs.class], ['Everything read from it', ORDER_READ.text, 'fk-ocr-text']);
   // The left side as on Amazon: the Type and Note, the details from the sheet, then what the purchase and delivery screenshots say.
-  assert.deepEqual(findAll(byId(s.page(), 'row-page'), (n) => n.attrs?.class === 'fk-left')[0].children.filter(Boolean).map((n) => n.attrs['data-id']), ['card-result', 'row-details', 'card-order', 'card-delivery', 'card-review']);
+  assert.deepEqual(findAll(byId(s.page(), 'row-page'), (n) => n.attrs?.class === 'fk-left')[0].children.filter(Boolean).map((n) => n.attrs['data-id']), ['card-result', 'row-details', 'card-order', 'card-delivery', 'card-review', 'card-flipkart']);
   // Not read: it says so; a picture whose words are not clear says why.
   const none = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK } } }));
   assert.equal(textOf(card(none.page())), 'Read from the purchase screenshotNot read yet.');
@@ -805,6 +805,59 @@ test('a row\'s page shows what the review screenshot says ("Read from the review
   // A file with no review screenshot column and no review link column has no card for it.
   const noColumn = { ...SAVED, sheet: { ...SAVED.sheet, mapping: { ...SAVED.sheet.mapping, reviewShot: null, reviewLink: null } } };
   assert.equal(card((await page({ ...LAST_CHECK_READ, review: REVIEW_READ }, noColumn)).page()), null);
+});
+
+test('a row\'s page shows what step 7 found on Flipkart ("Found on Flipkart"), as the Amazon screen\'s "Found on Amazon": the review found, with its page of "See all reviews" to open; words under another name or under "Flipkart Customer" shown with why they do not count; not found; nothing read yet; live as soon as step 7 has its answer; with no review screenshot or review link column, no card', async () => {
+  const card = (tree) => byId(tree, 'card-flipkart');
+  const fields = (tree) => findAll(card(tree), (n) => n.tag === 'div' && n.attrs?.class === 'field-row').map((n) => [textOf(findAll(n, (x) => x.tag === 'dt')[0]), textOf(findAll(n, (x) => x.tag === 'dd')[0])]);
+  const warned = (tree) => findAll(card(tree), (n) => String(n.attrs?.class ?? '').includes('notice-warn')).map(textOf);
+  const page = (result, saved = SAVED) => rowScreen(fakeLocal({ saved, pages: { r000000000001: { row: PICTURED, result } } }));
+  const FLIPKART = { pid: 'TESTPID0000001', name: 'Test Brand Steel Bottle 1 L', readAt: '2026-10-13T13:31:38.587Z', reused: false, pages: 15, count: 150, total: 1519, end: 'last page', since: '2026-08-17', oldest: '2026-09-13', says: null };
+  const LINK = 'https://www.flipkart.com/test-brand-steel-bottle/product-reviews/itmtestbottle01?pid=TESTPID0000001&marketplace=FLIPKART&sortOrder=MOST_RECENT&page=9';
+  const MINE = { id: 'made-up-9', name: 'Test Reviewer One', stars: 5, title: 'Terrific purchase', text: 'Keeps water cold all day and the grip is good.', dateSaid: '1 month ago', date: '2026-09-13', dateLatest: '2026-09-28', page: 9, pageLink: LINK };
+  const FOUND = { how: 'found', count: 1, nameFrom: 'screenshot', counted: 150, nameOnly: 0, before: 0, share: 1, rareShare: 1, review: MINE };
+  const READ = ['Read', `150 reviews from 15 pages, newest first, all that Flipkart shows, ${words.ist(FLIPKART.readAt)}`];
+  const PRODUCT = [["Product's page", 'Test Brand Steel Bottle 1 L'], ['Reviews Flipkart counts', '1519']];
+  const s = await page({ ...LAST_CHECK_READ, review: REVIEW_READ, flipkart: FLIPKART, found: FOUND });
+  assert.equal(textOf(findAll(card(s.page()), (n) => n.tag === 'h3')[0]), 'Found on Flipkart');
+  assert.equal(textOf(findAll(card(s.page()), (n) => n.tag === 'blockquote')[0]), MINE.text);
+  assert.deepEqual(fields(s.page()), [['Reviewer name', 'Test Reviewer One'], ['Stars', '5 of 5'], ['Title', 'Terrific purchase'], ['Date', '1 month ago'], ...PRODUCT, READ, ['Found', 'Yes, on page 9. Open that page on Flipkart']]);
+  const open = findAll(card(s.page()), (n) => n.tag === 'a')[0];
+  assert.deepEqual([open.attrs.href, open.attrs.target, open.attrs.rel], [LINK, '_blank', 'noopener noreferrer']);
+  assert.deepEqual(warned(s.page()), []);
+  const exact = await page({ ...LAST_CHECK_READ, flipkart: FLIPKART, found: { ...FOUND, review: { ...MINE, dateSaid: '12 days ago', date: '2026-10-01', dateLatest: '2026-10-01' } } });
+  assert.deepEqual(fields(exact.page())[3], ['Date', '12 days ago (01-10-2026)']);
+  // The words under another name, or under "Flipkart Customer": the review is shown, with why it is not counted as found.
+  const other = await page({ ...LAST_CHECK_READ, flipkart: FLIPKART, found: { ...FOUND, how: 'otherName', review: { ...MINE, name: 'Test Reviewer Two' } } });
+  assert.deepEqual([warned(other.page()), fields(other.page())[0], fields(other.page()).at(-1)], [['The words match this review, but it is under another name, so it is not counted as found.'], ['Reviewer name', 'Test Reviewer Two'], ['Found', 'No: the words match a review under another name']]);
+  const customer = await page({ ...LAST_CHECK_READ, flipkart: FLIPKART, found: { ...FOUND, how: 'noName', review: { ...MINE, name: 'Flipkart Customer' } } });
+  assert.deepEqual([warned(customer.page()), fields(customer.page()).at(-1)], [['The words match this review, but Flipkart shows no name for it ("Flipkart Customer"), so the name could not be checked; it is not counted as found.'], ['Found', 'No: the words match a review Flipkart shows as "Flipkart Customer", so the name could not be checked']]);
+  // Not found, or two that fit: no review is shown.
+  const notFound = await page({ ...LAST_CHECK_READ, flipkart: FLIPKART, found: { ...FOUND, how: 'notFound', count: 0, review: null } });
+  assert.deepEqual([textOf(findAll(card(notFound.page()), (n) => n.tag === 'p')[0]), fields(notFound.page())], ['Not found among the reviews read.', [...PRODUCT, READ, ['Found', 'No']]]);
+  const twice = await page({ ...LAST_CHECK_READ, flipkart: FLIPKART, found: { ...FOUND, how: 'several', count: 2 } });
+  assert.deepEqual([textOf(findAll(card(twice.page()), (n) => n.tag === 'p')[0]), fields(twice.page()).at(-1)], ['Two or more reviews fit, so none is shown.', ['Found', 'No: 2 reviews under the name have these words, so none is picked']]);
+  // Nothing read from Flipkart yet; then live, as soon as step 7 has its answer.
+  assert.equal(textOf(card((await page(LAST_CHECK)).page())), 'Found on FlipkartNothing read from Flipkart yet. Flipkart is opened only to look for the review shown on the review screenshot.');
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const local = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: null } } });
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
+    onEvent({ event: 'step', step: { n: 7, name: STEP_NAMES[6], state: 'pass', detail: 'Found the review.' }, partial: { order: ORDER_READ, delivery: DELIVERY_READ, review: REVIEW_READ, flipkart: FLIPKART, found: FOUND } });
+    await gate;
+    onEvent({ event: 'done', result: { ...LAST_CHECK_READ, review: REVIEW_READ, flipkart: FLIPKART, found: FOUND } });
+    return { ok: true };
+  };
+  const live = await rowScreen(local);
+  byId(live.page(), 'check').attrs.onclick();
+  await settle();
+  assert.deepEqual(fields(live.page()).at(-1), ['Found', 'Yes, on page 9. Open that page on Flipkart'], 'shown at once, while the check runs');
+  release();
+  await settle();
+  // A file with no review screenshot column and no review link column has no card for it.
+  const noColumn = { ...SAVED, sheet: { ...SAVED.sheet, mapping: { ...SAVED.sheet.mapping, reviewShot: null, reviewLink: null } } };
+  assert.equal(card((await page({ ...LAST_CHECK_READ, flipkart: FLIPKART, found: FOUND }, noColumn)).page()), null);
 });
 
 /** What the server says when no one is logged in to Google before a row, for "Start checking". */

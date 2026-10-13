@@ -1350,7 +1350,50 @@ function readCards(ctx, res) {
               )
             : h('p', { class: 'muted' }, 'Not read yet.'),
         ),
+    !shows('reviewShot') && !shows('reviewLink') ? null : foundCard(ctx, res),
   ];
+}
+
+/** Step 7's answer for the "Found" line: the review found, on its page of "See all reviews", or why not. */
+function foundWords(ctx, f) {
+  const { h, words } = ctx;
+  const r = f?.review;
+  const reviews = (n) => (n === 1 ? 'a review' : `${n} reviews`);
+  if (f?.how === 'found') return r?.pageLink ? words.link(h, r.pageLink, `Yes, on page ${r.page}. Open that page on Flipkart`) : `Yes${r?.page ? `, on page ${r.page}` : ''}`;
+  if (f?.how === 'otherName') return `No: the words match ${reviews(f.count)} under another name`;
+  if (f?.how === 'noName') return 'No: the words match a review Flipkart shows as "Flipkart Customer", so the name could not be checked';
+  if (f?.how === 'noNameToCheck') return 'No: there is no name to check the review with';
+  if (f?.how === 'several') return `No: ${f.count} reviews under the name have these words, so none is picked`;
+  if (f?.how === 'noWords') return 'Not searched: the review screenshot shows no words';
+  return 'No';
+}
+
+/** What step 7 found among Flipkart's public reviews: the Amazon screen's "Found on Amazon" box, for Flipkart. A review is shown when its words match, found or not, with why it is not counted. */
+function foundCard(ctx, res) {
+  const { h, words } = ctx;
+  const f = res?.found;
+  const k = res?.flipkart;
+  const r = f?.review;
+  const shown = r && ['found', 'otherName', 'noName', 'noNameToCheck'].includes(f.how) ? r : null;
+  const notCounted = {
+    otherName: 'The words match this review, but it is under another name, so it is not counted as found.',
+    noName: 'The words match this review, but Flipkart shows no name for it ("Flipkart Customer"), so the name could not be checked; it is not counted as found.',
+    noNameToCheck: 'The words match this review, but there is no name on the review screenshot or in the sheet to check it with; it is not counted as found.',
+  }[f?.how];
+  const day = (d) => String(d).split('-').reverse().join('-');
+  const when = shown?.dateSaid ? `${shown.dateSaid}${shown.date && shown.date === shown.dateLatest ? ` (${day(shown.date)})` : ''}` : null;
+  const none = !k ? 'Nothing read from Flipkart yet. Flipkart is opened only to look for the review shown on the review screenshot.' : f?.how === 'several' ? 'Two or more reviews fit, so none is shown.' : f?.how === 'noWords' ? 'Not searched: the review screenshot shows no words to search for.' : 'Not found among the reviews read.';
+  const read = k ? `${words.plural(k.count ?? 0, 'review')} from ${words.plural(k.pages ?? 0, 'page')}, newest first${k.end === 'last page' ? ', all that Flipkart shows' : ''}${k.readAt ? `, ${words.ist(k.readAt)}` : ''}` : null;
+  return h(
+    'section',
+    { class: 'card', key: 'card-flipkart', 'data-id': 'card-flipkart' },
+    h('h3', null, 'Found on Flipkart'),
+    shown
+      ? h('div', null, notCounted ? words.notice(h, 'warn', notCounted) : null, words.quote(h, shown.text || shown.title), words.fields(h, [['Reviewer name', shown.name], ['Stars', shown.stars ? `${shown.stars} of 5` : null], ['Title', shown.title], ['Date', when]]))
+      : h('p', { class: 'muted' }, none),
+    k ? words.fields(h, [["Product's page", k.name], ['Reviews Flipkart counts', Number.isInteger(k.total) ? String(k.total) : null]]) : null,
+    k ? h('div', null, h('h4', null, 'Under "See all reviews"'), words.fields(h, [['Read', read], ['Found', foundWords(ctx, f)]])) : null,
+  );
 }
 
 /** The sheet and the two screenshots side by side, as the Amazon screen's comparison table shows them (check.js buildComparison). Its column for what was found on Flipkart comes with the review's steps. */
