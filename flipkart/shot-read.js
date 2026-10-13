@@ -53,7 +53,7 @@ export async function readText(files, { tesseract, sips, missing = null, looks =
       const read = await readLines(file, { ...opts, scale: look.scale ?? 1, psm: look.psm ?? '3', light: Boolean(look.light) });
       if (!read) return null;
       const wordCount = wordsOf(read.lines.map((l) => l.text).join(' ')).length;
-      return { ok: read.confidence >= MIN_CONFIDENCE && wordCount >= MIN_WORDS, confidence: read.confidence, wordCount, lines: read.lines, hindi: read.hindi, scale: look.scale ?? 1, idsOnly: Boolean(look.idsOnly) };
+      return { ok: read.confidence >= MIN_CONFIDENCE && wordCount >= MIN_WORDS, confidence: read.confidence, wordCount, lines: read.lines, hindi: read.hindi, scale: look.scale ?? 1, idsOnly: Boolean(look.idsOnly), wordByWord: look.psm === '11' };
     };
     let first = null;
     try {
@@ -86,7 +86,9 @@ export async function readText(files, { tesseract, sips, missing = null, looks =
         }
       }
     }
-    pictures.push({ ...best, extra: extra.filter((x) => !x.idsOnly).map((x) => x.lines), idLines: extra.filter((x) => x.idsOnly).map((x) => x.lines) });
+    const others = extra.filter((x) => !x.idsOnly);
+    const textsOf = (wordByWord) => [best, ...others].filter((x) => Boolean(x.wordByWord) === wordByWord).flatMap((x) => (x.lines ?? []).map((l) => l.text));
+    pictures.push({ ...best, extra: others.map((x) => x.lines), idLines: extra.filter((x) => x.idsOnly).map((x) => x.lines), wordByWord: textsOf(true), byLine: textsOf(false) });
   }
   const clear = pictures.filter((p) => p.ok);
   const lines = clear.flatMap((p) => p.lines);
@@ -95,6 +97,9 @@ export async function readText(files, { tesseract, sips, missing = null, looks =
   const more = clear.flatMap((p) => p.extra.flat().map((l) => l.text)).filter((t) => !known.has(t) && known.add(t));
   const texts = [...own, ...more];
   const idTexts = clear.flatMap((p) => (p.idLines ?? []).flat().map((l) => l.text)).filter((t) => !known.has(t));
+  // The lines only the reading of every word on its own read (Tesseract's way of finding words scattered over a page): a number alone there is never an amount.
+  const byLine = new Set(clear.flatMap((p) => p.byLine ?? []));
+  const alone = [...new Set(clear.flatMap((p) => p.wordByWord ?? []))].filter((t) => !byLine.has(t));
   const all = pictures.flatMap((p) => p.lines.map((l) => l.text));
   return {
     ok: clear.length > 0,
@@ -105,6 +110,7 @@ export async function readText(files, { tesseract, sips, missing = null, looks =
     lines,
     texts,
     idTexts,
+    alone,
     text: (clear.length ? texts : all).join('\n'),
     pictures,
   };
@@ -131,7 +137,7 @@ function lacksOrder(lines, want = {}) {
  */
 export async function readOrderShot(files, opts = {}) {
   const read = await readText(files, { ...opts, missing: opts.missing ?? ((lines) => lacksOrder(lines, opts.want)), looks: opts.looks ?? SECOND_LOOKS, merge: true });
-  return { ...read, orderIds: orderIdsIn([...read.texts, ...read.idTexts]), dates: datesIn(read.texts), amounts: amountsIn(read.texts) };
+  return { ...read, orderIds: orderIdsIn([...read.texts, ...read.idTexts]), dates: datesIn(read.texts), amounts: amountsIn(read.texts, { alone: read.alone }) };
 }
 
 /** Every reading of the clear pictures: each picture's own lines, then the lines of its other readings. */
@@ -161,17 +167,19 @@ export async function readDeliveryShot(files, opts = {}) {
   const own = read.pictures.filter((p) => p.ok).map((p) => parseDelivery(p.lines));
   const light = read.pictures.filter((p) => p.ok).flatMap((p) => p.idLines ?? []);
   const each = [...readingsOf(read), ...light].map((lines) => parseDelivery(lines));
-  // The word itself ("Delivered, Sep 30") is said before "Delivered to …", and that before a sign, whichever reading read it.
-  const rank = (d) => ({ word: 0, to: 1, sign: 2 })[d.deliveredHow] ?? 3;
+  // The word itself ("Delivered, Sep 30") is said before "Delivered to …", and that before a sign, whichever reading read it; the word with
+  // a real date before the word whose date could not be read.
+  const rank = (d) => ({ word: d.deliveredDateUnread ? 1 : 0, to: 2, sign: 3 })[d.deliveredHow] ?? 4;
   const delivered = [...each].sort((a, b) => rank(a) - rank(b)).find((d) => d.delivered) ?? own[0] ?? parseDelivery([]);
   return {
     ...read,
     dates: datesIn(read.texts),
-    amounts: amountsIn(read.texts),
+    amounts: amountsIn(read.texts, { alone: read.alone }),
     delivered: each.some((d) => d.delivered),
     deliveredText: delivered.deliveredText,
     deliveredHow: delivered.deliveredHow ?? null,
     deliveredDate: delivered.deliveredDate,
+    deliveredDateUnread: Boolean(delivered.deliveredDateUnread),
     deliveredOn: delivered.deliveredOn,
     orderIds: [...new Set([...each.flatMap((d) => d.orderIds), ...orderIdsIn(read.idTexts)])],
   };

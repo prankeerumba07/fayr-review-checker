@@ -74,7 +74,8 @@ const ORDER_LABEL = /order(?:ed)?\s*(?:date|placed|on)\b|date\s+of\s+(?:the\s+)?
 
 function partsToDate(y, m, d) {
   if (!m || !d || d > 31 || m > 12) return null;
-  if (y === null) return { year: null, month: m, date: d, day: null };
+  // With no year shown, a day its month never has ("Sep 31") is not a date.
+  if (y === null) return d <= new Date(Date.UTC(2024, m, 0)).getUTCDate() ? { year: null, month: m, date: d, day: null } : null;
   const dt = new Date(Date.UTC(y, m - 1, d));
   if (dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null;
   return { year: y, month: m, date: d, day: `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}` };
@@ -121,6 +122,19 @@ export function datesIn(lines) {
   return out;
 }
 
+/** Each date once, as a screenshot's box shows them: a date read again by another reading goes, and so does one with no year when it is shown with its year too. */
+export function datesOnce(dates) {
+  const list = dates ?? [];
+  const withYear = new Set(list.filter((d) => d.day).map((d) => `${d.month}-${d.date}`));
+  const seen = new Set();
+  return list.filter((d) => {
+    const key = d.day ?? `${d.month}-${d.date}`;
+    if (seen.has(key) || (!d.day && withYear.has(key))) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** True when a date read from a screenshot is the sheet's day ("2026-07-20"); a date shown without its year is compared by day and month. */
 export function sameDay(read, sheetDay) {
   if (!read || !sheetDay) return false;
@@ -132,8 +146,9 @@ export function sameDay(read, sheetDay) {
 
 const AMOUNT_LABEL = /(order total|grand total|item\(?s\)?\s*sub-?total|sub-?total|total amount|amount paid|you paid|listing price|selling price|special price|\btotal|\bpaid|item price|\bprice|\bamount|\bmrp)\s*:?\s*(?:\(\d+\s*items?\))?\s*:?\s*$/i;
 const NUMBER = '(\\d{1,3}(?:,\\d{2,3})+|\\d+)(?:\\.(\\d{1,2}))?';
-// ₹ as Tesseract reads it: ₹, %, २, £, Rs, INR.
-const MONEY = new RegExp(`(?:₹|%|२|£|\\brs\\.?|\\binr)\\s*${NUMBER}(?![\\d.,])`, 'gi');
+// ₹ as Tesseract reads it: ₹, %, २, £, Rs, INR. A % right after a number or a star is that number's percent ("45% 1299") or a rating's
+// count ("4.3★ (27)"), not a rupee sign.
+const MONEY = new RegExp(`(?:₹|(?<![\\d#*★])%|२|£|\\brs\\.?|\\binr)\\s*${NUMBER}(?![\\d.,])`, 'gi');
 /**
  * One of Flipkart's price labels, then what Flipkart puts between it and the
  * amount, read as up to three marks of one to three letters (an "i" in a
@@ -146,10 +161,14 @@ const FLIPKART_LABELLED = new RegExp(`\\b(listing price|selling price|special pr
 const PRICE_DETAILS = new Set(['listing price', 'selling price', 'special price', 'total amount', 'paid']);
 /** What follows a price in an advert or an offer, never on an order: "₹9,999*", "Up to ₹3 Lakh", "₹400 off", "₹499/month", "₹1,000 Vouchers". */
 const NOT_AN_ORDER = /^\s*(?:\*|lakhs?\b|lacs?\b|crores?\b|cr\b|off\b|\/\s*(?:month|mo)\b|per\s+month\b|vouchers?\b)/i;
-/** What comes before a price in an offer, never on an order: "Get ₹1,000", "Up to ₹500", "Worth ₹999", "From ₹9,999". */
-const OFFER_BEFORE = /\b(?:get|win|earn|worth|up\s*to|upto|flat|extra|from|starting(?:\s+(?:at|from))?)\s*$/i;
+/** What comes before a price in an offer, never on an order: "Get ₹1,000", "Up to ₹500", "Worth ₹999", "From ₹9,999", "Snacks at ₹49". */
+const OFFER_BEFORE = /\b(?:get|win|earn|worth|up\s*to|upto|flat|extra|from|at|starting(?:\s+(?:at|from))?)\s*$/i;
 /** After "Total amount ₹307": the SuperCoins used, "+ 12" (a coin read as one or two odd letters), each worth ₹1. */
 const COINS_AFTER = /^\s*\+\s*[^\s\d]{0,2}\s*(\d{1,5})(?![\d.,])/;
+/** What follows a number that is not money: the phone's top bar (its internet speed "7.12 KB/s", "5G+", the battery's "%") and a size ("100 ml", "50 g"). */
+const NOT_MONEY_AFTER = /^\s*(?:[kmg]?b\/s|kbps|mbps|k\/s|%|[2-5]g\+?(?![\p{L}\d])|lte\b|vo(?:lte|nr)?\b|ml\b|ltr\b|litres?\b|l\b|gms?\b|grams?\b|g\b|kg\b|mah\b|gb\b|mb\b)/iu;
+/** The phone's top bar, which starts with the time ("9:41"). */
+const TOP_BAR = /^\W{0,2}\d{1,2}:\d{2}(?!\d)/;
 // A line that is only a number, as a large amount on its own line is read when its rupee sign is lost.
 const LONE = /^\W{0,2}(\d{2,3}(?:,\d{3})*|\d{2,6})(?:\.(\d{2}))?\W{0,2}$/;
 const DECIMAL = /(?<![\d.,/-])(\d{1,3}(?:,\d{2,3})+|\d+)\.(\d{2})(?![\d.,/-])/g;
@@ -193,9 +212,15 @@ const TOTAL_LABEL = /^(?!.*sub-?total)(?!.*fee)(?=.*(?:total|paid))/i;
  * may really be when the rupee sign was read as a digit or the decimal point
  * was lost (otherReadings). A line that is only a number is kept too, marked
  * lone: it is the amount only when it is the sheet's (matchingAmount), and is
- * never said to be a different amount.
+ * never said to be a different amount; such a number, read with no rupee sign
+ * and no label, is also marked bare. A number followed by what is not money
+ * (NOT_MONEY_AFTER) is never an amount, and neither is a number alone on one
+ * of the lines `alone` holds: those of a reading that reads every word on its
+ * own, where the writing on the product's photo and on adverts comes out as
+ * numbers alone.
  */
-export function amountsIn(lines) {
+export function amountsIn(lines, { alone = [] } = {}) {
+  const wordByWord = new Set([].concat(alone ?? []).map(textOf));
   const out = [];
   const add = (text, value, label, before, alts = []) => {
     if (!Number.isFinite(value) || value <= 0) return;
@@ -204,6 +229,8 @@ export function amountsIn(lines) {
     if (!out.some((a) => a.value === value && a.label === label && a.skip === skip)) out.push({ text: text.trim(), value, label, skip, kind, alts });
   };
   for (const line of [].concat(lines ?? []).map(textOf)) {
+    // The phone's top bar starts with the time ("9:41"): its numbers (the battery, the internet speed) are never amounts.
+    if (TOP_BAR.test(line)) continue;
     // Where each amount found ends, so it is never taken twice.
     const seen = new Set();
     for (const m of line.matchAll(FLIPKART_LABELLED)) {
@@ -224,7 +251,7 @@ export function amountsIn(lines) {
     }
     for (const m of line.matchAll(MONEY)) {
       if (seen.has(m.index + m[0].length)) continue;
-      if (NOT_AN_ORDER.test(line.slice(m.index + m[0].length)) || OFFER_BEFORE.test(line.slice(0, m.index))) continue;
+      if (NOT_AN_ORDER.test(line.slice(m.index + m[0].length)) || NOT_MONEY_AFTER.test(line.slice(m.index + m[0].length)) || OFFER_BEFORE.test(line.slice(0, m.index))) continue;
       const before = line.slice(0, m.index);
       // A rupee sign read as "२" and a digit ("₹329" as "२7329"): the number may be without that digit.
       const misread = /^२/.test(m[0]) && /^[2378]\d{2}/.test(m[1]) ? [toNumber(m[1].slice(1), m[2])] : [];
@@ -232,15 +259,15 @@ export function amountsIn(lines) {
       seen.add(m.index + m[0].length);
     }
     for (const m of line.matchAll(DECIMAL)) {
-      if (seen.has(m.index + m[0].length)) continue;
+      if (seen.has(m.index + m[0].length) || NOT_MONEY_AFTER.test(line.slice(m.index + m[0].length))) continue;
       const before = line.slice(0, m.index);
       const label = before.match(AMOUNT_LABEL)?.[1]?.toLowerCase() ?? null;
-      // Flipkart writes a price with its rupee sign: a number with paise and no label (the phone's "12.50 KB/s") counts only when it is the sheet's.
+      // Flipkart writes a price with its rupee sign: a number with paise and no label counts only when it is the sheet's.
       if (label) add(m[0], toNumber(m[1], m[2]), label, before, otherReadings(m[1], m[2]));
-      else if (!out.some((a) => a.value === toNumber(m[1], m[2]))) out.push({ text: m[0], value: toNumber(m[1], m[2]), label: null, skip: false, kind: null, alts: otherReadings(m[1], m[2]), lone: true });
+      else if (!wordByWord.has(line) && !out.some((a) => a.value === toNumber(m[1], m[2]))) out.push({ text: m[0], value: toNumber(m[1], m[2]), label: null, skip: false, kind: null, alts: otherReadings(m[1], m[2]), lone: true, bare: true });
     }
-    const lone = seen.size ? null : line.match(LONE);
-    if (lone && !out.some((a) => a.value === toNumber(lone[1], lone[2]))) out.push({ text: line.trim(), value: toNumber(lone[1], lone[2]), label: null, skip: false, kind: null, alts: otherReadings(lone[1], lone[2]), lone: true });
+    const lone = seen.size || wordByWord.has(line) ? null : line.match(LONE);
+    if (lone && !out.some((a) => a.value === toNumber(lone[1], lone[2]))) out.push({ text: line.trim(), value: toNumber(lone[1], lone[2]), label: null, skip: false, kind: null, alts: otherReadings(lone[1], lone[2]), lone: true, bare: true });
     const labelled = line.match(/(order total|grand total|item\(?s\)?\s*sub-?total|amount paid|you paid|item price)\s*:?\s*(\d[\d,]*)(?![\d.,])/i);
     if (labelled) add(labelled[2], toNumber(labelled[2], null), labelled[1].toLowerCase(), line.slice(0, labelled.index + labelled[0].length - labelled[2].length), otherReadings(labelled[2], null));
   }
@@ -523,6 +550,38 @@ export function nameLineStarting(lines, brands) {
     if (brand && words.slice(i + brand.length).filter((w) => !brand.some((b) => closeWords(b, w))).length >= 2) return raw.trim();
   }
   return null;
+}
+
+/**
+ * A product's name as read, the way a screenshot's box shows it: without the
+ * stray marks read before it (from an icon or the product's photo: "= ", "| ",
+ * "co. | "), cut where the name's first word comes among the first four words
+ * read (`names`: the names it may be, the brand first) when only marks and
+ * bits of a letter or three come before it, and without what was
+ * read after it: Flipkart's price lines ("Listing price 2499"), a price
+ * ("₹292"), and anything after the "..." where Flipkart cut the name short.
+ * Only what is shown changes: the name was compared as it was read.
+ */
+export function nameAsShown(text, names = []) {
+  const raw = String(text ?? '').replace(/\s+/g, ' ').trim();
+  const firsts = (names ?? []).map((n) => nameWords(n)[0]).filter(Boolean);
+  const tokens = raw.split(' ');
+  let t = raw;
+  for (let i = 0, words = 0; i < tokens.length && words < 4; i++) {
+    const w = nameWords(tokens[i]);
+    if (w.length && firsts.some((f) => closeWords(f, w[0]))) {
+      // Only marks and bits of a letter or three come before it; a real word ("Fresh") stays.
+      if (!/\p{L}{4,}/u.test(tokens.slice(0, i).join(' '))) t = tokens.slice(i).join(' ');
+      break;
+    }
+    words += w.length;
+  }
+  t = t.replace(/^[^\p{L}\p{N}]+/u, '');
+  t = t.replace(/\s+(?:(?:listing|selling|special)\s+price|total\s+(?:amount|fees)|price\s+details)\b.*$/i, '');
+  const cut = t.match(/\.{3}|…/);
+  if (cut) t = t.slice(0, cut.index + cut[0].length);
+  t = t.replace(/(?:\s+(?:(?:[₹%$£२]|rs\.?)\s?\d[\d,]*(?:\.\d{1,2})?|[|=_~©®"“”'’`<>{}[\]\\^*#@]+))+$/iu, '');
+  return t || raw;
 }
 
 /** True when some words (a cell, a line) hold one of the words listed, as whole words. Copied from amazon/screen-text.js. */

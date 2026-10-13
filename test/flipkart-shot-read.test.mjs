@@ -13,7 +13,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { orderIdsIn, partialOrderId, datesIn, sameDay, amountsIn, matchingAmount, amountMatch, totalRead, priceDetailsShown, totalShown, rupees, productShown, productNames, nameStartShown, nameLineStarting, holdsWord } from '../flipkart/screen-text.js';
+import { orderIdsIn, partialOrderId, datesIn, sameDay, amountsIn, matchingAmount, amountMatch, totalRead, priceDetailsShown, totalShown, rupees, productShown, productNames, nameStartShown, nameLineStarting, holdsWord, nameAsShown, datesOnce } from '../flipkart/screen-text.js';
 import { readOrderShot, readDeliveryShot, SECOND_LOOKS } from '../flipkart/shot-read.js';
 import { parseDelivery, NOT_DELIVERED_WORDS } from '../flipkart/delivery-read.js';
 import { readLines, LIGHT_LETTERS } from '../flipkart/ocr.js';
@@ -68,7 +68,7 @@ test("prices: Flipkart's labels with the marks between them and the amount, and 
   ]);
   assert.deepEqual(amountsIn(['Total amount 2449 + O50']).map((x) => [x.value, x.alts, x.coins ?? null]), [[2449, [449], 50], [50, [], null]], 'a rupee sign read as a digit: the number without it too');
   assert.deepEqual(amountsIn(['Other discount v -2%20']).map((x) => [x.value, x.label, x.kind]), [[20, 'other discount', 'off']], 'the rupee sign read as "2%"');
-  assert.deepEqual(amountsIn(['Get 7% off', 'Up to ₹3 Lakh', 'Test Phone at ₹9,999*', 'Get ₹1,000 back', '₹400 off', '+ ₹1,000 Vouchers', 'From ₹9,999', '18.40 KB/s']).map((x) => [x.value, Boolean(x.lone)]), [[18.4, true]], 'a percentage, an offer and an advert are never amounts; a number with paise and no rupee sign counts only when it is the sheet\'s');
+  assert.deepEqual(amountsIn(['Get 7% off', 'Up to ₹3 Lakh', 'Test Phone at ₹9,999*', 'Get ₹1,000 back', '₹400 off', '+ ₹1,000 Vouchers', 'From ₹9,999', '18.40 KB/s', '18.40']).map((x) => [x.value, Boolean(x.lone)]), [[18.4, true]], 'a percentage, an offer, an advert and the phone\'s internet speed are never amounts; a number with paise and no rupee sign counts only when it is the sheet\'s');
   const withDetails = amountsIn(['₹349', 'Selling price ₹329', 'Total amount ₹349']);
   assert.deepEqual(withDetails.map((x) => [x.value, x.label, Boolean(x.lone)]), [[349, null, true], [329, 'selling price', false], [349, 'total amount', false]], "with Flipkart's price details shown, a price with no label is an advert's or another product's");
   assert.equal(amountsIn(['₹349'])[0].lone ?? false, false, 'with none, a price with a rupee sign counts, as on Amazon');
@@ -143,7 +143,7 @@ test("an order ID in small light grey letters under the product's name, with dar
 test("delivered, as Flipkart's delivery screenshots say it: the word and its date without the marks around it, never the person it was handed to, and the signs only a delivered order shows; the stages a page lists, an order still on its way and the delivery details are never a delivery", () => {
   const d = parseDelivery(['< Order Details Help', `Order #${ID}`, '© Delivered, Thu 23rd Jul ^', 'Return policy ended on Thu 30th Jul']);
   assert.deepEqual([d.delivered, d.deliveredText, d.deliveredHow, d.deliveredOn, d.orderIds], [true, 'Delivered, Thu 23rd Jul', 'word', { day: null, year: null, month: 7, date: 23 }, [ID]]);
-  assert.deepEqual(['xx) Delivered, Today, Aug 31 xx', '4 Delivered before time', 'Your item has been delivered', 'Dellvered, Sep 30'].map((t) => parseDelivery([t]).deliveredText), ['Delivered, Today, Aug 31', 'Delivered before time', 'Your item has been delivered', 'Dellvered, Sep 30'], 'an icon read as a letter or a digit is left out; the word read with a letter wrong counts');
+  assert.deepEqual(['xx) Delivered, Today, Aug 31 xx', '4 Delivered before time', 'Your item has been delivered', 'Dellvered, Sep 30'].map((t) => parseDelivery([t]).deliveredText), ['Delivered, Today, Aug 31', 'Delivered before time', 'Your item has been delivered', 'Delivered, Sep 30'], 'an icon read as a letter or a digit is left out; the word read with a letter wrong counts, said as it is written');
   const to = parseDelivery([`Delivered to ${PERSON} at Home`]);
   assert.deepEqual([to.delivered, to.deliveredText, to.deliveredHow], [true, 'Delivered to …', 'to']);
   assert.ok(!JSON.stringify(to).includes(PERSON), 'the person it was handed to is never kept');
@@ -153,6 +153,20 @@ test("delivered, as Flipkart's delivery screenshots say it: the word and its dat
   for (const lines of [['Order Confirmed, Jul 20', 'Shipped, Jul 21', 'Out For Delivery', 'Delivery by Thu 23rd Jul'], ['Delivery, Sat Oct 03 By 11 PM'], ['Delivery details'], ['Delivery Executive details will be available once the order is out for delivery', 'How was your delivery experience?'], ['Delivery attempt failed']]) assert.equal(parseDelivery(lines).delivered, false, lines.join(' | '));
   assert.deepEqual(NOT_DELIVERED_WORDS, DEFAULT_SETTINGS.notDeliveredWords.filter((w) => w !== 'Cancel items'), "the Amazon checker's words for not delivered, without its own button");
   assert.deepEqual([holdsWord('Order Cancelled', ['Cancelled']), holdsWord('Shipped, Jul 21', ['Out for delivery']), holdsWord('Your item is out for delivery', ['Out for delivery'])], [true, false, true]);
+});
+
+test("what a screenshot's box shows, cleaned: a Delivered line whose date is not a real date says only Delivered; a day its month never has is no date; each date once; what follows a number that is not money (the phone's top bar, a size), and a number alone in the reading of every word on its own, is never an amount; a product's name without the marks and the price read around it", () => {
+  const odd = parseDelivery(['© Delivered Fri, 2l5 O', 'Return policy ended on Thu 30th Jul']);
+  assert.deepEqual([odd.delivered, odd.deliveredText, odd.deliveredDateUnread, odd.deliveredDate, odd.deliveredOn], [true, 'Delivered', true, null, null]);
+  assert.deepEqual(['Delivered, Sep 31', 'Delivered Th', 'Delivered, Sep 30', 'Delivered, Today, Aug 31', '4 Delivered before time', 'Delivered', 'Dellvered, oct 09'].map((t) => [parseDelivery([t]).deliveredText, parseDelivery([t]).deliveredDateUnread]), [['Delivered', true], ['Delivered', true], ['Delivered, Sep 30', false], ['Delivered, Today, Aug 31', false], ['Delivered before time', false], ['Delivered', false], ['Delivered, oct 09', false]]);
+  assert.deepEqual([datesIn(['Sep 31']), datesIn(['Feb 29']).map((d) => d.date), datesIn(['31st Aug']).map((d) => d.date)], [[], [29], [31]]);
+  assert.deepEqual(datesOnce(datesIn(['Your Order has been placed, Mon 20th Jul', 'Order placed on Mon 20th Jul', 'Placed on 20 Jul 2026', 'Order Confirmed, Jul 21'])).map((d) => d.text), ['20 Jul 2026', 'Jul 21'], 'the same day read again goes, and so does the day with no year when it is shown with its year');
+  for (const line of ['7.12 KB/s', '7.12 5G+', '₹100 ml', '%50 g', '₹12.50 Kbps', '9:41 Vo 4G £7', '45% 1299 30% 899', '4.5★ 1.2K+ 4.3#%27', 'SNACKS AT ₹49']) assert.deepEqual(amountsIn([line]), [], line);
+  assert.deepEqual(amountsIn(['64', '7.12', 'Total amount ₹349']).map((a) => [a.value, a.label, Boolean(a.bare)]), [[64, null, true], [7.12, null, true], [349, 'total amount', false]], 'read with no rupee sign and no label: bare');
+  assert.deepEqual(amountsIn(['64', '₹329', 'Total amount ₹349'], { alone: ['64', '₹329'] }).map((a) => a.value), [329, 349], 'a number alone in the reading of every word on its own is not an amount; a price with its rupee sign still is');
+  const names = ['Test Brand', 'Test Brand Steel Bottle 1 L, Blue'];
+  assert.deepEqual(['= Test Brand Steel Bottle 1 L, Blue', '| "<j Test Brand Steel Bottle', 'co. | Test Brand Steel Bottle 1 L, Bl...', 'Test Brand Steel Bo... %329', 'ही Tesl Brand Steel Bottle Listing price 2499', 'Test Brand Steel Bottle (1 L) ₹329 |', 'Test Brand Steel Bottle 1 L'].map((t) => nameAsShown(t, names)), ['Test Brand Steel Bottle 1 L, Blue', 'Test Brand Steel Bottle', 'Test Brand Steel Bottle 1 L, Bl...', 'Test Brand Steel Bo...', 'Tesl Brand Steel Bottle', 'Test Brand Steel Bottle (1 L)', 'Test Brand Steel Bottle 1 L']);
+  assert.equal(nameAsShown('Fresh Test Brand Steel Bottle', names), 'Fresh Test Brand Steel Bottle', 'a real word before the brand stays');
 });
 
 test('the made-up delivery screenshots, read by Tesseract on this computer: Delivered and its day, never the person it was handed to; the order ID in small light grey letters; a quick delivery\'s card in white on a colour', async () => {

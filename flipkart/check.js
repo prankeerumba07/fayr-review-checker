@@ -34,7 +34,7 @@ import { NOT_DELIVERED_WORDS } from './delivery-read.js';
 import { DEFAULT_MARKS } from './settings.js';
 import { shortName } from './campaigns.js';
 import { wordsOf, productWords } from './text.js';
-import { sameDay, amountMatch, totalRead, totalShown, priceDetailsShown, partialOrderId, rupees, productShown, holdsWord, dayFirst, nameStartShown, enoughOfName, nameLineStarting, brandWordsAtStart, nameCouldBe } from './screen-text.js';
+import { sameDay, amountMatch, totalRead, totalShown, priceDetailsShown, partialOrderId, rupees, productShown, holdsWord, dayFirst, nameStartShown, enoughOfName, nameLineStarting, brandWordsAtStart, nameCouldBe, datesOnce, nameAsShown, productNames } from './screen-text.js';
 
 export const STEP_NAMES = [
   'Opening the purchase screenshot',
@@ -382,6 +382,9 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     // A different product only when a name of three words or more shows half of the product's words, or two of them (the brand and one more).
     else if ((share >= 0.5 || Math.round(share * productWords(p.name ?? label).length) >= 2) && wordsOf(p.shown).length >= 3) product = { state: 'different', shown: p.shown, share };
     else product = { state: NOT_SHOWN, share };
+    // The name as shown, once compared: without the stray marks read before it and the price read after it (nameAsShown).
+    const names = byCampaign ? [...campaigns.map((c) => c.brand), ...campaignProducts.map((c) => c.name)] : productNames(label);
+    for (const k of ['shown', 'part']) if (typeof product[k] === 'string') product = { ...product, [k]: nameAsShown(product[k], names) };
     return { orderId, orderDate: had.orderDate ? orderDate : { state: SKIP }, amount: had.amount ? amount : { state: SKIP }, product };
   }
   /** How an amount is the same, when not shown as it is: "with ₹10 of fees", "with ₹50 of SuperCoins", or "with Flipkart's fees not shown". */
@@ -433,6 +436,14 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const r = await (which === 'order' ? readOrder : readDelivery)(shot[which].files, { want });
     checkStop();
     const near = (v) => sheetAmount !== null && Number.isFinite(v) && Math.abs(v - sheetAmount) <= tolerance + 1e-9;
+    // A number read with no rupee sign and no label is shown only when it is the sheet's amount, the only time it counts.
+    const amounts = (r.amounts ?? [])
+      .filter((a) => !a.bare || near(a.value) || (a.alts ?? []).some(near))
+      .map((a) => {
+        // A number whose rupee sign was read as a digit is shown as the amount it is.
+        const alt = (a.alts ?? []).find(near);
+        return { text: a.text, value: !near(a.value) && alt !== undefined ? alt : a.value, label: a.label, skip: Boolean(a.skip) };
+      });
     const record = {
       ok: Boolean(r.ok),
       problem: r.problem ?? null,
@@ -440,12 +451,10 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       wordCount: r.wordCount ?? 0,
       hindi: Boolean(r.hindi),
       orderIds: r.orderIds ?? [],
-      dates: orderDates(which, r.dates).map(dateWords),
-      // A number whose rupee sign was read as a digit is shown as the amount it is.
-      amounts: (r.amounts ?? []).map((a) => {
-        const alt = (a.alts ?? []).find(near);
-        return { text: a.text, value: !near(a.value) && alt !== undefined ? alt : a.value, label: a.label, skip: Boolean(a.skip) };
-      }),
+      // Each date once, though several readings read it.
+      dates: datesOnce(orderDates(which, r.dates)).map(dateWords),
+      // An amount with no label is not shown again when the same amount is shown with its label.
+      amounts: amounts.filter((a) => a.label || !amounts.some((b) => b.label && b.value === a.value)),
       product: null,
       productShare: null,
       text: clean(r.text ?? ''),
@@ -453,7 +462,9 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     };
     // A delivery screenshot with no "Delivered" may clearly say it was not delivered ("Cancelled", "Returned"…).
     const notWord = which === 'delivery' && !r.delivered ? notDeliveredWord(r) : null;
-    if (which === 'delivery') Object.assign(record, { delivered: Boolean(r.delivered), deliveredText: r.deliveredText ? clean(r.deliveredText) : null, notDelivered: notWord });
+    // Its date said only when it reads as a real date: "Delivered (its date could not be read)" otherwise.
+    const unread = Boolean(r.deliveredDateUnread);
+    if (which === 'delivery') Object.assign(record, { delivered: Boolean(r.delivered), deliveredText: r.deliveredText ? `${clean(r.deliveredText)}${unread ? ' (its date could not be read)' : ''}` : null, notDelivered: notWord });
     result[which] = record;
     if (!r.ok) return finish(n, 'fail', `It could not be read: ${r.problem ?? 'its words are not clear enough to read'}.`);
     const details = detailsOf(which, r);
@@ -463,7 +474,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     let said = detailWords(details);
     let fails = shotFails(which, details);
     if (which === 'delivery') {
-      const deliveredSaid = r.deliveredHow === 'sign' ? `It says ${quoted(r.deliveredText, 40)}, which Flipkart shows only for a delivered order.` : `It says ${quoted(r.deliveredText, 40)}.`;
+      const deliveredSaid = r.deliveredHow === 'sign' ? `It says ${quoted(r.deliveredText, 40)}, which Flipkart shows only for a delivered order.` : `It says ${quoted(r.deliveredText, 40)}${unread ? ' (its date could not be read)' : ''}.`;
       said = `${r.delivered ? deliveredSaid : notWord ? `It says "${notWord}", not Delivered.` : 'It does not say Delivered.'} ${said}`;
       fails = fails || !r.delivered;
       // The two screenshots show different order IDs: both are said, in FLIPKART-PLAN.md's words.

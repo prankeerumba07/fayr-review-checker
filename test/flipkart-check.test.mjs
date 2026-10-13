@@ -210,6 +210,21 @@ test("step 4, as the Amazon checker's step 5: the delivery screenshot is read on
   assert.deepEqual(buildComparison({}).map((r) => [r.field, r.order, r.delivery, r.result, r.ok]), [['Order ID', 'Not read', 'Not read', 'Not compared.', null], ['Order date', 'Not read', 'Not read', 'Not compared.', null], ['Amount', 'Not read', 'Not read', 'Not compared.', null], ['Product', 'Not read', 'Not read', 'Not compared.', null], ['Delivered', '', 'Not read', 'Not read.', null]]);
 });
 
+test("what the boxes and the comparison show is cleaned, never what is compared: a Delivered line whose date is not a real date says only Delivered; each date once; a number with no rupee sign or label only when it is the sheet's amount, and an amount with no label not again beside its label; the product's name without the marks and the price read around it", async () => {
+  const odd = await run(ROW, {}, { campaigns: [CAMPAIGN], delivery: deliveryReading(['© Delivered Fri, 2l5 O', BOTTLE, `Order #${ID}`]) });
+  assert.deepEqual([odd.result.steps[3].state, odd.result.steps[3].detail], ['pass', 'It says "Delivered" (its date could not be read). Order ID: the same. Order date: not shown. Amount: not shown. Product: one of the campaign\'s products.']);
+  assert.deepEqual([odd.result.delivery.deliveredText, odd.result.comparison.at(-1).delivery], ['Delivered (its date could not be read)', 'Delivered (its date could not be read)']);
+  const plain = await run(ROW, {}, { campaigns: [CAMPAIGN] });
+  const lines = ['co. | Test Brand Steel Bottle 1 L, Bl... %329', `Order #${ID}`, 'Your Order has been placed, Mon 20th Jul', 'Order placed on Mon 20th Jul', '64', '7.12 5G+', '349', 'Price details', 'Listing price ₹999', 'Selling price ⓘ ₹329', 'Total fees ⌄ ₹30', 'Other discount ⌄ -₹10', 'Total amount ₹349'];
+  const messy = await run(ROW, {}, { campaigns: [CAMPAIGN], read: reading(lines) });
+  const o = messy.result.order;
+  assert.deepEqual([o.dates, o.amounts.map((a) => [a.value, a.label]), o.product], [['20-07, with no year shown'], [[999, 'listing price'], [329, 'selling price'], [30, 'total fees'], [10, 'other discount'], [349, 'total amount']], 'Test Brand Steel Bottle 1 L, Bl...']);
+  assert.deepEqual([messy.result.steps[1].state, messy.result.steps[1].detail], [plain.result.steps[1].state, plain.result.steps[1].detail], 'compared as before');
+  // With no campaign, the name compared with the sheet's is shown cleaned in the comparison too.
+  const named = await run(ROW, {}, { delivery: deliveryReading(['Delivered, Thu 23rd Jul', '= Test Brand Steel Bottle 1 L, Blue ₹329']) });
+  assert.deepEqual([named.result.delivery.details.product.state, named.result.delivery.product, named.result.comparison[3].delivery], ['same', 'Test Brand Steel Bottle 1 L, Blue', 'The same: "Test Brand Steel Bottle 1 L, Blue"']);
+});
+
 test("no one logged in to Google, a login using the Live Amazon Browser, or Google's login page pauses the check at its step, saying why; nothing more is opened, and the row can be checked again; Stop stops it", async () => {
   assert.deepEqual(PAUSE_SAYS, Object.fromEntries(Object.entries(AMAZON_PAUSE_SAYS).filter(([k]) => k.startsWith('google-'))), "the Amazon checker's words");
   const out = await run(ROW, { delivery: { pause: 'google-out' } });

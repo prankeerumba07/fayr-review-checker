@@ -36,16 +36,20 @@ const DELIVERED_TO = /(?:^|[^\p{L}])delivered\s+to\b/iu;
 // ("Arrived in just 12 minutes!" on a quick delivery's card).
 const DELIVERED_SIGN = /\breturn policy (?:ended|ends)\b|\bhow was your delivery experience\b|\barrived in (?:just )?\d+\s*(?:min(?:ute)?s?|hours?)\b/i;
 
+// Words after "Delivered" that try to be its date: a digit, a month's name ("Sep", "Oct"), or a day's name or the start of one ("Thu",
+// "Th"). "Today" and "before time" do not.
+const DATE_TRIED = /\d|(?<!\p{L})(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|mon|tue|wed|thu|fri|sat|sun)\p{L}*|(?<!\p{L})(?:mo|tu|we|th|fr|sa|su)(?!\p{L})/iu;
+
 const textOf = (l) => String(typeof l === 'string' ? l : l?.text ?? '').replace(/\s+/g, ' ').trim();
 
-/** The word "Delivered" in a line, or that word read with one letter lost or changed: { at (where it starts), rest (what follows it) } or null. */
+/** The word "Delivered" in a line, or that word read with one letter lost or changed: { at (where it starts), rest (what follows it), slip (the word as read with a letter wrong) } or null. */
 function deliveredWord(t) {
   const m = t.match(DELIVERED);
   if (m) return { at: m.index + m[0].search(/d/i), rest: m[1] };
   for (const c of t.matchAll(DELIVERED_LIKE)) {
     const after = t.slice(c.index + c[0].length);
     if (/^deliver(?:y|ies|ing)?$/i.test(c[0]) || !closeWords(c[0].toLowerCase(), 'delivered') || /^\s+to\b/i.test(after)) continue;
-    return { at: c.index, rest: after.replace(/^(?:\s+on\b)?[\s:,-]*/i, '') };
+    return { at: c.index, rest: after.replace(/^(?:\s+on\b)?[\s:,-]*/i, ''), slip: c[0] };
   }
   return null;
 }
@@ -66,7 +70,7 @@ function deliveredWords(t, at, on) {
 }
 
 /**
- * The "Delivered" line: { at, text, date, on, how } or null. how is 'word'
+ * The "Delivered" line: { at, text, date, on, how, dateUnread } or null. how is 'word'
  * for the word itself (in English, read with a letter wrong, or in Hindi),
  * 'to' for "Delivered to …" (only when no other line has the word), or
  * 'sign' for a line
@@ -84,7 +88,11 @@ function deliveredLine(texts) {
     if (w) {
       const date = w.rest.replace(/[.,;:!]+$/, '').trim();
       const on = date ? datesIn([date])[0] ?? null : null;
-      return { at: i, text: deliveredWords(t, w.at, on), date: on?.text ?? (date || null), on, how: 'word' };
+      // Words after it that try to be a date (DATE_TRIED) but are not a real one ("Fri, 2l5 O"): only the word is said.
+      if (!on && DATE_TRIED.test(date)) return { at: i, text: 'Delivered', date: null, on: null, how: 'word', dateUnread: true };
+      // The word read with a letter wrong ("Dellvered") is said as it is written.
+      const text = deliveredWords(t, w.at, on);
+      return { at: i, text: w.slip ? text.replace(w.slip, 'Delivered') : text, date: on?.text ?? (date || null), on, how: 'word' };
     }
     if (to < 0 && DELIVERED_TO.test(t)) to = i;
   }
@@ -97,9 +105,12 @@ function deliveredLine(texts) {
 /**
  * What a delivery screenshot says, from its lines (Tesseract's line objects,
  * or plain strings): { delivered, deliveredText, deliveredHow, deliveredDate,
- * deliveredDay, deliveredOn, orderId, orderIds }. deliveredOn is the date read
- * on the Delivered line ({ day, year, month, date }; Flipkart shows no year,
- * so day is mostly null). Anything not shown is false or null, never guessed.
+ * deliveredDateUnread, deliveredDay, deliveredOn, orderId, orderIds }.
+ * deliveredOn is the date read on the Delivered line ({ day, year, month, date
+ * }; Flipkart shows no year, so day is mostly null). deliveredDateUnread is
+ * true when the words after "Delivered" try to be a date but do not read as a
+ * real one: then deliveredText is only "Delivered". Anything not shown is
+ * false or null, never guessed.
  */
 export function parseDelivery(lines) {
   const texts = (Array.isArray(lines) ? lines : []).map(textOf).filter(Boolean);
@@ -111,6 +122,7 @@ export function parseDelivery(lines) {
     deliveredText: d?.text ?? null,
     deliveredHow: d?.how ?? null,
     deliveredDate: d?.date ?? null,
+    deliveredDateUnread: Boolean(d?.dateUnread),
     deliveredDay: on?.day ?? null,
     deliveredOn: on ? { day: on.day, year: on.year, month: on.month, date: on.date } : null,
     orderId: ids[0] ?? null,
