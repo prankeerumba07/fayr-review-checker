@@ -778,6 +778,12 @@ test('a row\'s page shows what the review screenshot says ("Read from the review
   assert.deepEqual(fields(unsure.page()).filter(([k]) => k !== 'Read by'), [['What it shows', 'Not certain'], ['Stars', 'Not shown'], ['Title', 'Not shown'], ['Written words', 'Not shown'], ["Reviewer's name", 'Not shown'], ['Date', 'Not shown'], ['Why not certain', 'it shows no review, no rating and no message from Flipkart']]);
   const refused = await page({ ...LAST_CHECK_READ, review: { ...REVIEW_READ, kind: 'refused', stars: null, title: null, body: null, name: null, dateText: null, others: 0, message: 'Your review was rejected' } });
   assert.deepEqual([fields(refused.page())[0], fields(refused.page()).find(([k]) => k === "Flipkart's words")], [['What it shows', 'Flipkart not accepting the review'], ["Flipkart's words", 'Your review was rejected']]);
+  // What the screen does not show: "My Reviews" in the app lists pending reviews too; the review being written is not posted.
+  const pending = await page({ ...LAST_CHECK_READ, review: { ...REVIEW_READ, stars: null, name: null, others: 0, own: true, pending: true, note: 'This is the My Reviews page, which also lists pending reviews, so it does not show that the review is live.' } });
+  assert.deepEqual(fields(pending.page()).find(([k]) => k === 'Note'), ['Note', 'This is the My Reviews page, which also lists pending reviews, so it does not show that the review is live.']);
+  const typing = await page({ ...LAST_CHECK_READ, review: { ...REVIEW_READ, stars: null, title: null, name: null, dateText: null, others: 0, form: true, note: 'This shows the words being typed, not that the review was posted.' } });
+  assert.deepEqual(fields(typing.page()).slice(0, 2), [['What it shows', 'A review being written'], ['Stars', 'Not shown']]);
+  assert.deepEqual(fields(typing.page()).find(([k]) => k === 'Note'), ['Note', 'This shows the words being typed, not that the review was posted.']);
   // Not read yet, and live as soon as step 6 has read it.
   assert.equal(textOf(card((await page(LAST_CHECK)).page())), 'Read from the review screenshotNot read yet.');
   let release;

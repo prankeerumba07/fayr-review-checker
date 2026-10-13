@@ -43,9 +43,10 @@ export const SECOND_LOOKS = [{ scale: SECOND_LOOK_SCALE }, { psm: '11' }, { ligh
  * With `merge`, every reading's words are kept (`extra`, and in texts and text
  * after the picture's own lines) until nothing is lacking: what one reading
  * missed, another may have read; a look marked `idsOnly` adds its words only
- * to idTexts, where order IDs are looked for.
+ * to idTexts, where order IDs are looked for. `first` is the way the first
+ * reading is made (as the picture is, unless it says otherwise).
  */
-export async function readText(files, { tesseract, sips, missing = null, looks = [{ scale: SECOND_LOOK_SCALE }], merge = false } = {}) {
+export async function readText(files, { tesseract, sips, missing = null, looks = [{ scale: SECOND_LOOK_SCALE }], merge = false, first: firstLook = {} } = {}) {
   const pictures = [];
   const opts = { ...(tesseract ? { tesseract } : {}), ...(sips ? { sips } : {}) };
   for (const file of [].concat(files ?? []).filter(Boolean)) {
@@ -57,7 +58,7 @@ export async function readText(files, { tesseract, sips, missing = null, looks =
     };
     let first = null;
     try {
-      first = await one();
+      first = await one(firstLook);
     } catch {
       first = { ok: false, confidence: 0, wordCount: 0, lines: [], failed: true, hindi: false, scale: 1 };
     }

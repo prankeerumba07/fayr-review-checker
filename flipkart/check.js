@@ -540,6 +540,8 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       message: text(r.message),
       own: Boolean(r.own),
       form: Boolean(r.form),
+      pending: Boolean(r.pending),
+      note: text(r.note),
       others: Number.isInteger(r.others) ? r.others : 0,
       why: text(r.why),
       text: clean(r.text ?? ''),
@@ -547,12 +549,16 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const v = result.review;
     if (!r.ok) return finish(n, 'fail', `It could not be read: ${r.problem ?? 'its words are not clear enough to read'}.`);
     if (v.kind === 'refused') return finish(n, 'fail', `It shows a message from Flipkart that the review was not accepted: ${quoted(v.message, 200)}.`);
-    if (v.kind === 'rating') return finish(n, 'pass', `${v.stars} stars and no written words.`);
+    // What the screen does not show ("My Reviews" lists pending reviews too; the review being written is not posted) ends the line.
+    const note = v.note ? ` ${v.note}` : '';
+    if (v.kind === 'rating') return finish(n, 'pass', `${v.stars} stars and no written words.${note}`);
     const among = v.others ? `, one of ${v.others + 1} reviews it shows` : '';
-    // As the Amazon checker says it: the review's own words, quoted, end its line.
-    if (v.kind === 'written' && v.form) return finish(n, 'pass', `The review being written: ${quoted(v.body ?? v.title, 100)}`);
-    if (v.kind === 'written') return finish(n, 'pass', `A written review${v.name && !/flipkart\s+customer/i.test(v.name) ? ` by ${quoted(v.name, 40)}` : ''}${among}: ${quoted(v.body ?? v.title, 100)}`);
-    return finish(n, 'fail', `It does not clearly show a written review, a star rating only or a message from Flipkart, because ${v.why}.`);
+    // As the Amazon checker says it: the review's own words, quoted, end its line (then the note, as a sentence of its own).
+    const said = quoted(v.body ?? v.title, 100);
+    const words = `${said}${note ? `${/[.!?…]["”]$/.test(said) ? '' : '.'}${note}` : ''}`;
+    if (v.kind === 'written' && v.form) return finish(n, 'pass', `The review being written: ${words}`);
+    if (v.kind === 'written') return finish(n, 'pass', `A written review${v.name && !/flipkart\s+customer/i.test(v.name) ? ` by ${quoted(v.name, 40)}` : ''}${among}: ${words}`);
+    return finish(n, 'fail', `It does not clearly show a written review, a star rating only or a message from Flipkart, because ${v.why}.${note}`);
   }
 
   emit({ event: 'started', checkId, steps: STEP_NAMES, rowId: row.id, row: row.row ?? null, name: result.name });

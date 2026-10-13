@@ -93,6 +93,8 @@ function keptReview(o) {
     message: words(o.message, 500),
     own: Boolean(o.own),
     form: Boolean(o.form),
+    pending: Boolean(o.pending),
+    note: words(o.note, 300),
     others: Number.isInteger(o.others) && o.others >= 0 ? o.others : 0,
     why: words(o.why, 500),
     text: cleanText(o.text, 20000),

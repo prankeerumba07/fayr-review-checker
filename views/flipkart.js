@@ -1340,6 +1340,7 @@ function readCards(ctx, res) {
                   ['Written words', v.body || 'Not shown'],
                   ["Reviewer's name", v.name || 'Not shown'],
                   ['Date', v.dateText || 'Not shown'],
+                  ...(v.note ? [['Note', v.note]] : []),
                   ...(v.message ? [["Flipkart's words", v.message]] : []),
                   ...(v.others ? [['Other reviews on it', String(v.others)]] : []),
                   ...(v.why ? [['Why not certain', v.why]] : []),

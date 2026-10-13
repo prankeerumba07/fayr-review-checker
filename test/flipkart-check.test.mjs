@@ -235,7 +235,10 @@ test("step 6, as the Amazon checker's step 7 reads a review screenshot: the rati
   const rating = await run(ROW, {}, { review: reviewReading([BOTTLE, '4.0 •', `${REVIEWER} @ Certified Buyer 12 Sep, 2026`]) });
   assert.deepEqual([rating.result.steps[5].state, rating.result.steps[5].detail, rating.result.review.kind], ['pass', '4 stars and no written words.', 'rating']);
   const form = await run(ROW, {}, { review: reviewReading(['Share your experience', BOTTLE, 'Tell us more', '| Keeps water cold all day', 'Home Play Categories Account Cart']) });
-  assert.deepEqual([form.result.steps[5].state, form.result.steps[5].detail, form.result.review.form, form.result.review.name], ['pass', 'The review being written: "Keeps water cold all day"', true, null]);
+  assert.deepEqual([form.result.steps[5].state, form.result.steps[5].detail, form.result.review.form, form.result.review.name, form.result.review.note], ['pass', 'The review being written: "Keeps water cold all day". This shows the words being typed, not that the review was posted.', true, null, 'This shows the words being typed, not that the review was posted.']);
+  // "My Reviews" in the app, with its "Pending" and "Published" tabs: it does not show that the review is live.
+  const mine = await run(ROW, {}, { review: reviewReading(['< My Reviews', 'Pending Published', 'Product Reviews written by you..', 'Test Brand Steel Bottle...', 'Terrific purchase', 'xx. xx. 49. x 9. 25 Aug 2026', 'Keeps water cold all day.', 'xx Delete © Edit']) });
+  assert.deepEqual([mine.result.steps[5].state, mine.result.steps[5].detail, mine.result.review.pending, mine.result.review.dateText], ['pass', 'A written review: "Keeps water cold all day." This is the My Reviews page, which also lists pending reviews, so it does not show that the review is live.', true, '25 Aug 2026']);
   const refused = await run(ROW, {}, { review: reviewReading(['Your review was rejected as it does not meet our guidelines']) });
   assert.deepEqual([refused.result.steps[5].state, refused.result.steps[5].detail], ['fail', 'It shows a message from Flipkart that the review was not accepted: "Your review was rejected as it does not meet our guidelines".']);
   const photo = await run(ROW, {}, { review: reviewReading(['GENTLE ON SKIN', 'MADE FOR MEN']) });
