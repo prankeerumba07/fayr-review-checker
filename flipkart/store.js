@@ -69,7 +69,15 @@ function keptRead(o) {
     productShare: Number.isFinite(o.productShare) ? o.productShare : null,
     text: cleanText(o.text, 20000),
     details: o.details && typeof o.details === 'object' ? JSON.parse(JSON.stringify(o.details)) : null,
+    // The delivery screenshot's: whether it says Delivered (its words), and the first of Flipkart's not-delivered words it holds.
+    ...('delivered' in o ? { delivered: Boolean(o.delivered), deliveredText: o.deliveredText ? cleanText(o.deliveredText, 200) : null, notDelivered: o.notDelivered ? cleanText(o.notDelivered, 60) : null } : {}),
   };
+}
+
+/** The comparison table (check.js buildComparison), as kept with the row's last check: its words cut to length. */
+function keptComparison(rows) {
+  const ok = (v) => (v === true || v === false ? v : null);
+  return (Array.isArray(rows) ? rows : []).slice(0, 20).map((x) => ({ field: cleanText(x?.field, 60), sheet: cleanText(x?.sheet, 600), order: cleanText(x?.order, 600), delivery: cleanText(x?.delivery, 600), result: cleanText(x?.result, 300), ok: ok(x?.ok) }));
 }
 
 /** A row made from the file (workbook.js sheetRows), as kept, with its own id; its pictures come after. Copied from the Amazon store's way of keeping a row. */
@@ -340,8 +348,10 @@ export function createFlipkartStore(dataDir) {
     /**
      * A row's last check, kept with the row, so its page shows the check's
      * steps after a reload too: { checkId, startedAt, finishedAt, seconds,
-     * steps: [{ n, name, state, detail }], order } (order: what the purchase
-     * screenshot says, as read). The check before goes.
+     * steps: [{ n, name, state, detail }], order, delivery, shotsHad,
+     * comparison } (order and delivery: what the purchase and the delivery
+     * screenshots say, as read; comparison: the sheet and the two side by
+     * side, for the screenshots the file has). The check before goes.
      */
     saveCheck(id, result) {
       return locked(async () => {
@@ -355,6 +365,9 @@ export function createFlipkartStore(dataDir) {
           seconds: Number.isFinite(result?.seconds) && result.seconds >= 0 ? Math.round(result.seconds) : null,
           steps: (Array.isArray(result?.steps) ? result.steps : []).slice(0, 20).map((s, i) => ({ n: i + 1, name: cleanText(s?.name, 200), state: STEP_STATES.has(s?.state) ? s.state : 'waiting', detail: s?.detail ? cleanText(s.detail) : null })),
           order: keptRead(result?.order),
+          delivery: keptRead(result?.delivery),
+          shotsHad: (Array.isArray(result?.shotsHad) ? result.shotsHad : []).filter((w) => w === 'order' || w === 'delivery'),
+          comparison: keptComparison(result?.comparison),
         };
         await writeWhole(rowsFile, JSON.stringify(d));
         return row;

@@ -1,13 +1,15 @@
-// Reading a Flipkart row's purchase screenshot on this computer, with
-// Tesseract (English and Hindi): its words, every order ID, every date and
-// every amount. Copied from the Amazon checker (amazon/shot-read.js): only
-// what reading a purchase screenshot needs, with Flipkart's own way of
-// reading its order IDs, prices and product names (screen-text.js). A cell
-// may hold several pictures; they are read together. No API key, nothing
-// sent anywhere, and nothing here throws: a picture that cannot be read says
-// so.
+// Reading a Flipkart row's purchase and delivery screenshots on this
+// computer, with Tesseract (English and Hindi): their words, every order ID,
+// every date and every amount, and "Delivered" on the delivery screenshot.
+// Copied from the Amazon checker (amazon/shot-read.js): only what reading
+// those two screenshots needs, with Flipkart's own way of reading its order
+// IDs, prices and product names (screen-text.js) and its words for delivered
+// (delivery-read.js). A cell may hold several pictures; they are read
+// together. No API key, nothing sent anywhere, and nothing here throws: a
+// picture that cannot be read says so.
 
 import { readLines, MIN_CONFIDENCE, MIN_WORDS } from './ocr.js';
+import { parseDelivery } from './delivery-read.js';
 import { orderIdsIn, datesIn, amountsIn, amountMatch } from './screen-text.js';
 import { wordsOf } from './text.js';
 
@@ -15,7 +17,7 @@ import { wordsOf } from './text.js';
 export const SECOND_LOOK_SCALE = 2;
 
 /**
- * The other ways a purchase screenshot is read, in turn, when the first
+ * The other ways a screenshot is read, in turn, when the first
  * reading is not clear or lacks what is looked for, until nothing is lacking:
  * enlarged; as words scattered over a page (Tesseract's other way of
  * finding lines, which finds a line the first way may miss); and, only for
@@ -130,4 +132,47 @@ function lacksOrder(lines, want = {}) {
 export async function readOrderShot(files, opts = {}) {
   const read = await readText(files, { ...opts, missing: opts.missing ?? ((lines) => lacksOrder(lines, opts.want)), looks: opts.looks ?? SECOND_LOOKS, merge: true });
   return { ...read, orderIds: orderIdsIn([...read.texts, ...read.idTexts]), dates: datesIn(read.texts), amounts: amountsIn(read.texts) };
+}
+
+/** Every reading of the clear pictures: each picture's own lines, then the lines of its other readings. */
+const readingsOf = (read) => read.pictures.filter((p) => p.ok).flatMap((p) => [p.lines, ...(p.extra ?? [])]);
+
+/**
+ * What a delivery screenshot says: its words, "Delivered" and its date, every
+ * order ID, every date and amount (as on a purchase screenshot). Read again
+ * the other ways (SECOND_LOOKS) when "Delivered" was not found, when it shows
+ * no order ID (it ties the screenshot to the order best), or (with `want`) an
+ * order ID that is not the sheet's. Each reading is looked at on its own for
+ * "Delivered", the ways for light letters too: Flipkart may write it in white
+ * on a coloured card ("Delivered before time", for a quick delivery), which
+ * only those read. Their words are still never amounts.
+ */
+export async function readDeliveryShot(files, opts = {}) {
+  const want = opts.want ?? {};
+  const lacks = (lines) => {
+    const d = parseDelivery(lines);
+    if (!d.delivered) return true;
+    // The order ID is what ties a delivery screenshot to the order best: when none is read, the other ways are tried (it may be written
+    // small and light, or only in the page's address).
+    if (!d.orderIds.length) return true;
+    return Boolean(want.orderId && !d.orderIds.includes(want.orderId));
+  };
+  const read = await readText(files, { ...opts, missing: opts.missing ?? lacks, looks: opts.looks ?? SECOND_LOOKS, merge: true });
+  const own = read.pictures.filter((p) => p.ok).map((p) => parseDelivery(p.lines));
+  const light = read.pictures.filter((p) => p.ok).flatMap((p) => p.idLines ?? []);
+  const each = [...readingsOf(read), ...light].map((lines) => parseDelivery(lines));
+  // The word itself ("Delivered, Sep 30") is said before "Delivered to …", and that before a sign, whichever reading read it.
+  const rank = (d) => ({ word: 0, to: 1, sign: 2 })[d.deliveredHow] ?? 3;
+  const delivered = [...each].sort((a, b) => rank(a) - rank(b)).find((d) => d.delivered) ?? own[0] ?? parseDelivery([]);
+  return {
+    ...read,
+    dates: datesIn(read.texts),
+    amounts: amountsIn(read.texts),
+    delivered: each.some((d) => d.delivered),
+    deliveredText: delivered.deliveredText,
+    deliveredHow: delivered.deliveredHow ?? null,
+    deliveredDate: delivered.deliveredDate,
+    deliveredOn: delivered.deliveredOn,
+    orderIds: [...new Set([...each.flatMap((d) => d.orderIds), ...orderIdsIn(read.idTexts)])],
+  };
 }

@@ -1,7 +1,7 @@
-// What the words read from a Flipkart purchase screenshot say: order IDs,
-// dates, amounts and how well a product's name is shown. Copied from the
-// Amazon checker's (amazon/screen-text.js), only what reading a purchase
-// screenshot needs, and changed only for Flipkart's screens: an order ID is
+// What the words read from a Flipkart purchase or delivery screenshot say:
+// order IDs, dates, amounts and how well a product's name is shown. Copied
+// from the Amazon checker's (amazon/screen-text.js), only what reading those
+// screenshots needs, and changed only for Flipkart's screens: an order ID is
 // OD and 18 digits ("Order #OD…"); the prices are Flipkart's ("Listing
 // price", the price before the discount, never the order's amount; "Selling
 // price" or "Special price", the item's price; "Total fees"; "Other
@@ -144,11 +144,11 @@ const MONEY = new RegExp(`(?:₹|%|२|£|\\brs\\.?|\\binr)\\s*${NUMBER}(?![\\d.
 const FLIPKART_LABELLED = new RegExp(`\\b(listing price|selling price|special price|total amount|total fees|other discounts?|discount|paid)\\b((?:\\s+[^\\s\\d]{1,3}){0,3}?)\\s*([-−–])?\\s*((?:[2378]%|[^\\s\\d]{1,2})?)${NUMBER}(?![\\d.,])(?!\\s*%)`, 'giu');
 /** The labels of Flipkart's price details: once one is shown, a price with no label is an advert's or another product's, never said to be the order's. */
 const PRICE_DETAILS = new Set(['listing price', 'selling price', 'special price', 'total amount', 'paid']);
-/** What follows a price in an advert or an offer, never on an order: "₹77,999*", "Up to ₹5 Lakh", "₹500 off", "₹999/month". */
-const NOT_AN_ORDER = /^\s*(?:\*|lakhs?\b|lacs?\b|crores?\b|cr\b|off\b|\/\s*(?:month|mo)\b|per\s+month\b)/i;
-/** What comes before a price in an offer, never on an order: "Get ₹1,000", "Up to ₹500", "Worth ₹999". */
-const OFFER_BEFORE = /\b(?:get|win|earn|worth|up\s*to|upto|flat|extra)\s*$/i;
-/** After "Total amount ₹270": the SuperCoins used, "+ 14" (a coin read as one or two odd letters), each worth ₹1. */
+/** What follows a price in an advert or an offer, never on an order: "₹9,999*", "Up to ₹3 Lakh", "₹400 off", "₹499/month", "₹1,000 Vouchers". */
+const NOT_AN_ORDER = /^\s*(?:\*|lakhs?\b|lacs?\b|crores?\b|cr\b|off\b|\/\s*(?:month|mo)\b|per\s+month\b|vouchers?\b)/i;
+/** What comes before a price in an offer, never on an order: "Get ₹1,000", "Up to ₹500", "Worth ₹999", "From ₹9,999". */
+const OFFER_BEFORE = /\b(?:get|win|earn|worth|up\s*to|upto|flat|extra|from|starting(?:\s+(?:at|from))?)\s*$/i;
+/** After "Total amount ₹307": the SuperCoins used, "+ 12" (a coin read as one or two odd letters), each worth ₹1. */
 const COINS_AFTER = /^\s*\+\s*[^\s\d]{0,2}\s*(\d{1,5})(?![\d.,])/;
 // A line that is only a number, as a large amount on its own line is read when its rupee sign is lost.
 const LONE = /^\W{0,2}(\d{2,3}(?:,\d{3})*|\d{2,6})(?:\.(\d{2}))?\W{0,2}$/;
@@ -226,7 +226,7 @@ export function amountsIn(lines) {
       if (seen.has(m.index + m[0].length)) continue;
       if (NOT_AN_ORDER.test(line.slice(m.index + m[0].length)) || OFFER_BEFORE.test(line.slice(0, m.index))) continue;
       const before = line.slice(0, m.index);
-      // A rupee sign read as "२" and a digit ("₹289" as "२7289"): the number may be without that digit.
+      // A rupee sign read as "२" and a digit ("₹329" as "२7329"): the number may be without that digit.
       const misread = /^२/.test(m[0]) && /^[2378]\d{2}/.test(m[1]) ? [toNumber(m[1].slice(1), m[2])] : [];
       add(m[0], toNumber(m[1], m[2]), before.match(AMOUNT_LABEL)?.[1]?.toLowerCase() ?? null, before, misread);
       seen.add(m.index + m[0].length);
@@ -269,7 +269,7 @@ export const totalShown = (amounts) => (amounts ?? []).some((a) => a.label && TO
 /**
  * The amount shown that is the sheet's, the way staff read an order page:
  * the amount itself (matchingAmount); else Flipkart's total amount with the
- * SuperCoins used ("₹838 + 46", the order's value being both); else an item's
+ * SuperCoins used ("₹419 + 25", the order's value being both); else an item's
  * price that, with the fees shown (each read as it is, or as it may really
  * be: "₹10" read as "210"), less the money taken off, adds up to the sheet's
  * amount; else, when no total is shown at all, an item's price up to
@@ -523,4 +523,13 @@ export function nameLineStarting(lines, brands) {
     if (brand && words.slice(i + brand.length).filter((w) => !brand.some((b) => closeWords(b, w))).length >= 2) return raw.trim();
   }
   return null;
+}
+
+/** True when some words (a cell, a line) hold one of the words listed, as whole words. Copied from amazon/screen-text.js. */
+export function holdsWord(text, list) {
+  const t = ` ${normalizeText(text)} `;
+  return (list ?? []).some((w) => {
+    const n = normalizeText(w);
+    return n && t.includes(` ${n} `);
+  });
 }

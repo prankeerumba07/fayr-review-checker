@@ -969,7 +969,7 @@ function applyCheckEvent(view, e) {
   } else if (e?.event === 'step' && e.step && Number.isInteger(e.step.n)) {
     const i = e.step.n - 1;
     if (i >= 0 && i < STEP_NAMES.length) view.steps[i] = { ...view.steps[i], ...e.step };
-    // What was read so far (the purchase screenshot), for its card on the row's page.
+    // What was read so far (the purchase and delivery screenshots), for their cards on the row's page.
     if (e.partial) view.result = { ...obj(view.result), ...e.partial };
   } else if (e?.event === 'done') {
     view.result = e.result ?? view.result;
@@ -1290,21 +1290,66 @@ function amountsSaid(amounts) {
   return out.join(', ');
 }
 
-/** What the purchase screenshot says, as read on this computer: the Amazon screen's card, for Flipkart's purchase screenshot. None when the file has no purchase screenshot column. */
-function readCard(ctx, res) {
+/** What the purchase and delivery screenshots say, as read on this computer: the Amazon screen's cards, for Flipkart's screenshots. A screenshot the file has no column for has no card. */
+function readCards(ctx, res) {
   const { h, words, state } = ctx;
-  const sheet = state.saved?.sheet;
-  if (sheet && !Number.isInteger(obj(sheet.mapping).orderShot)) return null;
+  const mapping = state.saved?.sheet ? obj(state.saved.sheet.mapping) : null;
+  const shows = (key) => !mapping || Number.isInteger(mapping[key]);
   const o = res?.order;
+  const d = res?.delivery;
   const read = (x) => `Read on this computer, in ${x.hindi ? 'English and Hindi' : 'English only'}: ${x.wordCount ?? 0} words, read with ${x.confidence ?? 0} percent certainty.`;
   const everything = (t) => (t ? h('details', null, h('summary', null, 'Everything read from it'), h('pre', { class: 'fk-ocr-text' }, t)) : null);
+  return [
+    !shows('orderShot')
+      ? null
+      : h(
+          'section',
+          { class: 'card fk-read', key: 'card-order', 'data-id': 'card-order' },
+          h('h3', null, 'Read from the purchase screenshot'),
+          o
+            ? h('div', null, o.problem ? words.notice(h, 'warn', o.problem) : null, words.fields(h, [['Order IDs', arr(o.orderIds).join(', ') || 'None shown'], ['Dates', arr(o.dates).join(', ') || 'None shown'], ['Amounts', amountsSaid(o.amounts) || 'None shown'], ['Product', o.product], ['Read by', read(o)]]), everything(o.text))
+            : h('p', { class: 'muted' }, 'Not read yet.'),
+        ),
+    !shows('deliveryShot')
+      ? null
+      : h(
+          'section',
+          { class: 'card fk-read', key: 'card-delivery', 'data-id': 'card-delivery' },
+          h('h3', null, 'Read from the delivery screenshot'),
+          d
+            ? h('div', null, d.problem ? words.notice(h, 'warn', d.problem) : null, words.fields(h, [['Delivered', d.delivered ? d.deliveredText : 'Not shown'], ['Order IDs', arr(d.orderIds).join(', ') || 'None shown'], ['Order dates', arr(d.dates).join(', ') || 'None shown'], ['Amounts', amountsSaid(d.amounts) || 'None shown'], ['Product', d.product], ['Read by', read(d)]]), everything(d.text))
+            : h('p', { class: 'muted' }, 'Not read yet.'),
+        ),
+  ];
+}
+
+/** The sheet and the two screenshots side by side, as the Amazon screen's comparison table shows them (check.js buildComparison). Its column for what was found on Flipkart comes with the review's steps. */
+function comparisonCard(ctx, res) {
+  const { h, words } = ctx;
+  const rows = arr(res?.comparison);
+  // Only the screenshots the file has a column for.
+  const shots = Array.isArray(res?.shotsHad) ? ['order', 'delivery'].filter((w) => res.shotsHad.includes(w)) : ['order', 'delivery'];
   return h(
     'section',
-    { class: 'card fk-read', key: 'card-order', 'data-id': 'card-order' },
-    h('h3', null, 'Read from the purchase screenshot'),
-    o
-      ? h('div', null, o.problem ? words.notice(h, 'warn', o.problem) : null, words.fields(h, [['Order IDs', arr(o.orderIds).join(', ') || 'None shown'], ['Dates', arr(o.dates).join(', ') || 'None shown'], ['Amounts', amountsSaid(o.amounts) || 'None shown'], ['Product', o.product], ['Read by', read(o)]]), everything(o.text))
-      : h('p', { class: 'muted' }, 'Not read yet.'),
+    { class: 'card', key: 'card-comparison', 'data-id': 'card-comparison' },
+    h('h3', null, 'Comparison'),
+    rows.length
+      ? words.table(
+          h,
+          ['Field', 'Sheet', ...shots.map((w) => WHAT[w]), 'Result'],
+          rows.map((row, i) =>
+            h(
+              'tr',
+              { key: `c${i}` },
+              h('th', { scope: 'row' }, row.field ?? ''),
+              h('td', { class: 'wrap fk-cell-text' }, row.sheet ?? ''),
+              shots.map((w) => h('td', { key: w, class: 'wrap fk-cell-text' }, row[w] ?? '')),
+              h('td', { class: `wrap fk-result-cell tone-${row.ok === true ? 'good' : row.ok === false ? 'bad' : 'quiet'}` }, row.result ?? ''),
+            ),
+          ),
+          { class: 'fk-comparison-table' },
+        )
+      : h('p', { class: 'muted' }, 'The comparison appears when a check finishes.'),
   );
 }
 
@@ -1401,7 +1446,8 @@ function rowPage(ctx) {
     ),
     finalBanner(ctx, liveView),
     single?.notice ? words.notice(h, single.notice.tone, single.notice.text) : null,
-    h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, r), detailsCard(ctx, r), readCard(ctx, res)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
+    h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, r), detailsCard(ctx, r), readCards(ctx, res)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
+    comparisonCard(ctx, res),
     bigPicture(ctx),
   );
 }

@@ -22,7 +22,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export const BOTTLE = 'Test Brand Steel Bottle 1 L, Blue';
 export const LUNCH_BOX = 'Test Brand Lunch Box 3 Containers, Green';
 
-const BASE = `body { margin: 0; background: #fff; color: #212121; font-family: Arial, Helvetica, sans-serif; }
+export const BASE = `body { margin: 0; background: #fff; color: #212121; font-family: Arial, Helvetica, sans-serif; }
   .wrap { width: 430px; padding: 14px 16px 18px; }
   .top { display: flex; justify-content: space-between; font-size: 19px; font-weight: 700; margin-bottom: 14px; }
   .help { font-size: 15px; font-weight: 400; border: 1px solid #ccc; border-radius: 6px; padding: 2px 10px; }

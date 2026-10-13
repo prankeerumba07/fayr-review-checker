@@ -503,7 +503,32 @@ const ORDER_READ = {
   text: 'Order #OD100000000000000002\nTotal amount ₹349',
   details: { orderId: { state: 'same', shown: 'OD100000000000000002' }, orderDate: { state: 'skip' }, amount: { state: 'same', shown: '₹349', label: 'the total amount', how: 'same', parts: [] }, product: { state: 'same', shown: 'Test Brand Steel Bottle 1 L, Blue', share: 1 } },
 };
-const LAST_CHECK_READ = { ...LAST_CHECK, order: ORDER_READ };
+/** What a delivery screenshot says, as the server keeps it with the row's last check (step 4). */
+const DELIVERY_READ = {
+  ok: true,
+  problem: null,
+  confidence: 91,
+  wordCount: 40,
+  hindi: true,
+  orderIds: ['OD100000000000000002'],
+  dates: [],
+  amounts: [],
+  product: 'Test Brand Steel Bottle 1 L, Blue',
+  productShare: 1,
+  text: 'Delivered, Thu 23rd Jul\nOrder #OD100000000000000002',
+  details: { orderId: { state: 'same', shown: 'OD100000000000000002' }, orderDate: { state: 'skip' }, amount: { state: 'not shown' }, product: { state: 'same', shown: 'Test Brand Steel Bottle 1 L, Blue', share: 1 } },
+  delivered: true,
+  deliveredText: 'Delivered, Thu 23rd Jul',
+  notDelivered: null,
+};
+/** The comparison table, as the server keeps it with the row's last check: the sheet and the two screenshots side by side. */
+const COMPARISON = [
+  { field: 'Order ID', sheet: 'OD100000000000000002', order: 'The same: OD100000000000000002', delivery: 'The same: OD100000000000000002', result: 'The same on both screenshots.', ok: true },
+  { field: 'Amount', sheet: '349', order: 'The same: ₹349, the total amount', delivery: 'Not shown', result: 'The same on the purchase screenshot.', ok: true },
+  { field: 'Product', sheet: 'Test Brand Steel Bottle', order: 'The same: "Test Brand Steel Bottle 1 L, Blue"', delivery: 'Not shown', result: 'The same on the purchase screenshot; not shown on the delivery screenshot.', ok: null },
+  { field: 'Delivered', sheet: '', order: '', delivery: 'Delivered, Thu 23rd Jul', result: 'The delivery screenshot says Delivered.', ok: true },
+];
+const LAST_CHECK_READ = { ...LAST_CHECK, order: ORDER_READ, delivery: DELIVERY_READ, shotsHad: ['order', 'delivery'], comparison: COMPARISON };
 const stepsOf = (tree) => findAll(byId(tree, 'activity'), (n) => n.tag === 'li');
 /** A screen showing one row's page. */
 async function rowScreen(local, id = 'r000000000001') {
@@ -624,8 +649,8 @@ test('a row\'s page shows what the purchase screenshot says, as on Amazon ("Read
   ]);
   const all = findAll(card(s.page()), (n) => n.tag === 'details')[0];
   assert.deepEqual([textOf(findAll(all, (n) => n.tag === 'summary')[0]), textOf(findAll(all, (n) => n.tag === 'pre')[0]), findAll(all, (n) => n.tag === 'pre')[0].attrs.class], ['Everything read from it', ORDER_READ.text, 'fk-ocr-text']);
-  // The left side as on Amazon: the Type and Note, the details from the sheet, then what the purchase screenshot says.
-  assert.deepEqual(findAll(byId(s.page(), 'row-page'), (n) => n.attrs?.class === 'fk-left')[0].children.filter(Boolean).map((n) => n.attrs['data-id']), ['card-result', 'row-details', 'card-order']);
+  // The left side as on Amazon: the Type and Note, the details from the sheet, then what the purchase and delivery screenshots say.
+  assert.deepEqual(findAll(byId(s.page(), 'row-page'), (n) => n.attrs?.class === 'fk-left')[0].children.filter(Boolean).map((n) => n.attrs['data-id']), ['card-result', 'row-details', 'card-order', 'card-delivery']);
   // Not read: it says so; a picture whose words are not clear says why.
   const none = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK } } }));
   assert.equal(textOf(card(none.page())), 'Read from the purchase screenshotNot read yet.');
@@ -651,6 +676,61 @@ test('a row\'s page shows what the purchase screenshot says, as on Amazon ("Read
   await settle();
   // A file with no purchase screenshot column has no card, as on Amazon.
   const noColumn = { ...SAVED, sheet: { ...SAVED.sheet, mapping: { ...SAVED.sheet.mapping, orderShot: null } } };
+  assert.equal(card((await rowScreen(fakeLocal({ saved: noColumn, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK_READ } } }))).page()), null);
+});
+
+test('a row\'s page shows what the delivery screenshot says ("Read from the delivery screenshot") and the comparison table, the sheet and the two screenshots side by side, as on Amazon: after a reload, and live; with no delivery screenshot column, no card for it', async () => {
+  const card = (tree) => byId(tree, 'card-delivery');
+  const fields = (tree) => findAll(card(tree), (n) => n.tag === 'div' && n.attrs?.class === 'field-row').map((n) => [textOf(findAll(n, (x) => x.tag === 'dt')[0]), textOf(findAll(n, (x) => x.tag === 'dd')[0])]);
+  const table = (tree) => byId(tree, 'card-comparison');
+  const head = (tree) => findAll(table(tree), (n) => n.tag === 'th' && n.attrs?.scope === 'col').map(textOf);
+  const rows = (tree) => findAll(table(tree), (n) => n.tag === 'tr').slice(1);
+  const s = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK_READ } } }));
+  assert.equal(textOf(findAll(card(s.page()), (n) => n.tag === 'h3')[0]), 'Read from the delivery screenshot');
+  assert.deepEqual(fields(s.page()), [
+    ['Delivered', 'Delivered, Thu 23rd Jul'],
+    ['Order IDs', 'OD100000000000000002'],
+    ['Order dates', 'None shown'],
+    ['Amounts', 'None shown'],
+    ['Product', 'Test Brand Steel Bottle 1 L, Blue'],
+    ['Read by', 'Read on this computer, in English and Hindi: 40 words, read with 91 percent certainty.'],
+  ]);
+  const all = findAll(card(s.page()), (n) => n.tag === 'details')[0];
+  assert.deepEqual([textOf(findAll(all, (n) => n.tag === 'summary')[0]), textOf(findAll(all, (n) => n.tag === 'pre')[0])], ['Everything read from it', DELIVERY_READ.text]);
+  // The comparison table, under both sides of the page, as on Amazon: each detail's row, its result marked good, bad or quiet.
+  assert.equal(textOf(findAll(table(s.page()), (n) => n.tag === 'h3')[0]), 'Comparison');
+  assert.deepEqual(head(s.page()), ['Field', 'Sheet', 'Purchase screenshot', 'Delivery screenshot', 'Result']);
+  assert.deepEqual(rows(s.page()).map((tr) => findAll(tr, (n) => n.tag === 'th' || n.tag === 'td').map(textOf)), COMPARISON.map((r) => [r.field, r.sheet, r.order, r.delivery, r.result]));
+  assert.deepEqual(rows(s.page()).map((tr) => findAll(tr, (n) => n.tag === 'td').at(-1).attrs.class), ['wrap fk-result-cell tone-good', 'wrap fk-result-cell tone-good', 'wrap fk-result-cell tone-quiet', 'wrap fk-result-cell tone-good']);
+  assert.equal(findAll(table(s.page()), (n) => n.tag === 'table')[0].attrs.class, 'fk-comparison-table');
+  const parts = byId(s.page(), 'row-page').children.filter(Boolean);
+  assert.equal(parts.findIndex((n) => n.attrs?.['data-id'] === 'card-comparison'), parts.findIndex((n) => n.attrs?.class === 'fk-page') + 1, 'right under the two sides');
+  // Not read, not delivered, and only the screenshots the file has.
+  const none = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK } } }));
+  assert.deepEqual([textOf(card(none.page())), textOf(table(none.page()))], ['Read from the delivery screenshotNot read yet.', 'ComparisonThe comparison appears when a check finishes.']);
+  const notDelivered = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: { ...LAST_CHECK_READ, delivery: { ...DELIVERY_READ, delivered: false, deliveredText: null, notDelivered: 'Cancelled' } } } } }));
+  assert.deepEqual(fields(notDelivered.page())[0], ['Delivered', 'Not shown']);
+  const purchaseOnly = await rowScreen(fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: { ...LAST_CHECK_READ, shotsHad: ['order'] } } } }));
+  assert.deepEqual(head(purchaseOnly.page()), ['Field', 'Sheet', 'Purchase screenshot', 'Result']);
+  // Live: what the delivery screenshot says as soon as step 4 has read it; the table once the check has finished.
+  let release;
+  const gate = new Promise((r) => (release = r));
+  const local = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: null } } });
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
+    onEvent({ event: 'step', step: { n: 4, name: STEP_NAMES[3], state: 'pass', detail: 'It says "Delivered, Thu 23rd Jul".' }, partial: { order: ORDER_READ, delivery: DELIVERY_READ } });
+    await gate;
+    onEvent({ event: 'done', result: LAST_CHECK_READ });
+    return { ok: true };
+  };
+  const live = await rowScreen(local);
+  byId(live.page(), 'check').attrs.onclick();
+  await settle();
+  assert.deepEqual([fields(live.page())[0], textOf(table(live.page()))], [['Delivered', 'Delivered, Thu 23rd Jul'], 'ComparisonThe comparison appears when a check finishes.'], 'shown at once, while the check runs');
+  release();
+  await settle();
+  // A file with no delivery screenshot column has no card for it, as on Amazon.
+  const noColumn = { ...SAVED, sheet: { ...SAVED.sheet, mapping: { ...SAVED.sheet.mapping, deliveryShot: null } } };
   assert.equal(card((await rowScreen(fakeLocal({ saved: noColumn, pages: { r000000000001: { row: PICTURED, result: LAST_CHECK_READ } } }))).page()), null);
 });
 
@@ -887,15 +967,16 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
     ['.fk-rows-layout.fk-with-live', '.rows-layout.with-live'], ['.fk-rows-main', '.rows-main'], ['.fk-rows-main > .fk-empty-state', '.rows-main > .empty-state'], ['.fk-with-live .fk-rows-wrap', '.with-live .rows-wrap'],
     ['.fk-rows-table tbody tr.fk-current-row > td', '.rows-table tbody tr.current-row > td'], ['.fk-rows-table tbody tr.fk-current-row > td:first-child', '.rows-table tbody tr.current-row > td:first-child'],
     ['.fk-live-panel', '.live-panel'], ['.fk-live-head', '.live-head'], ['.fk-live-head h2', '.live-head h2'], ['.fk-run-progress', '.run-progress'], ['.fk-live-links', '.live-links'], ['.fk-live-flat, .fk-steps-flat', '.live-flat, .steps-flat'],
-    // What the purchase screenshot says, as on Amazon.
+    // What the purchase and delivery screenshots say, and the comparison table, as on Amazon.
     ['.fk-ocr-text', '.ocr-text'], ['.fk-read details > summary', '.card details:not(.fold):not(.menu) > summary'],
+    ['.fk-comparison-table th[scope="row"]', '.comparison-table th[scope="row"]'], ['.fk-cell-text', '.cell-text'], ['.fk-result-cell', '.result-cell'],
   ]) {
     assert.ok(rule(amazonCss, theirs), `${theirs} is an Amazon rule`);
     assert.equal(rule(css, mine), rule(amazonCss, theirs), `${mine} is the same as ${theirs}`);
   }
   const wide = (src) => src.match(/@media \(max-width: 1200px\) \{([^]*?)\n\}/)?.[1] ?? null;
   assert.equal(wide(css), wide(amazonCss).replaceAll('.rows-layout.with-live', '.fk-rows-layout.fk-with-live').replaceAll('.live-panel', '.fk-live-panel'), 'in a narrower window, the checking area goes under the table, as on Amazon');
-  for (const cls of ['fk-overview', 'fk-main-actions', 'fk-rows-layout', 'fk-with-live', 'fk-rows-main', 'fk-current-row', 'fk-live-panel', 'fk-live-head', 'fk-run-progress', 'fk-live-links', 'fk-live-flat', 'fk-steps-flat', 'fk-read', 'fk-ocr-text', 'fields', 'field-row']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
+  for (const cls of ['fk-overview', 'fk-main-actions', 'fk-rows-layout', 'fk-with-live', 'fk-rows-main', 'fk-current-row', 'fk-live-panel', 'fk-live-head', 'fk-run-progress', 'fk-live-links', 'fk-live-flat', 'fk-steps-flat', 'fk-read', 'fk-ocr-text', 'fk-comparison-table', 'fk-cell-text', 'fk-result-cell', 'fields', 'field-row']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
   for (const name of ['about-file', 'columns', 'column-grid', 'req', 'opt', 'col-letter', 'row-cell', 'strong-cell', 'product-cell', 'status-cell', 'type-cell', 'note-cell', 'cell-words', 'link-cell', 'other-cell', 'link-label', 'nolink', 'link-warning', 'empty-cell', 'empty-state', 'rows-wrap', 'rows-count']) {
     assert.ok(rule(amazonCss, `.${name}`), `.${name} is an Amazon rule`);
     assert.equal(rule(css, `.fk-${name}`), rule(amazonCss, `.${name}`), `.fk-${name} is the same as .${name}`);

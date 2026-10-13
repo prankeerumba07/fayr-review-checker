@@ -1,8 +1,9 @@
-// Reading a Flipkart purchase screenshot, copied from the Amazon checker and
-// changed only for Flipkart's screens: its order IDs (OD and 18 digits), its
-// dates, its prices, fees and totals (SuperCoins too), and its product names.
-// The pure rules first, then the made-up drawn pictures read by Tesseract on
-// this computer, then Flipkart's passing marks in its own settings.
+// Reading Flipkart's purchase and delivery screenshots, copied from the Amazon
+// checker and changed only for Flipkart's screens: its order IDs (OD and 18
+// digits), its dates, its prices, fees and totals (SuperCoins too), its
+// product names, and its words for delivered. The pure rules first, then the
+// made-up drawn pictures read by Tesseract on this computer, then Flipkart's
+// passing marks in its own settings.
 // Run: node test/flipkart-shot-read.test.mjs
 
 import { test, after } from 'node:test';
@@ -12,14 +13,16 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { orderIdsIn, partialOrderId, datesIn, sameDay, amountsIn, matchingAmount, amountMatch, totalRead, priceDetailsShown, totalShown, rupees, productShown, productNames, nameStartShown, nameLineStarting } from '../flipkart/screen-text.js';
-import { readOrderShot, SECOND_LOOKS } from '../flipkart/shot-read.js';
+import { orderIdsIn, partialOrderId, datesIn, sameDay, amountsIn, matchingAmount, amountMatch, totalRead, priceDetailsShown, totalShown, rupees, productShown, productNames, nameStartShown, nameLineStarting, holdsWord } from '../flipkart/screen-text.js';
+import { readOrderShot, readDeliveryShot, SECOND_LOOKS } from '../flipkart/shot-read.js';
+import { parseDelivery, NOT_DELIVERED_WORDS } from '../flipkart/delivery-read.js';
 import { readLines, LIGHT_LETTERS } from '../flipkart/ocr.js';
 import { DEFAULT_MARKS, checkMarks, SettingsError } from '../flipkart/settings.js';
 import { createFlipkartStore } from '../flipkart/store.js';
-import { checkSettings } from '../amazon/settings.js';
+import { checkSettings, DEFAULT_SETTINGS } from '../amazon/settings.js';
 import { orderId } from './fixtures/flipkart/make-flipkart.mjs';
 import { BOTTLE, LUNCH_BOX } from './fixtures/flipkart/make-purchase-screenshots.mjs';
+import { PERSON } from './fixtures/flipkart/make-delivery-screenshots.mjs';
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'flipkart');
 const temps = [];
@@ -52,20 +55,20 @@ test("dates: the day the order was placed, as Flipkart writes it with no year, i
 });
 
 test("prices: Flipkart's labels with the marks between them and the amount, and the rupee sign read as almost anything after them; fees and money taken off are never the order's amount; the listing price is the price before the discount; SuperCoins after the total", () => {
-  const a = amountsIn(['Listing price २999', 'Selling price © %329', 'Special price @ F489', 'Total fees y 30', 'Other discount v -%10', 'Total amount FI270+14', 'Paid $349 by Credit Card', 'Paid By UPI']);
+  const a = amountsIn(['Listing price २999', 'Selling price © %329', 'Special price @ F489', 'Total fees y 30', 'Other discount v -%10', 'Total amount FI307+12', 'Paid $349 by Credit Card', 'Paid By UPI']);
   assert.deepEqual(a.map((x) => [x.value, x.label, x.kind, x.coins ?? null]), [
     [999, 'listing price', null, null],
     [329, 'selling price', null, null],
     [489, 'special price', null, null],
     [30, 'total fees', 'fee', null],
     [10, 'other discount', 'off', null],
-    [270, 'total amount', null, 14],
-    [14, 'supercoins', 'off', null],
+    [307, 'total amount', null, 12],
+    [12, 'supercoins', 'off', null],
     [349, 'paid', null, null],
   ]);
   assert.deepEqual(amountsIn(['Total amount 2449 + O50']).map((x) => [x.value, x.alts, x.coins ?? null]), [[2449, [449], 50], [50, [], null]], 'a rupee sign read as a digit: the number without it too');
-  assert.deepEqual(amountsIn(['Other discount v -2%15']).map((x) => [x.value, x.label, x.kind]), [[15, 'other discount', 'off']], 'the rupee sign read as "2%"');
-  assert.deepEqual(amountsIn(['Get 5% off', 'Up to ₹5 Lakh', 'Test Phone at ₹9,999*', 'Get ₹1,000 back', '₹500 off', '12.50 KB/s']).map((x) => [x.value, Boolean(x.lone)]), [[12.5, true]], 'a percentage, an offer and an advert are never amounts; a number with paise and no rupee sign counts only when it is the sheet\'s');
+  assert.deepEqual(amountsIn(['Other discount v -2%20']).map((x) => [x.value, x.label, x.kind]), [[20, 'other discount', 'off']], 'the rupee sign read as "2%"');
+  assert.deepEqual(amountsIn(['Get 7% off', 'Up to ₹3 Lakh', 'Test Phone at ₹9,999*', 'Get ₹1,000 back', '₹400 off', '+ ₹1,000 Vouchers', 'From ₹9,999', '18.40 KB/s']).map((x) => [x.value, Boolean(x.lone)]), [[18.4, true]], 'a percentage, an offer and an advert are never amounts; a number with paise and no rupee sign counts only when it is the sheet\'s');
   const withDetails = amountsIn(['₹349', 'Selling price ₹329', 'Total amount ₹349']);
   assert.deepEqual(withDetails.map((x) => [x.value, x.label, Boolean(x.lone)]), [[349, null, true], [329, 'selling price', false], [349, 'total amount', false]], "with Flipkart's price details shown, a price with no label is an advert's or another product's");
   assert.equal(amountsIn(['₹349'])[0].lone ?? false, false, 'with none, a price with a rupee sign counts, as on Amazon');
@@ -77,15 +80,15 @@ test("prices: Flipkart's labels with the marks between them and the amount, and 
 test("the sheet's amount, the way staff read Flipkart's price details: the total itself (first), with the SuperCoins used, or the item's price with the fees (each read as it is or as it may really be) less the money taken off; a total read clearly is what is different", () => {
   const near = (lines, amount, opts = {}) => amountMatch(amountsIn(lines), amount, { tolerance: 1, allowance: 5, ...opts });
   assert.deepEqual(near(['₹349', 'Selling price ₹329', 'Total amount ₹349'], 349), { value: 349, label: 'total amount', how: 'same', parts: [] }, 'the total first');
-  assert.deepEqual(near(['Total amount %838+O46'], 884), { value: 838, label: 'total amount', how: 'with supercoins', parts: [{ value: 46, kind: 'coins' }] });
-  assert.deepEqual(near(['Total amount %838+O46'], 838).how, 'same', 'or the money paid alone');
-  assert.deepEqual(near(['Selling price @ २289', 'Total fees v 210', 'Other discount v -%15', 'Total amount FI704+14'], 270), { value: 289, label: 'selling price', how: 'with fees', parts: [{ value: 10, kind: 'fee' }, { value: 15, kind: 'off' }, { value: 14, kind: 'off' }] }, '"₹10" read as "210", and the SuperCoins taken off');
-  assert.deepEqual(near(['Special price ₹289', 'Total fees ₹9'], 298).how, 'with fees');
+  assert.deepEqual(near(['Total amount %419+O25'], 444), { value: 419, label: 'total amount', how: 'with supercoins', parts: [{ value: 25, kind: 'coins' }] });
+  assert.deepEqual(near(['Total amount %419+O25'], 419).how, 'same', 'or the money paid alone');
+  assert.deepEqual(near(['Selling price @ २329', 'Total fees v 210', 'Other discount v -%20', 'Total amount FI807+12'], 307), { value: 329, label: 'selling price', how: 'with fees', parts: [{ value: 10, kind: 'fee' }, { value: 20, kind: 'off' }, { value: 12, kind: 'off' }] }, '"₹10" read as "210", and the SuperCoins taken off');
+  assert.deepEqual(near(['Special price ₹489', 'Total fees ₹9'], 498).how, 'with fees');
   assert.deepEqual(near(['Selling price ₹329'], 333).how, 'fees not shown', 'no total shown: a price up to the allowance below');
   assert.equal(near(['Selling price ₹329', 'Total amount ₹349'], 333), null, 'with the total shown, it is the total');
   assert.equal(matchingAmount(amountsIn(['Total fees ₹349']), 349, 1), null, 'a fee is never the amount');
   assert.deepEqual(totalRead(amountsIn(['Total amount ₹349', 'Paid ₹349 by UPI'])), { value: 349, label: 'total amount' });
-  assert.equal(totalRead(amountsIn(['Total amount FI704+14', 'Total amount २८०70'])), null, 'two readings of the total that disagree: not clear');
+  assert.equal(totalRead(amountsIn(['Total amount FI807+12', 'Total amount २३०7'])), null, 'two readings of the total that disagree: not clear');
   assert.deepEqual(totalRead(amountsIn(['Special price %489', 'Total fees ₹10', 'Total amount 2449 + O50'])), { value: 449, label: 'total amount' }, 'the reading the price details add up to');
 });
 
@@ -135,6 +138,31 @@ test("an order ID in small light grey letters under the product's name, with dar
   });
   assert.deepEqual(asked[0].slice(-3), ['-c', 'thresholding_method=2', 'tsv'], "Tesseract's own way, part by part (Sauvola)");
   assert.deepEqual(LIGHT_LETTERS, ['-c', 'thresholding_method=2']);
+});
+
+test("delivered, as Flipkart's delivery screenshots say it: the word and its date without the marks around it, never the person it was handed to, and the signs only a delivered order shows; the stages a page lists, an order still on its way and the delivery details are never a delivery", () => {
+  const d = parseDelivery(['< Order Details Help', `Order #${ID}`, '© Delivered, Thu 23rd Jul ^', 'Return policy ended on Thu 30th Jul']);
+  assert.deepEqual([d.delivered, d.deliveredText, d.deliveredHow, d.deliveredOn, d.orderIds], [true, 'Delivered, Thu 23rd Jul', 'word', { day: null, year: null, month: 7, date: 23 }, [ID]]);
+  assert.deepEqual(['xx) Delivered, Today, Aug 31 xx', '4 Delivered before time', 'Your item has been delivered', 'Dellvered, Sep 30'].map((t) => parseDelivery([t]).deliveredText), ['Delivered, Today, Aug 31', 'Delivered before time', 'Your item has been delivered', 'Dellvered, Sep 30'], 'an icon read as a letter or a digit is left out; the word read with a letter wrong counts');
+  const to = parseDelivery([`Delivered to ${PERSON} at Home`]);
+  assert.deepEqual([to.delivered, to.deliveredText, to.deliveredHow], [true, 'Delivered to …', 'to']);
+  assert.ok(!JSON.stringify(to).includes(PERSON), 'the person it was handed to is never kept');
+  assert.equal(parseDelivery([`Delivered to ${PERSON} at Home`, '© Delivered, Sep 30']).deliveredText, 'Delivered, Sep 30', 'the word with its date first');
+  assert.deepEqual(['Return policy ended on Sep 30', 'How was your delivery experience? >', 'Arrived in just 12 minutes!'].map((t) => [parseDelivery([t]).deliveredHow, parseDelivery([t]).deliveredText]), [['sign', 'Return policy ended'], ['sign', 'How was your delivery experience'], ['sign', 'Arrived in just 12 minutes']]);
+  assert.equal(parseDelivery(['डिलीवर हो गया']).delivered, true, 'in Hindi');
+  for (const lines of [['Order Confirmed, Jul 20', 'Shipped, Jul 21', 'Out For Delivery', 'Delivery by Thu 23rd Jul'], ['Delivery, Sat Oct 03 By 11 PM'], ['Delivery details'], ['Delivery Executive details will be available once the order is out for delivery', 'How was your delivery experience?'], ['Delivery attempt failed']]) assert.equal(parseDelivery(lines).delivered, false, lines.join(' | '));
+  assert.deepEqual(NOT_DELIVERED_WORDS, DEFAULT_SETTINGS.notDeliveredWords.filter((w) => w !== 'Cancel items'), "the Amazon checker's words for not delivered, without its own button");
+  assert.deepEqual([holdsWord('Order Cancelled', ['Cancelled']), holdsWord('Shipped, Jul 21', ['Out for delivery']), holdsWord('Your item is out for delivery', ['Out for delivery'])], [true, false, true]);
+});
+
+test('the made-up delivery screenshots, read by Tesseract on this computer: Delivered and its day, never the person it was handed to; the order ID in small light grey letters; a quick delivery\'s card in white on a colour', async () => {
+  const d = await readDeliveryShot([join(FIX, 'delivery-steel-bottle.png')], { want: { orderId: ID } });
+  assert.equal(d.ok, true, d.problem);
+  assert.deepEqual([d.delivered, d.deliveredText, d.deliveredOn, d.orderIds], [true, 'Delivered, Thu 23rd Jul', { day: null, year: null, month: 7, date: 23 }, [ID]]);
+  assert.ok(!String(d.deliveredText).includes(PERSON), 'the person it was handed to is never said');
+  assert.ok(d.texts.some((t) => t.includes(BOTTLE)), "the product's name");
+  const quick = await readDeliveryShot([join(FIX, 'delivery-lunch-box-minutes.png')], { want: { orderId: orderId(3) } });
+  assert.deepEqual([quick.ok, quick.delivered, quick.deliveredText, quick.orderIds], [true, true, 'Delivered before time', [orderId(3)]]);
 });
 
 test("Flipkart's passing marks are in its own settings, starting with the Amazon checker's values and checked with the same words; they are written there the first time, and a wrong one is said plainly", async () => {
