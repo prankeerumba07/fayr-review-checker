@@ -13,6 +13,7 @@ import { ApiError } from '../lib/api.js';
 import * as words from '../lib/words.js';
 import flipkart, { SHEET_ACCEPT, GOOGLE_WORDS, LOGIN_POLL_MS, STEP_NAMES, MARKS, FINAL_NONE, STOPPED_SAYS } from '../views/flipkart.js';
 import amazon, { GOOGLE_WORDS as AMAZON_GOOGLE_WORDS, LOGIN_POLL_MS as AMAZON_LOGIN_POLL_MS, MARKS as AMAZON_MARKS } from '../views/amazon.js';
+import { TYPE_WORDS } from '../flipkart/final.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tick = () => new Promise((r) => setImmediate(r));
@@ -26,6 +27,8 @@ const DELIVERY_SHOT = 'https://drive.google.com/open?id=1TestFlipkartDelivery02a
 const REVIEW_SHOT = 'https://drive.google.com/open?id=1TestFlipkartReview03abcd';
 const REVIEW_LINK = 'https://www.flipkart.com/reviews/TESTPID0000002:3?reviewId=0a1b2c3d-0000-4000-8000-000000000002';
 const NONE = { sheet: null, rows: [] };
+/** Every Type, as the server sends them with the rows: the Amazon screen's own, in its order. */
+const TYPES = Object.entries(TYPE_WORDS).map(([key, word]) => ({ key, word }));
 const HEADERS = ['Reviewer Name', 'Order ID', 'Amount', 'Product Ordered', 'Order Screenshot', 'Delivery Screenshot', 'Review Screenshot', 'Review Link'];
 const KEYS = ['reviewer', 'orderId', 'amount', 'product', 'orderShot', 'deliveryShot', 'reviewShot', 'reviewLink'];
 const LETTERS = 'ABCDEFGHIJK';
@@ -132,7 +135,7 @@ const aFile = (name = 'flipkart-orders.xlsx') => new File([Buffer.from('made-up 
 /** The Google login as the server says it, one state at a time. */
 const GOOGLE_OUT = { state: 'out', name: null, says: null, chrome: false };
 
-function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT, press = null, pages = {} } = {}) {
+function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT, press = null, pages = {}, staff = null } = {}) {
   const calls = [];
   const local = {
     calls,
@@ -155,6 +158,8 @@ function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT,
         if (press) local.google = await press(path);
         return structuredClone({ state: 'in', name: 'Amazon Person', loggedIn: true, google: local.google, hindi: true, english: true, browserOpen: true, running: null });
       }
+      // A row's result changed or marked right by a staff member (…/result, …/right): what the test's server answers.
+      if (method === 'POST' && staff && /^\/local\/flipkart\/rows\/[^/]+\/(?:result|right)$/.test(path)) return structuredClone(await staff(path, body));
       throw new ApiError(404, 'Not found.');
     },
     form: async (path, fd) => {
@@ -259,7 +264,7 @@ test('choosing a file uploads it at once: its name, its tab and how many rows in
   assert.equal(s.local.calls.filter((c) => c.method === 'POST').length, 2);
 });
 
-test('as on Amazon: each link a small label saying where it goes, opening in a new tab; a link that is not a web link opens nothing; a picture in a cell or over it said so; Status, Type and Note empty; a Check button at the end of each row; "Start checking" above the table, and no Status cards', async () => {
+test('as on Amazon: each link a small label saying where it goes, opening in a new tab; a link that is not a web link opens nothing; a picture in a cell or over it said so; Status, Type and Note empty; a Check button at the end of each row; "Start checking" above the table, beside the Status cards', async () => {
   const s = await opened(fakeLocal({ saved: SAVED }));
   const table = byId(s.page(), 'rows-table');
   const links = findAll(table, (n) => n.tag === 'a');
@@ -282,8 +287,8 @@ test('as on Amazon: each link a small label saying where it goes, opening in a n
   assert.deepEqual(findAll(table, (n) => /\bfk-col-letter\b/.test(n.attrs?.class ?? '')).map(textOf), [...LETTERS]);
   const page = s.page();
   assert.deepEqual(findAll(page, (n) => n.tag === 'button' && /^(Check|Check again)$/.test(textOf(n))).map((n) => n.attrs['data-id']), ['check-r000000000001', 'check-r000000000002', 'check-r000000000003'], 'a Check button for each row');
-  assert.deepEqual(findAll(byId(page, 'overview'), (n) => n.tag === 'button').map(textOf), ['Start checking', 'Check every row again'], 'above the table, as on Amazon');
-  assert.doesNotMatch(textOf(page), /Needs Manual|Not checked yet/, 'no Status cards');
+  assert.deepEqual(findAll(byId(page, 'main-actions'), (n) => n.tag === 'button').map(textOf), ['Start checking', 'Check every row again'], 'above the table, as on Amazon');
+  assert.deepEqual(findAll(byId(page, 'counts'), (n) => n.tag === 'button').map(textOf), ['Pass0', 'Fail0', 'Needs Manual Staff Checking0', 'Not checked yet3'], 'beside them, the four Status cards, as on Amazon');
   assert.equal(findAll(table, (n) => n.tag === 'img').length, 0, 'no picture is shown or fetched in the table');
   assert.deepEqual(s.local.calls.map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/sheet', 'GET /local/flipkart/campaigns', 'GET /local/flipkart/account'], 'a link is only opened when it is pressed');
 });
@@ -947,7 +952,7 @@ test('"Start checking", as on Amazon: the rows checked one by one from the first
   s.ctx.confirm = (text) => (asked.push(text), false);
   byId(s.page(), 'check-every-row').attrs.onclick();
   await settle();
-  assert.deepEqual([asked, local.calls.filter((c) => c.stream).length], [['This checks all 3 rows again and replaces their last checks. Go on?'], 2]);
+  assert.deepEqual([asked, local.calls.filter((c) => c.stream).length], [['This checks all 3 rows again and replaces their results. Go on?'], 2]);
   s.ctx.confirm = () => true;
   let during = null;
   local.checking = async (onEvent) => {
@@ -970,7 +975,7 @@ test('"Start checking", as on Amazon: the rows checked one by one from the first
   assert.equal(textOf(byId(page, 'run-progress')), 'Finished.');
   byId(page, 'close-run').attrs.onclick();
   assert.equal(byId(s.page(), 'run'), null, 'Close puts the checking area away');
-  assert.doesNotMatch(textOf(s.page()), /Needs Manual|Not checked yet/, 'no Status cards');
+  assert.deepEqual(['pass', 'fail', 'manual', 'none'].map((k) => textOf(byId(s.page(), `count-${k}-num`))), ['0', '0', '0', '3'], 'rows checked with no Status count as not checked yet on the Status cards, as on Amazon');
 });
 
 test("a checked row's Status, Type and Note, as on Amazon: in the table (the Status bold in its colour, with when the row was checked and how long it took; the Type a small tag; the Note), large at the top of its page with its reason, and in its Type and Note card; after a reload, and live as soon as its check finishes; \"Checking…\" while it runs; a Status the file already had says so; the Live Flipkart Browser says what it is for", async () => {
@@ -1027,6 +1032,177 @@ test("a checked row's Status, Type and Note, as on Amazon: in the table (the Sta
   // The Live Flipkart Browser: what it is for now.
   assert.equal(textOf(byId(r.page(), 'live')), `Live Flipkart BrowserThe Chrome window named "Live Flipkart Browser" shows each Flipkart page as it opens. Step 7 opens it to read the reviews of the campaign's product on Flipkart: the product's page, then "See all reviews", newest first, once in a checking run, kept on this computer for every row. The screenshots are read on this computer, without it.${textOf(byId(r.page(), 'current-action'))}No pictures are taken of it. What it read shows in the "Found on Flipkart" box.`);
   assert.doesNotMatch(textOf(r.page()), /in a later step\.|only open the screenshots/, 'nothing says the steps only open the screenshots');
+});
+
+/** Two checked rows (one Needs Manual Staff Checking, one Pass) and one not checked yet, as the server shows them. */
+const MANUAL_LAST = { checkId: 'c20261012123000abcdef', final: 'manual', finalSays: 'A staff member needs to check this transaction because made-up reason.', status: 'Needs Manual Staff Checking', type: 'Review not live', typeKey: 'reviewNotLive', note: 'A staff member needs to check this transaction because made-up reason. Made-up words.', at: '2026-10-12T12:30:00.000Z', seconds: 65, staff: null };
+const PASS_LAST = { ...MANUAL_LAST, checkId: 'c20261012123100abcdef', final: 'pass', finalSays: 'This transaction passed: made-up reason.', status: 'Pass', type: 'Verified', typeKey: 'verified', note: 'This transaction passed: made-up reason.' };
+const checkedRows = () => [{ ...SAVED.rows[0], done: true, final: 'manual', finalSays: MANUAL_LAST.finalSays, last: MANUAL_LAST }, { ...SAVED.rows[1], done: true, final: 'pass', finalSays: PASS_LAST.finalSays, last: PASS_LAST }, structuredClone(SAVED.rows[2])];
+
+test("the four Status cards and the filter, as on Amazon: how many rows are Pass, Fail, Needs Manual Staff Checking and Not checked yet, each in its colour, changing as each row's check finishes while the rows are checked one by one; a card shows only its rows, and pressed again every row; the Status box and the Type box with how many rows each, \"Show every row\", and how many rows are shown", async () => {
+  const rows = checkedRows();
+  const local = fakeLocal({ saved: { ...SAVED, rows, types: TYPES } });
+  const s = await opened(local);
+  const KEYS4 = ['pass', 'fail', 'manual', 'none'];
+  const nums = () => KEYS4.map((k) => textOf(byId(s.page(), `count-${k}-num`)));
+  const pressed = () => KEYS4.map((k) => byId(s.page(), `count-${k}`).attrs['aria-pressed']);
+  const shownRows = () => findAll(byId(s.page(), 'rows-table'), (n) => n.tag === 'tr' && n.attrs?.['data-id']).map((n) => n.attrs['data-id']);
+  const options = (id) => findAll(byId(s.page(), id), (n) => n.tag === 'option').map(textOf);
+  // Between the Campaigns box and the rows, beside "Start checking", as on Amazon.
+  const order = (await opened(local)).page().filter(Boolean).map((n) => n.attrs?.['data-id'] ?? n.attrs?.key ?? null);
+  assert.ok(order.indexOf('overview') > order.indexOf('campaigns') && order.indexOf('overview') < order.indexOf('rows'), order.join(', '));
+  assert.deepEqual([nums(), findAll(byId(s.page(), 'counts'), (n) => /\bfk-final-card-label\b/.test(n.attrs?.class ?? '')).map(textOf)], [['1', '0', '1', '1'], ['Pass', 'Fail', 'Needs Manual Staff Checking', 'Not checked yet']]);
+  assert.deepEqual(findAll(byId(s.page(), 'counts'), (n) => n.tag === 'button').map((b) => b.attrs.class), ['fk-final-card fk-final-card-pass', 'fk-final-card fk-final-card-fail', 'fk-final-card fk-final-card-manual', 'fk-final-card fk-final-card-none'], 'each in its colour, as on Amazon');
+  assert.equal(textOf(byId(s.page(), 'staff-stats')), 'Staff checked no results yet. On a row\'s page, "The result is right" or "Change the result" counts one.');
+  // A card shows only its rows; pressed again, every row.
+  byId(s.page(), 'count-pass').attrs.onclick();
+  assert.deepEqual([shownRows(), pressed(), textOf(byId(s.page(), 'rows-count')), byId(s.page(), 'filter-final').attrs.value, textOf(byId(s.page(), 'filter-clear'))], [['row-2'], ['true', 'false', 'false', 'false'], '1 of 3 rows shown', 'pass', 'Show every row']);
+  byId(s.page(), 'count-pass').attrs.onclick();
+  assert.deepEqual([shownRows(), pressed(), textOf(byId(s.page(), 'rows-count')), byId(s.page(), 'filter-clear')], [['row-1', 'row-2', 'row-3'], ['false', 'false', 'false', 'false'], '3 rows', null]);
+  byId(s.page(), 'count-none').attrs.onclick();
+  assert.deepEqual(shownRows(), ['row-3']);
+  byId(s.page(), 'count-fail').attrs.onclick();
+  assert.deepEqual([shownRows(), textOf(byId(s.page(), 'no-match'))], [[], 'No row has that Status and Type.']);
+  // The Status box: every Status with how many rows, the same choice as the cards.
+  assert.deepEqual(options('filter-final'), ['Every Status (3)', 'Pass (1)', 'Fail (0)', 'Needs Manual Staff Checking (1)', 'Not checked yet (1)']);
+  byId(s.page(), 'filter-final').attrs.onchange({ target: { value: 'manual' } });
+  assert.deepEqual([shownRows(), pressed()], [['row-1'], ['false', 'false', 'true', 'false']]);
+  // The Type box: every Type, each with how many rows of the Status chosen have it.
+  assert.deepEqual([options('filter-type').length, options('filter-type').filter((t) => !/\(0\)$/.test(t))], [TYPES.length + 1, ['Every Type', 'Review not live (1)']]);
+  byId(s.page(), 'filter-final').attrs.onchange({ target: { value: '' } });
+  assert.deepEqual(options('filter-type').filter((t) => !/\(0\)$/.test(t)), ['Every Type', 'Verified (1)', 'Review not live (1)']);
+  byId(s.page(), 'filter-type').attrs.onchange({ target: { value: 'Verified' } });
+  assert.deepEqual([shownRows(), textOf(byId(s.page(), 'rows-count'))], [['row-2'], '1 of 3 rows shown']);
+  byId(s.page(), 'filter-clear').attrs.onclick();
+  assert.deepEqual([shownRows(), s.state.filter], [['row-1', 'row-2', 'row-3'], { final: '', type: '' }]);
+  // "Check every row again": all 3 start as Not checked yet, then the numbers change as each row's check finishes; "Show this row in the table" shows every row first.
+  byId(s.page(), 'count-fail').attrs.onclick();
+  const seen = [];
+  let cleared = null;
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'run-started', again: true, total: 3, done: 0, left: 3 });
+    seen.push(nums());
+    for (const [i, row] of rows.entries()) {
+      onEvent({ event: 'row', rowId: row.id, label: row.label, total: 3, done: i, left: 3 - i });
+      if (i === 0) {
+        byId(s.page(), 'show-current').attrs.onclick();
+        cleared = { ...s.state.filter };
+      }
+      onEvent({ event: 'row-done', rowId: row.id, label: row.label, seconds: 1, rows: [{ ...row, done: true, final: 'pass', finalSays: PASS_LAST.finalSays, last: { ...PASS_LAST, at: '2026-10-13T09:00:00.000Z' } }], total: 3, done: i + 1, left: 2 - i });
+      seen.push(nums());
+    }
+    onEvent({ event: 'run-done', checked: 3, total: 3, done: 3, left: 0 });
+    return { ok: true };
+  };
+  byId(s.page(), 'check-every-row').attrs.onclick();
+  await settle();
+  assert.deepEqual(seen, [['0', '0', '0', '3'], ['1', '0', '0', '2'], ['2', '0', '0', '1'], ['3', '0', '0', '0']]);
+  assert.deepEqual(cleared, { final: '', type: '' }, 'the row being checked was hidden by the filter, so every row shows');
+});
+
+test('a staff member changing a row\'s result, as on Amazon: on its page, "Change the result" (the Status, the Type and the Note, then Save) and "The result is right"; the table and the page then say "Changed by staff" or "Marked right by staff", with when; the Status cards and the line above the table count them; "Check again" and "Check every row again" ask first, and a row changed by staff keeps its result', async () => {
+  const rows = checkedRows();
+  const saved = { ...SAVED, rows, types: TYPES };
+  const kept = (last) => ({ ...LAST_CHECK, final: last.final, status: last.status, type: last.type, typeKey: last.typeKey, note: last.note, finalSays: last.finalSays });
+  const pages = { r000000000001: { row: rows[0], result: kept(MANUAL_LAST) }, r000000000002: { row: rows[1], result: kept(PASS_LAST) } };
+  const posted = [];
+  let answer = null;
+  const local = fakeLocal({ saved, pages, staff: async (path, body) => (posted.push([path, body]), answer(path, body)) });
+  const s = await rowScreen(local);
+  const actions = () => findAll(byId(s.page(), 'row-page'), (n) => n.tag === 'button' && ['check', 'change-result', 'result-right'].includes(n.attrs?.['data-id'])).map((b) => [b.attrs['data-id'], textOf(b), Boolean(b.attrs.disabled)]);
+  const form = () => byId(s.page(), 'edit-result');
+  assert.deepEqual(actions(), [['check', 'Check again', false], ['change-result', 'Change the result', false], ['result-right', 'The result is right', false]]);
+  // "Change the result": the form, filled with the row's result as it is; Cancel puts it away.
+  byId(s.page(), 'change-result').attrs.onclick();
+  assert.deepEqual([byId(form(), 'edit-final').attrs.value, byId(form(), 'edit-type').attrs.value, byId(form(), 'edit-note').attrs.value, byId(s.page(), 'change-result').attrs.disabled], ['manual', 'reviewNotLive', MANUAL_LAST.note, true]);
+  assert.deepEqual(findAll(byId(form(), 'edit-final'), (n) => n.tag === 'option').map(textOf), ['Pass', 'Fail', 'Needs Manual Staff Checking']);
+  assert.deepEqual(findAll(byId(form(), 'edit-type'), (n) => n.tag === 'option').map(textOf), ['Choose a Type', ...TYPES.map((t) => t.word)]);
+  assert.match(textOf(form()), /^Change the resultChoose the Status and the Type, write the Note, then press Save\. The row then says "Changed by staff"/);
+  byId(form(), 'cancel-result').attrs.onclick();
+  assert.equal(form(), null);
+  // Filled in and saved; a refusal stays in the form.
+  byId(s.page(), 'change-result').attrs.onclick();
+  byId(form(), 'edit-final').attrs.onchange({ target: { value: 'pass' } });
+  byId(form(), 'edit-type').attrs.onchange({ target: { value: 'verified' } });
+  byId(form(), 'edit-note').attrs.oninput({ target: { value: 'Made-up note by staff.' } });
+  answer = () => {
+    throw new ApiError(409, 'This row is being checked right now. Wait for it to finish, then change its result.');
+  };
+  byId(form(), 'save-result').attrs.onclick();
+  await settle();
+  assert.match(textOf(form()), /This row is being checked right now\. Wait for it to finish, then change its result\./);
+  const AT = '2026-10-15T06:00:00.000Z';
+  const CHANGED = { ...rows[0], final: 'pass', finalSays: null, last: { ...MANUAL_LAST, final: 'pass', status: 'Pass', type: 'Verified', typeKey: 'verified', note: 'Made-up note by staff.', finalSays: null, at: AT, staff: { at: AT, right: false, was: { final: 'manual', typeKey: 'reviewNotLive', type: 'Review not live' } } } };
+  answer = () => {
+    saved.rows[0] = CHANGED;
+    pages.r000000000001 = { row: CHANGED, result: { ...kept(CHANGED.last), staff: CHANGED.last.staff } };
+    return { row: CHANGED };
+  };
+  byId(form(), 'save-result').attrs.onclick();
+  await settle();
+  assert.deepEqual(posted.map(([path, body]) => [path, body]), [['/local/flipkart/rows/r000000000001/result', { final: 'pass', typeKey: 'verified', note: 'Made-up note by staff.' }], ['/local/flipkart/rows/r000000000001/result', { final: 'pass', typeKey: 'verified', note: 'Made-up note by staff.' }]]);
+  let page = s.page();
+  assert.deepEqual([form(), byId(page, 'final-banner').attrs.class, textOf(byId(page, 'final-word')), textOf(byId(page, 'final-says')), textOf(byId(page, 'result-type')), textOf(byId(page, 'result-note')), textOf(byId(page, 'result-when'))], [null, 'fk-final-banner fk-final-banner-pass', 'Pass', `Changed by staff on ${words.ist(AT)}. "Check again" replaces it with what the dashboard finds.`, 'Verified', 'Made-up note by staff.', `Changed by staff on ${words.ist(AT)}`]);
+  assert.match(textOf(page), /The result was changed\. This row now says "Changed by staff"\./);
+  assert.deepEqual(actions(), [['check', 'Check again', false], ['change-result', 'Change the result', false]], '"The result is right" is only for the dashboard\'s own result');
+  // "Check again" asks first; no is no.
+  const asked = [];
+  s.ctx.confirm = (text) => (asked.push(text), false);
+  byId(s.page(), 'check').attrs.onclick();
+  await settle();
+  assert.deepEqual([asked, local.calls.filter((c) => c.stream).length], [['A staff member changed this row\'s result by hand. "Check again" replaces it with what the dashboard finds. Go on?'], 0]);
+  // The table: "Changed by staff", with when, and the Status cards and the line above the table count it.
+  s.ctx.route = '';
+  await flipkart.enter(s.ctx);
+  await settle();
+  const cells = (key) => findAll(byId(s.page(), 'rows-table'), (n) => n.attrs?.['data-cell'] === key).map(textOf);
+  assert.deepEqual([cells('status'), cells('type'), cells('note')[0]], [[`PassChanged by staff on ${words.ist(AT)}`, `Pass${words.ist(PASS_LAST.at)}took 1 minute 5 seconds`, 'Empty'], ['Verified', 'Verified', 'Empty'], 'Made-up note by staff.']);
+  assert.deepEqual(['pass', 'fail', 'manual', 'none'].map((k) => textOf(byId(s.page(), `count-${k}-num`))), ['2', '0', '0', '1']);
+  assert.equal(textOf(byId(s.page(), 'staff-stats')), 'Staff checked 1 result: 0 right (0%). Needs Manual Staff Checking: 1 checked, 0 right (0%).');
+  // "The result is right" on row 2: the dashboard's result stays, marked right by staff, with when.
+  s.ctx.route = 'r000000000002';
+  await flipkart.enter(s.ctx);
+  await settle();
+  assert.doesNotMatch(textOf(s.page()), /The result was changed/, "the message belongs to row 1's page");
+  const MARK = '2026-10-15T06:05:00.000Z';
+  const MARKED = { ...rows[1], last: { ...PASS_LAST, staff: { at: MARK, right: true, was: { final: 'pass', typeKey: 'verified', type: 'Verified' } } } };
+  answer = () => {
+    saved.rows[1] = MARKED;
+    return { row: MARKED };
+  };
+  byId(s.page(), 'result-right').attrs.onclick();
+  await settle();
+  assert.deepEqual(posted.at(-1), ['/local/flipkart/rows/r000000000002/right', {}]);
+  page = s.page();
+  assert.deepEqual([textOf(byId(page, 'final-word')), textOf(byId(page, 'final-says')), textOf(byId(page, 'result-type')), textOf(byId(page, 'result-when'))], ['Pass', `Marked right by staff on ${words.ist(MARK)}. ${PASS_LAST.finalSays}`, 'Verified', `Marked right by staff on ${words.ist(MARK)}`]);
+  assert.deepEqual(actions(), [['check', 'Check again', false], ['change-result', 'Change the result', false], ['result-right', 'Marked right by staff', true]]);
+  assert.match(textOf(page), /Marked as right\. This row now says "Marked right by staff", and the line above the table counts it\./);
+  byId(s.page(), 'check').attrs.onclick();
+  assert.equal(asked.at(-1), 'A staff member marked this row\'s result as right. "Check again" checks it afresh and clears that mark. Go on?');
+  // Back on the table: both counted; "Check every row again" asks, saying which rows keep their results.
+  s.ctx.route = '';
+  await flipkart.enter(s.ctx);
+  await settle();
+  assert.deepEqual(cells('status').slice(0, 2), [`PassChanged by staff on ${words.ist(AT)}`, `PassMarked right by staff on ${words.ist(MARK)}took 1 minute 5 seconds`]);
+  assert.equal(textOf(byId(s.page(), 'staff-stats')), 'Staff checked 2 results: 1 right (50%). Pass: 1 checked, 1 right (100%). Needs Manual Staff Checking: 1 checked, 0 right (0%).');
+  byId(s.page(), 'check-every-row').attrs.onclick();
+  assert.equal(asked.at(-1), 'This checks the 2 rows not changed by staff again and replaces their results. The 1 row changed by staff keeps its result. The 1 row marked right by staff loses its mark. Go on?');
+  s.ctx.confirm = () => true;
+  let during = null;
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'run-started', again: true, total: 3, done: 1, left: 2 });
+    during = cells('status');
+    onEvent({ event: 'run-done', checked: 0, total: 3, done: 1, left: 2 });
+    return { ok: true };
+  };
+  byId(s.page(), 'check-every-row').attrs.onclick();
+  await settle();
+  assert.deepEqual(during, [`PassChanged by staff on ${words.ist(AT)}`, 'Empty', 'Empty'], 'the row changed by staff keeps its result; the mark goes with the other results');
+  // Every row changed by staff: nothing to check again, and it says so.
+  const all = await opened(fakeLocal({ saved: { ...SAVED, rows: [CHANGED], types: TYPES } }));
+  byId(all.page(), 'check-every-row').attrs.onclick();
+  await settle();
+  assert.deepEqual([textOf(byId(all.page(), 'rows-notice')), all.local.calls.filter((c) => c.stream).length], ['The 1 row was changed by staff, so it keeps its result and there is nothing to check again.', 0]);
 });
 
 test('the tabs go to the right screen: Amazon to #/amazon from the Flipkart screen, Flipkart to #/flipkart from the Amazon screen', () => {
@@ -1113,6 +1289,15 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   pause();
   await settle();
   add(running);
+  // The Status cards with one pressed, a result changed by staff in the table, and "Change the result" open on a row's page.
+  const staffRow = { ...SAVED.rows[0], done: true, final: 'pass', last: { checkId: null, final: 'pass', finalSays: null, status: 'Pass', type: 'Verified', typeKey: 'verified', note: 'Made-up.', at: '2026-10-15T06:00:00.000Z', seconds: null, staff: { at: '2026-10-15T06:00:00.000Z', right: false, was: null } } };
+  const staffLocal = fakeLocal({ saved: { ...SAVED, rows: [staffRow, SAVED.rows[1], SAVED.rows[2]], types: TYPES }, pages: { r000000000001: { row: staffRow, result: LAST_CHECK } } });
+  const staffMain = await opened(staffLocal);
+  byId(staffMain.page(), 'count-pass').attrs.onclick();
+  add(staffMain);
+  const staffPage = await rowScreen(staffLocal);
+  byId(staffPage.page(), 'change-result').attrs.onclick();
+  add(staffPage);
   for (const cls of used) {
     const from = cls.startsWith('fk-') ? css : shared;
     assert.match(from, new RegExp(`\\.${cls}\\b`), `${cls}: from ${cls.startsWith('fk-') ? 'views/flipkart.css' : 'styles.css'}`);
@@ -1159,6 +1344,22 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
     assert.ok(rule(amazonCss, theirs), `${theirs} is an Amazon rule`);
     assert.equal(rule(css, mine), rule(amazonCss, theirs), `${mine} is the same as ${theirs}`);
   }
+  // The Status cards, the Status and Type boxes, and a result changed by staff look like the Amazon ones too.
+  for (const [mine, theirs] of [
+    ['.fk-final-cards', '.final-cards'], ['.fk-final-card', '.final-card'], ['.fk-final-card:hover', '.final-card:hover'], ['.fk-final-card:active', '.final-card:active'],
+    ['.fk-final-card-label', '.final-card-label'], ['.fk-final-card-label .icon', '.final-card-label .icon'], ['.fk-final-card-num', '.final-card-num'],
+    ...['pass', 'fail', 'manual'].flatMap((k) => [[`.fk-final-card-${k} .fk-final-card-label`, `.final-card-${k} .final-card-label`], [`.fk-final-card-${k} .icon`, `.final-card-${k} .icon`]]),
+    ['.fk-final-card-none .fk-final-card-label', '.final-card-none .final-card-label'],
+    ...['pass', 'fail', 'manual', 'none'].map((k) => [`.fk-final-card-${k}[aria-pressed="true"]`, `.final-card-${k}[aria-pressed="true"]`]),
+    ['.fk-filters', '.filters'], ['.fk-filter', '.filter'], ['.fk-filter-word', '.filter-word'], ['.fk-filter select', '.filter select'], ['.fk-rows-card > div > .notice', '.rows-card > div > .notice'],
+    ['.fk-staff-line', '.staff-line'], ['.fk-staff-stats', '.staff-stats'], ['.fk-edit-result textarea', '.edit-result textarea, .email-item textarea, .template textarea, .sign-off textarea'],
+  ]) {
+    assert.ok(rule(amazonCss, theirs), `${theirs} is an Amazon rule`);
+    assert.equal(rule(css, mine), rule(amazonCss, theirs), `${mine} is the same as ${theirs}`);
+  }
+  const small = (src) => src.match(/@media \(max-width: 760px\) \{([^]*?)\n\}/)?.[1] ?? null;
+  assert.equal(small(css), small(amazonCss).replaceAll('.final-card', '.fk-final-card').replace('.account, .filters, .slim-actions', '.fk-account, .fk-filters, .fk-slim-actions'), 'in a narrow window, two cards to a line, as on Amazon');
+  for (const cls of ['fk-final-cards', 'fk-final-card', 'fk-final-card-pass', 'fk-final-card-fail', 'fk-final-card-manual', 'fk-final-card-none', 'fk-final-card-label', 'fk-final-card-num', 'fk-filters', 'fk-filter', 'fk-filter-word', 'fk-staff-line', 'fk-staff-stats', 'fk-edit-result', 'fk-form-grid', 'fk-form-field', 'fk-wide']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
   const wide = (src) => src.match(/@media \(max-width: 1200px\) \{([^]*?)\n\}/)?.[1] ?? null;
   assert.equal(wide(css), wide(amazonCss).replaceAll('.rows-layout.with-live', '.fk-rows-layout.fk-with-live').replaceAll('.live-panel', '.fk-live-panel'), 'in a narrower window, the checking area goes under the table, as on Amazon');
   for (const cls of ['fk-overview', 'fk-main-actions', 'fk-rows-layout', 'fk-with-live', 'fk-rows-main', 'fk-current-row', 'fk-live-panel', 'fk-live-head', 'fk-run-progress', 'fk-live-links', 'fk-live-flat', 'fk-steps-flat', 'fk-read', 'fk-ocr-text', 'fk-comparison-table', 'fk-cell-text', 'fk-result-cell', 'fields', 'field-row']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);

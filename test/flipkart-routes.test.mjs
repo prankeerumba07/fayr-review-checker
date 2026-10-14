@@ -31,6 +31,7 @@ import { parseReviewShot } from '../flipkart/review-read.js';
 import { DEFAULT_MARKS } from '../flipkart/settings.js';
 import { tinyPng } from './fixtures/flipkart/zip-tools.mjs';
 import { MAX_SHEET_BYTES, createFlipkartStore, putCampaign } from '../flipkart/store.js';
+import { TYPE_WORDS } from '../flipkart/final.js';
 import { ONLY_FLIPKART_NAMES } from '../flipkart/browser.js';
 import { isFlipkartSite, pageForPid } from '../flipkart/links.js';
 import { createStore } from '../amazon/store.js';
@@ -40,6 +41,8 @@ import { FILE, HEADER, orderId, orderShot, deliveryShot, reviewLink, reviewShot,
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE = readFileSync(FILE);
 const TOO_BIG = 'The file is larger than 50 megabytes, so save a smaller copy (only the Flipkart tab, for example), then upload that.';
+/** Every Type, as the screen is given them with the rows, for the Type filter and "Change the result": the Amazon screen's own, in its order. */
+const TYPES = Object.entries(TYPE_WORDS).map(([key, word]) => ({ key, word }));
 /** The made-up picture the pretend Google Drive gives. */
 const SHOT_PNG = tinyPng([166, 58, 43]);
 
@@ -163,7 +166,7 @@ test('the file routes have the same safety: the session token, this page only, a
   }
   const put = await call('PUT', '/local/flipkart/sheet');
   assert.deepEqual([put.status, put.headers.allow], [405, 'GET, HEAD, POST']);
-  assert.deepEqual((await call('GET', '/local/flipkart/sheet')).json, { sheet: null, rows: [] }, 'nothing was kept by any of these');
+  assert.deepEqual((await call('GET', '/local/flipkart/sheet')).json, { sheet: null, rows: [], types: TYPES }, 'nothing was kept by any of these');
   assert.deepEqual(readdirSync(dataDir).includes('flipkart'), false, 'not even the folder');
 });
 
@@ -246,7 +249,7 @@ test('uploading the made-up file finds what each column holds and keeps the file
   const again = await fresh(dir);
   const reloaded = await call('GET', '/local/flipkart/sheet', { at: again.at });
   assert.equal(reloaded.status, 200);
-  assert.deepEqual(reloaded.json, { sheet, rows });
+  assert.deepEqual(reloaded.json, { sheet, rows, types: TYPES });
   // Another file: its rows replace these, and these rows' pictures go.
   const csv = await upload(at, 'flipkart orders.csv', Buffer.from(`Order ID,Review Screenshot\n${orderId(7)},${reviewShot(7)}\n`));
   assert.equal(csv.status, 200, csv.text);
@@ -314,7 +317,7 @@ test('a file kept before its columns were found shows no rows, and the screen is
   // rows.json as it was kept before 12-10-2026: the cells of each row, and no columns found.
   writeFileSync(join(dir, 'flipkart', 'rows.json'), JSON.stringify({ sheet: { fileName: 'old.xlsx', kind: 'xlsx', tab: 'Flipkart', headerRow: 1, file: 'upload.xlsx', uploadedAt: '2026-10-09T12:00:00.000Z' }, headers: [{ col: 1, text: 'Order ID' }], rows: [{ row: 2, cells: { 1: { text: orderId(2), behind: '' } } }] }));
   const old = await call('GET', '/local/flipkart/sheet', { at });
-  assert.deepEqual([old.status, old.json], [200, { sheet: null, rows: [], uploadAgain: true }]);
+  assert.deepEqual([old.status, old.json], [200, { sheet: null, rows: [], types: TYPES, uploadAgain: true }]);
   assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
   assert.equal((await call('GET', '/local/flipkart/sheet', { at })).json.rows.length, 5, 'uploaded again: its rows show');
 });
@@ -567,7 +570,7 @@ test("Check over HTTP, as on Amazon: the steps streamed as they run; the screens
   assert.deepEqual(page.row.shots.delivery.pictures, [{ i: 0, ok: false, link: deliveryShot(2), problem: { kind: 'drive', site: 'Google Drive', says: 'the Google account logged in to the dashboard has no access to the file' } }]);
   const table = (await call('GET', '/local/flipkart/sheet', { at })).json.rows[0];
   assert.deepEqual([table.prev, table.check, table.shots.order.pictures.length], [null, undefined, 1]);
-  assert.deepEqual([table.final, table.finalSays, table.last], ['manual', result.finalSays, { checkId: result.checkId, final: 'manual', finalSays: result.finalSays, status: 'Needs Manual Staff Checking', type: 'Need Google Drive Access', typeKey: 'needDriveAccess', note: result.note, at: result.finishedAt, seconds: result.seconds }], "the table: the row's Status, Type and Note, as on Amazon");
+  assert.deepEqual([table.final, table.finalSays, table.last], ['manual', result.finalSays, { checkId: result.checkId, final: 'manual', finalSays: result.finalSays, status: 'Needs Manual Staff Checking', type: 'Need Google Drive Access', typeKey: 'needDriveAccess', note: result.note, at: result.finishedAt, seconds: result.seconds, staff: null }], "the table: the row's Status, Type and Note, as on Amazon, not changed by staff");
   const big = await call('GET', `/local/flipkart/rows/${one.id}/picture/order/0`, { at });
   const small = await call('GET', `/local/flipkart/rows/${one.id}/small/order/0`, { at });
   assert.deepEqual([big.status, big.headers['content-type'], big.data.equals(SHOT_PNG), small.status, small.data.equals(SHOT_PNG)], [200, 'image/png', true, 200, true], 'the picture as it is kept, large and small');
@@ -916,4 +919,79 @@ test('"Start checking" over HTTP, as on Amazon: the rows not checked yet, one by
   assert.equal((await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from('{}'), type: 'text/plain' })).status, 415);
   assert.ok(filesIn(dir).every((p) => p.startsWith('flipkart/')), 'kept only in data/flipkart/');
   await routes.close();
+});
+
+test('a result a staff member changed or marked right, over HTTP, as on Amazon: "Change the result" takes a Status, a Type from the list and a Note, and the row says "Changed by staff"; "The result is right" is only for the dashboard\'s own result; both kept with when and what the dashboard said, after a restart too; "Check every row again" passes a row changed by staff by, and a mark goes with its check; "Check again" replaces a staff result; neither while the row is being checked', async () => {
+  const dir = tempDir();
+  const google = driveLogin();
+  const reader = pretendReader();
+  let clock = new Date('2026-10-15T06:00:00.000Z');
+  const make = () => createFlipkartRoutes({ dataDir: dir, auth, google, shotOptions: { gapMs: 0 }, readers: reader, now: () => clock });
+  const at = await serve({ flipkart: make() });
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const json = (body, where = at) => ({ at: where, body: Buffer.from(JSON.stringify(body)), type: 'application/json' });
+  const lines = (res) => res.text.trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
+  const rows = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  const [one, two, three] = rows;
+  reader.set(rows);
+  const change = (row, body) => call('POST', `/local/flipkart/rows/${row.id}/result`, json(body));
+  const right = (row) => call('POST', `/local/flipkart/rows/${row.id}/right`, json({}));
+  const listed = async (row, where = at) => (await call('GET', '/local/flipkart/sheet', { at: where })).json.rows.find((r) => r.id === row.id);
+  // While row 1 is being checked, its result can be neither changed nor marked right.
+  let release;
+  google.hold = new Promise((r) => (release = r));
+  const busy = call('POST', `/local/flipkart/rows/${one.id}/check`, json({}));
+  for (let i = 0; i < 300 && !google.fetched.length; i++) await sleep(10);
+  const refused = [await change(one, { final: 'pass', typeKey: 'verified', note: '' }), await right(one)];
+  assert.deepEqual(refused.map((r) => [r.status, r.json.message]), [[409, 'This row is being checked right now. Wait for it to finish, then change its result.'], [409, 'This row is being checked right now. Wait for it to finish, then mark its result.']]);
+  google.hold = null;
+  release();
+  assert.equal((await busy).status, 200);
+  assert.equal(lines(await call('POST', `/local/flipkart/rows/${two.id}/check`, json({}))).at(-1).event, 'done');
+  const dashboard = await listed(one);
+  assert.ok(dashboard.last.final && !dashboard.last.staff, "row 1 has the dashboard's own result");
+  // "Change the result": a Status, a Type from the list, and a Note of at most 4000 letters.
+  const bad = [await change(one, { final: 'maybe', typeKey: 'verified' }), await change(one, { final: 'pass', typeKey: 'not a type' }), await change(one, { final: 'pass', typeKey: 'verified', note: 'x'.repeat(4001) }), await call('POST', '/local/flipkart/rows/r999999999999/result', json({ final: 'pass', typeKey: 'verified' }))];
+  assert.deepEqual(bad.map((r) => [r.status, r.json.message]), [[400, 'Choose a Status: Pass, Fail or Needs Manual Staff Checking.'], [400, 'Choose a Type from the list.'], [400, 'The Note is too long: at most 4000 letters.'], [404, 'No row has that id.']]);
+  const get = await call('GET', `/local/flipkart/rows/${one.id}/result`, { at });
+  assert.deepEqual([get.status, get.headers.allow], [405, 'POST']);
+  // A word this dashboard never shows is hidden in the Note too, as on Amazon.
+  const hidden = Buffer.from('cmVmdW5k', 'base64').toString('utf8');
+  const changed = await change(one, { final: 'pass', typeKey: 'verified', note: `  Made-up note by staff:\r\nthe ${hidden} line is hidden.  ` });
+  assert.equal(changed.status, 200);
+  const was = { final: dashboard.last.final, typeKey: dashboard.last.typeKey, type: dashboard.last.type };
+  const c = changed.json.row;
+  assert.deepEqual([c.done, c.final, c.finalSays, c.last.final, c.last.status, c.last.typeKey, c.last.type, c.last.note, c.last.finalSays, c.last.at, c.last.staff], [true, 'pass', null, 'pass', 'Pass', 'verified', 'Verified', 'Made-up note by staff:\nthe … line is hidden.', null, '2026-10-15T06:00:00.000Z', { at: '2026-10-15T06:00:00.000Z', right: false, was }]);
+  // Its page: the staff's result, with the check's own steps still there.
+  const page = (await call('GET', `/local/flipkart/rows/${one.id}`, { at })).json;
+  assert.deepEqual([page.row.last.staff.right, page.result.staff.right, page.result.type, page.result.note, page.result.steps.length], [false, false, 'Verified', 'Made-up note by staff:\nthe … line is hidden.', STEP_NAMES.length]);
+  // Changed again: what the dashboard said stays the dashboard's.
+  clock = new Date('2026-10-15T06:01:00.000Z');
+  assert.deepEqual((await change(one, { final: 'fail', typeKey: 'notDelivered', note: 'Made-up.' })).json.row.last.staff, { at: '2026-10-15T06:01:00.000Z', right: false, was });
+  // "The result is right": only for the dashboard's own result, of a row that has one.
+  assert.deepEqual([(await right(one)).json.message, (await right(three)).json.message], ['This result was chosen by staff, not by the dashboard, so it cannot be marked as right. Press "Check again" to get the dashboard\'s result first.', 'This row has no result to mark as right. Check it first.']);
+  clock = new Date('2026-10-15T06:05:00.000Z');
+  const before = await listed(two);
+  const marked = (await right(two)).json.row;
+  assert.deepEqual([marked.last.final, marked.last.type, marked.last.note, marked.last.at, marked.last.staff], [before.last.final, before.last.type, before.last.note, before.last.at, { at: '2026-10-15T06:05:00.000Z', right: true, was: { final: before.last.final, typeKey: before.last.typeKey, type: before.last.type } }]);
+  // A row not checked yet can be given a result too, with nothing the dashboard said; "Start checking" then passes it by.
+  const given = (await change(three, { final: 'manual', typeKey: 'somethingElse', note: 'Made-up.' })).json.row;
+  assert.deepEqual([given.done, given.final, given.last.staff.was], [true, 'manual', null]);
+  // The Type list comes with the rows, in the Amazon screen's order.
+  const sheet = (await call('GET', '/local/flipkart/sheet', { at })).json;
+  assert.deepEqual([sheet.types.length, sheet.types[0], sheet.types.at(-1)], [23, { key: 'verified', word: 'Verified' }, { key: 'somethingElse', word: 'Something else' }]);
+  // After a restart, all of it is still there.
+  const at2 = await serve({ flipkart: make() });
+  const staffOf = async (row) => (await listed(row, at2)).last?.staff ?? null;
+  assert.deepEqual([await staffOf(one), await staffOf(two), await staffOf(three)], [{ at: '2026-10-15T06:01:00.000Z', right: false, was }, marked.last.staff, given.last.staff]);
+  // "Check every row again": the rows changed by staff keep their results and are passed by; the row marked right is checked again, and its mark goes.
+  const run = lines(await call('POST', '/local/flipkart/check-all', json({ again: true })));
+  const checked = run.filter((e) => e.event === 'row').map((e) => e.rowId);
+  assert.deepEqual([run.at(-1).event, checked.includes(one.id), checked.includes(three.id), checked.includes(two.id)], ['run-done', false, false, true]);
+  assert.deepEqual([(await listed(one)).last.staff?.right, (await listed(three)).last.staff?.right, (await listed(two)).last.staff], [false, false, null]);
+  // "Check again" on row 1: the dashboard's result replaces the staff's.
+  const again = lines(await call('POST', `/local/flipkart/rows/${one.id}/check`, json({})));
+  const now1 = await listed(one);
+  assert.deepEqual([again.at(-1).event, now1.last.staff, now1.last.final, now1.last.type], ['done', null, again.at(-1).result.final, again.at(-1).result.type]);
 });

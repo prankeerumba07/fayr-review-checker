@@ -2,8 +2,9 @@
    copied from the Amazon screen's (views/amazon.css) under Flipkart's own
    names (fk-), so nothing here can change the Amazon screen: the marketplace
    tabs and the Google login in the top bar, the upload area with the lines about the file and the column
-   chooser, the Campaigns box, "Start checking", the table of rows with the
-   live checking area beside it, and a row's page. */
+   chooser, the Campaigns box, the Status cards, "Start checking", the table
+   of rows with the Status and Type boxes and the live checking area beside
+   it, and a row's page with "Change the result". */
 
 /* ---- the top bar: marketplace tabs ---- */
 
@@ -196,6 +197,58 @@
 .fk-big-inner { margin: 0; max-width: min(96vw, 1100px); max-height: 92vh; overflow: auto; padding: 12px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-lift); }
 .fk-big-inner figcaption { font-weight: 500; }
 .fk-big-inner img { display: block; max-width: 100%; height: auto; border-radius: var(--radius-sm); }
+
+/* ---- the four Status cards above the table, the Status and Type boxes beside the rows' heading, and a result changed by a staff member, like the Amazon ones (views/amazon.css), under Flipkart's own names ---- */
+
+/* The Needs Manual Staff Checking card is a little wider, so each card's word fits on one line. */
+.fk-final-cards { display: grid; grid-template-columns: minmax(100px, .8fr) minmax(100px, .8fr) minmax(212px, 1.35fr) minmax(130px, 1fr); gap: 8px; flex: 1 1 600px; }
+.fk-final-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 80px;
+  padding: 12px 14px;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  transition: border-color .15s, background-color .15s, box-shadow .15s, transform .08s;
+}
+.fk-final-card:hover { background: var(--hover); border-color: var(--line-strong); }
+.fk-final-card:active { transform: translateY(1px); }
+.fk-final-card-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; line-height: 1.3; white-space: nowrap; }
+.fk-final-card-label .icon { width: 14px; height: 14px; }
+.fk-final-card-num { font-size: 26px; font-weight: 600; line-height: 1; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; }
+.fk-final-card-pass .fk-final-card-label { color: var(--good); }
+.fk-final-card-pass .icon { color: var(--good-mark); }
+.fk-final-card-fail .fk-final-card-label { color: var(--bad); }
+.fk-final-card-fail .icon { color: var(--bad-mark); }
+.fk-final-card-manual .fk-final-card-label { color: var(--warn); }
+.fk-final-card-manual .icon { color: var(--warn-mark); }
+.fk-final-card-none .fk-final-card-label { color: var(--muted); }
+.fk-final-card-pass[aria-pressed="true"] { background: var(--good-bg); border-color: var(--good-mark); box-shadow: inset 0 0 0 1px var(--good-mark); }
+.fk-final-card-fail[aria-pressed="true"] { background: var(--bad-bg); border-color: var(--bad-mark); box-shadow: inset 0 0 0 1px var(--bad-mark); }
+.fk-final-card-manual[aria-pressed="true"] { background: var(--warn-bg); border-color: var(--warn-mark); box-shadow: inset 0 0 0 1px var(--warn-mark); }
+.fk-final-card-none[aria-pressed="true"] { background: var(--surface-3); border-color: var(--muted); box-shadow: inset 0 0 0 1px var(--muted); }
+.fk-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.fk-filter { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; }
+.fk-filter-word { color: var(--muted); }
+.fk-filter select { width: auto; min-width: 12rem; max-width: 18rem; min-height: 30px; height: 30px; padding-top: 4px; padding-bottom: 4px; font-size: 12px; }
+.fk-rows-card > div > .notice { margin: 8px 16px; }
+.fk-staff-line { display: inline-flex; align-items: center; gap: 4px; }
+.fk-staff-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 13px; color: var(--muted); }
+.fk-edit-result textarea { min-height: 6em; resize: vertical; line-height: 1.5; }
+@media (max-width: 760px) {
+  .fk-final-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fk-final-card-label { white-space: normal; }
+  .fk-account, .fk-filters, .fk-slim-actions { margin-left: 0; }
+}
 
 /* ---- "Start checking" and the live checking area beside the table, like the Amazon ones (views/amazon.css), under Flipkart's own names ---- */
 

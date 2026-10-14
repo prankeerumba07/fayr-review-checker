@@ -8,7 +8,8 @@
 // the Google login, for the top bar), /local/flipkart/rows/… (GET a row's
 // page, with its last check, and its pictures; POST …/check to check it, as on
 // Amazon, the steps streamed as they run, ending with the row's Status, Type
-// and Note, kept with the row) and /local/flipkart/check-all (POST:
+// and Note, kept with the row; POST …/result for a result a staff member
+// chose, and …/right for "The result is right", as on Amazon) and /local/flipkart/check-all (POST:
 // "Start checking", later "Carry on checking", or "Check every row again",
 // the rows checked one by one as on Amazon, each row's steps streamed as they
 // run). The file is read on this
@@ -35,11 +36,11 @@
 import { openWorkbook, guessColumns, columnProblems, rememberedChoice, sheetRows, SheetError, FIELDS, RESULT_FIELDS, RESULT_HEADERS, columnLetter, resultColumns, dayFirst } from './workbook.js';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS, ROW_ID } from './store.js';
+import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS, ROW_ID, StoreError } from './store.js';
 import { cellLinks, linkLabel, linksIn, isDriveLink, linkKey, reviewPageLink } from './links.js';
-import { FINAL_WORDS, finalOfFile } from './final.js';
+import { FINAL_WORDS, FINAL_KEYS, TYPE_KEYS, TYPE_WORDS, finalOfFile } from './final.js';
 import { createScreenshots, downloadable } from './screenshots.js';
-import { runCheck, PAUSE_SAYS, keptDay } from './check.js';
+import { runCheck, PAUSE_SAYS, keptDay, clean } from './check.js';
 import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct, campaignsFound, campaignsFor, brandIn } from './campaigns.js';
 import { readOrderShot, readDeliveryShot } from './shot-read.js';
 import { readReviewShot } from './review-read.js';
@@ -201,6 +202,13 @@ function pictureView(p, i) {
   return { i, ok: false, link: p?.link ?? null, problem: { kind: p?.problem?.kind ?? 'access', site: p?.problem?.site ?? null, says: p?.problem?.says ?? '' } };
 }
 
+/** The staff mark on a row's result, as the screen sees it, as on Amazon: { at, right, was: { final, typeKey, type } | null }, or null. */
+function staffView(r) {
+  const s = r.check?.staff;
+  if (!s) return null;
+  return { at: s.at ?? r.check.finishedAt ?? null, right: Boolean(s.right), was: s.was && typeof s.was === 'object' ? { final: s.was.final ?? null, typeKey: s.was.typeKey ?? null, type: s.was.type ?? null } : null };
+}
+
 /**
  * A row as the screen sees it, as on Amazon: its number on the dashboard
  * (from 1), its order ID, order date, amount and product, each picture or
@@ -208,8 +216,9 @@ function pictureView(p, i) {
  * cell's own words when they are not a link themselves) and how a picture
  * was given ('cell' or 'floating') with each picture kept or why it could
  * not be had, the file's other columns, the Status, Type and Note the file
- * already had, and whether it is checked (done: its last check finished). The
- * pictures themselves never come with it.
+ * already had, and whether it is checked (done: its last check finished, or
+ * a staff member gave it a result). The pictures themselves never come with
+ * it.
  */
 export function rowView(r) {
   const shot = (which) => {
@@ -243,8 +252,10 @@ export function rowView(r) {
     prev: r.prev ?? null,
     // The Status the uploaded file gave the row, as Pass, Fail or Needs Manual Staff Checking, even after the row is checked (final.js finalOfFile).
     prevFinal: r.prev ? finalOfFile(r.prev) : null,
-    // The last check's Status, Type and Note, as on Amazon (final: 'pass', 'fail' or 'manual'; finalSays: its reason, the Note's first sentence); null when the row has none.
-    last: r.check?.final ? { checkId: r.check.checkId ?? null, final: r.check.final, finalSays: r.check.finalSays ?? null, status: FINAL_WORDS[r.check.final] ?? '', type: r.check.type ?? '', typeKey: r.check.typeKey ?? null, note: r.check.note ?? '', at: r.check.finishedAt ?? null, seconds: r.check.seconds ?? null } : null,
+    // The last check's Status, Type and Note, as on Amazon (final: 'pass', 'fail' or 'manual'; finalSays: its reason, the Note's first sentence), or the ones a
+    // staff member chose; null when the row has none. staff, as on Amazon: right (true: "The result is right" was pressed, the result stays the
+    // dashboard's) or changed by hand (false: "Changed by staff"), with when; was is what the dashboard itself said, for the count of right results.
+    last: r.check?.final ? { checkId: r.check.checkId ?? null, final: r.check.final, finalSays: r.check.finalSays ?? null, status: FINAL_WORDS[r.check.final] ?? '', type: r.check.type ?? '', typeKey: r.check.typeKey ?? null, note: r.check.note ?? '', at: (r.check.staff && !r.check.staff.right ? r.check.staff.at : r.check.finishedAt) ?? null, seconds: r.check.seconds ?? null, staff: staffView(r) } : null,
     // The Status: the last check's; else the one the file gave (a check made before Flipkart rows had a Status leaves it); else null (not checked yet).
     final: r.check?.final ?? (r.prev ? finalOfFile(r.prev) : null),
     finalSays: r.check?.final ? r.check.finalSays ?? null : null,
@@ -359,16 +370,18 @@ function aboutFile(view, rows = [], campaigns = []) {
  * What the screen shows of the kept file: { sheet, rows }. sheet: its name,
  * the tab read (null for a CSV file), its column names, the columns found,
  * the table's columns, the lines about it (with which of the campaigns the
- * rows use) and how many rows it has; rows: every row as rowView gives it. A
- * file kept before its columns were found shows no rows: it must be uploaded
- * again (uploadAgain).
+ * rows use) and how many rows it has; rows: every row as rowView gives it;
+ * types: every Type, in the Amazon screen's order, { key, word }, for the
+ * Type filter and "Change the result". A file kept before its columns were
+ * found shows no rows: it must be uploaded again (uploadAgain).
  */
 export function sheetView(saved, campaigns = []) {
-  if (!saved || saved.old) return { sheet: null, rows: [], ...(saved?.old ? { uploadAgain: true } : {}) };
+  const types = TYPE_KEYS.map((key) => ({ key, word: TYPE_WORDS[key] }));
+  if (!saved || saved.old) return { sheet: null, rows: [], types, ...(saved?.old ? { uploadAgain: true } : {}) };
   const s = saved.sheet;
   const sheet = { fileName: s.fileName, kind: s.kind, tab: s.tab, headers: s.headers, lastCol: s.lastCol, mapping: s.mapping, columns: tableColumns(s, s.mapping), rowCount: saved.rows.length, uploadedAt: s.uploadedAt };
   sheet.about = aboutFile(sheet, saved.rows, campaigns);
-  return { sheet, rows: saved.rows.map(rowView) };
+  return { sheet, rows: saved.rows.map(rowView), types };
 }
 
 /**
@@ -881,7 +894,44 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
     }
   }
 
-  /** A row's routes: its page (GET), its check (POST …/check), and its pictures (GET …/picture/<cell>/<n>, or …/small/…, the same picture). */
+  // ---- a result changed by a staff member (copied from the Amazon routes, amazon/routes.js) ----
+
+  /**
+   * "Change the result", on a row's page, as on Amazon: the Status, the Type
+   * and the Note a staff member chose replace the row's result, and the row
+   * says "Changed by staff". "Check every row again" passes the row by;
+   * "Check again" on its page replaces the staff's result.
+   */
+  async function changeResult(req, res, id) {
+    const body = await readJson(req);
+    const final = String(body?.final ?? '');
+    if (!FINAL_KEYS.includes(final)) return refuse(res, 400, 'Choose a Status: Pass, Fail or Needs Manual Staff Checking.');
+    const typeKey = String(body?.typeKey ?? '');
+    if (!TYPE_KEYS.includes(typeKey)) return refuse(res, 400, 'Choose a Type from the list.');
+    const note = typeof body?.note === 'string' ? body.note.replace(/\r\n?/g, '\n').trim() : '';
+    if (note.length > 4000) return refuse(res, 400, 'The Note is too long: at most 4000 letters.');
+    if (checking?.rowId === id) return refuse(res, 409, 'This row is being checked right now. Wait for it to finish, then change its result.');
+    return staffSaved(res, () => store.setStaffResult(id, { final, typeKey, note: clean(note), at: now().toISOString() }));
+  }
+
+  /** "The result is right", as on Amazon: the dashboard's result for the row stays, marked checked by staff and right (for the count of right results). */
+  async function markRight(req, res, id) {
+    await readBody(req, MAX_JSON_BYTES, 'That is too large to send here.');
+    if (checking?.rowId === id) return refuse(res, 409, 'This row is being checked right now. Wait for it to finish, then mark its result.');
+    return staffSaved(res, () => store.markRight(id, { at: now().toISOString() }));
+  }
+
+  /** The row as kept after a staff member's change, as the screen sees it; or, in plain words, why it could not be kept. */
+  async function staffSaved(res, save) {
+    try {
+      return sendJson(res, 200, { row: rowView(await save()) });
+    } catch (err) {
+      if (err instanceof StoreError) return refuse(res, err.status, err.message);
+      throw err;
+    }
+  }
+
+  /** A row's routes: its page (GET), its check (POST …/check), a result a staff member chose (POST …/result) or marked right (POST …/right), and its pictures (GET …/picture/<cell>/<n>, or …/small/…, the same picture). */
   async function rowRoute(req, res, method, parts) {
     const id = parts[1];
     if (parts.length === 2) {
@@ -899,6 +949,13 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         return refuse(res, 405, 'Only POST is answered here.');
       }
       return startCheck(req, res, id);
+    }
+    if (parts.length === 3 && (parts[2] === 'result' || parts[2] === 'right')) {
+      if (method !== 'POST') {
+        res.setHeader('Allow', 'POST');
+        return refuse(res, 405, 'Only POST is answered here.');
+      }
+      return parts[2] === 'result' ? changeResult(req, res, id) : markRight(req, res, id);
     }
     if (parts.length === 5 && ['picture', 'small'].includes(parts[2]) && SHOTS.includes(parts[3]) && /^[0-9]$/.test(parts[4])) {
       if (method !== 'GET') {

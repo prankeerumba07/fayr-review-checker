@@ -117,7 +117,7 @@ const NOT_A_REVIEW = { 'Flipkart product page': 'a product page on Flipkart', "F
 // Copied from the Amazon checker's Notes (amazon/notes.js): words from the sheet are quoted, and never carry a word this dashboard must not show.
 const HIDDEN = ['ZmF5cg==', 'cmVmdW5k', 'Y2FzaGJhY2s=', 'cmV3YXJk'].map((b) => Buffer.from(b, 'base64').toString('utf8'));
 const HIDDEN_RE = new RegExp(`[\\p{L}\\p{N}]*(?:${HIDDEN.join('|')})[\\p{L}\\p{N}]*`, 'giu');
-const clean = (text) => String(text ?? '').replace(HIDDEN_RE, '…');
+export const clean = (text) => String(text ?? '').replace(HIDDEN_RE, '…');
 function excerpt(text, n = 160) {
   const t = clean(String(text ?? '').replace(/\s+/g, ' ').trim());
   return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t;

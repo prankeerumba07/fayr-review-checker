@@ -37,7 +37,16 @@
 // in the Amazon words), what was read from each screenshot and found on
 // Flipkart, and a check's nine steps, shown live as each one runs and still
 // shown after a reload. A row's Status shows in the table and on its page as
-// soon as its check finishes. No Status cards and no Download button yet. The
+// soon as its check finishes. As on Amazon, above the table: the four Status
+// cards (Pass, Fail, Needs Manual Staff Checking and Not checked yet, each
+// with how many rows, changing as each row's check finishes), which show only
+// those rows when pressed and every row when pressed again; beside the rows'
+// heading, the Status box and the Type box, with "Show every row" and how
+// many rows are shown; and the line that says how often staff found the
+// dashboard right. On a row's page, as on Amazon, "Change the result" (the
+// Status, the Type and the Note, then Save: "Changed by staff") and "The
+// result is right" ("Marked right by staff"), each with when; "Check again"
+// replaces a staff result, after asking. No Download button yet. The
 // local server reads and keeps the file and the campaigns, and runs the
 // checks and the Google login; this screen only shows them.
 
@@ -98,6 +107,8 @@ export const MARKS = {
 export const FINAL_WORDS = { pass: 'Pass', fail: 'Fail', manual: 'Needs Manual Staff Checking' };
 export const FINAL_NONE = 'Not checked yet';
 const FINAL_ICON = { pass: 'pass', fail: 'fail', manual: 'manual', none: 'clock' };
+/** No Status and no Type chosen: every row shows. Copied from the Amazon screen. */
+const noFilter = () => ({ final: '', type: '' });
 const PICTURE_KEYS = ['order', 'delivery', 'review', 'reviewShot'];
 const WHAT = { order: 'Purchase screenshot', delivery: 'Delivery screenshot', review: 'Review screenshot', reviewShot: 'Review screenshot' };
 /** The file's column each picture cell is. */
@@ -134,6 +145,11 @@ function initial() {
     open: null, // the row whose page is open: { id, loading, error, row, result }
     check: null, // the row being checked: { rowId, running, controller, view, notice }
     all: null, // the rows being checked one by one: { running, controller, current, view, paused, summary, notice }
+    filter: noFilter(), // the Status and the Type the table shows, as on Amazon: '' for every one
+    notice: null, // what was just done on a row's page: { tone, text, route }
+    rowsNotice: null, // above the table: { tone, text }
+    marking: false, // "The result is right" being saved
+    edit: null, // "Change the result" on a row's page: { rowId, final, typeKey, note, busy, error }
     thumbs: {}, // `${id}:${which}:${i}:${at}` -> object URL
     big: null, // the picture opened large: { title, url, loading, error }
     seq: { open: 0, big: 0, thumbs: 0 },
@@ -373,6 +389,12 @@ async function startLogin(ctx, what) {
 }
 
 function enter(ctx) {
+  const s = ctx.state;
+  const here = ctx.route || '';
+  // As on Amazon: a message belongs to the page it was given on, and goes when you open another page; so does the form to change a result.
+  if (s.notice?.route !== undefined && s.notice.route !== here) s.notice = null;
+  if (here) s.rowsNotice = null;
+  if (s.edit && s.edit.rowId !== here) s.edit = null;
   // Every 2 seconds the top bar asks about the Google login, and the Campaigns box looks again while products are being read.
   if (!ctx.state.poll && typeof ctx.every === 'function') {
     const stop = ctx.every(READING_POLL_MS, () => {
@@ -661,7 +683,7 @@ export function tookWords(seconds) {
  */
 function resultOf(r, state) {
   if (state && r?.id && rowBeingChecked(state) === r.id) return { status: 'Checking…', type: '', note: '', from: 'now', final: null };
-  if (r?.last && FINAL_WORDS[r.last.final]) return { status: FINAL_WORDS[r.last.final], type: r.last.type ?? '', note: r.last.note ?? '', from: 'check', final: r.last.final, finalSays: r.last.finalSays ?? null };
+  if (r?.last && FINAL_WORDS[r.last.final]) return { status: FINAL_WORDS[r.last.final], type: r.last.type ?? '', note: r.last.note ?? '', from: 'check', final: r.last.final, finalSays: r.last.finalSays ?? null, staff: r.last.staff ?? null };
   const p = obj(r?.prev);
   const f = FINAL_WORDS[r?.prevFinal] ? r.prevFinal : null;
   if (p.status || p.type || p.note) return { status: FINAL_WORDS[f] ?? '', type: p.type ?? '', note: p.note ?? '', from: 'file', final: f };
@@ -679,8 +701,9 @@ const checkingLabel = (h) => h('span', { class: 'fk-final fk-final-checking' }, 
 /**
  * Status, Type and Note, as on Amazon. The Status is the clearest thing in
  * the row: Pass, Fail or Needs Manual Staff Checking, bold and in its colour,
- * with when it was checked and how long it took, or "From the file" for a
- * Status the uploaded file already had. The Type is a small soft tag.
+ * with when it was checked and how long it took, or when a staff member
+ * changed it or marked it right, or "From the file" for a Status the uploaded
+ * file already had. The Type is a small soft tag.
  */
 function resultCells(ctx, r) {
   const { h, words, state } = ctx;
@@ -693,11 +716,13 @@ function resultCells(ctx, r) {
   });
   if (res.from === 'now') return cells(checkingLabel(h), null, null);
   if (res.from === 'check') {
+    const staff = res.staff;
     return cells(
       [
         finalPill(h, res.final, `final-${r.id}`),
-        r?.last?.at ? h('div', { key: 'at', class: 'fk-cell-words' }, words.ist(r.last.at)) : null,
-        Number.isFinite(r?.last?.seconds) ? h('div', { key: 'took', class: 'fk-cell-words', 'data-id': `took-${r.id}` }, tookWords(r.last.seconds)) : null,
+        // A result a staff member changed by hand, or marked right, says so, with when; a check's says when and how long it took, as on Amazon.
+        staff ? h('div', { key: 'staff', class: 'fk-cell-words fk-staff-line', 'data-id': `staff-${r.id}` }, icon(h, staff.right ? 'check' : 'user'), `${staff.right ? 'Marked right' : 'Changed'} by staff on ${words.ist(staff.at)}`) : r?.last?.at ? h('div', { key: 'at', class: 'fk-cell-words' }, words.ist(r.last.at)) : null,
+        (!staff || staff.right) && Number.isFinite(r?.last?.seconds) ? h('div', { key: 'took', class: 'fk-cell-words', 'data-id': `took-${r.id}` }, tookWords(r.last.seconds)) : null,
       ],
       tag(res.type),
       res.note || emptyCell(h),
@@ -755,16 +780,150 @@ function tableRow(ctx, r, columns) {
   );
 }
 
-/** The table of rows, like the Amazon one: every column of the file in its order, numbered from 1, then Status, Type and Note; the live checking area beside it while the rows are checked one by one. */
-function rowsCard(ctx) {
+// ---- the Status cards, the filter and staff results (copied from the Amazon screen) ----
+
+const sameWord = (x, y) => String(x ?? '').trim().toLowerCase() === String(y ?? '').trim().toLowerCase();
+/** A result a staff member changed by hand (kept by "Check every row again"); one only marked right by staff is not one. */
+const changedByStaff = (r) => Boolean(r?.last?.staff && !r.last.staff.right);
+/** A result a staff member marked right ("The result is right"); checking the row again clears the mark. */
+const markedRight = (r) => Boolean(r?.last?.staff?.right);
+/** The key of a Type word, from the server's list; '' when it is not one of them. */
+const typeKeyOfWord = (types, word) => arr(types).find((t) => sameWord(t?.word, word))?.key ?? '';
+
+/** How many rows have each Status, and how many are not checked yet. */
+function finalCounts(rows) {
+  const n = { pass: 0, fail: 0, manual: 0, none: 0 };
+  for (const r of rows) {
+    const f = isDone(r) ? resultOf(r, null).final : null;
+    n[FINAL_WORDS[f] ? f : 'none']++;
+  }
+  return n;
+}
+
+/**
+ * The four Status cards, each with its number, as on Amazon. They are the
+ * Status filter: pressing one shows only those rows, and pressing it again
+ * shows every row.
+ */
+function finalCards(ctx, rows) {
   const { h, state } = ctx;
+  const n = finalCounts(rows);
+  const card = (key, text) => {
+    const on = state.filter.final === key;
+    return h(
+      'button',
+      { type: 'button', class: `fk-final-card fk-final-card-${key}`, key, 'aria-pressed': on ? 'true' : 'false', onclick: () => ctx.update((st) => (st.filter = { ...noFilter(), final: st.filter.final === key ? '' : key })), 'data-id': `count-${key}` },
+      h('span', { class: 'fk-final-card-label' }, icon(h, FINAL_ICON[key]), h('span', { 'data-id': `count-${key}-word` }, text)),
+      h('span', { class: 'fk-final-card-num', 'data-id': `count-${key}-num` }, String(n[key])),
+    );
+  };
+  return h('div', { class: 'fk-final-cards', role: 'group', 'aria-label': 'Status. Press one to show only those rows.', 'data-id': 'counts' }, card('pass', FINAL_WORDS.pass), card('fail', FINAL_WORDS.fail), card('manual', FINAL_WORDS.manual), card('none', FINAL_NONE));
+}
+
+/**
+ * Every Type, in the Amazon screen's order, each with how many rows have it
+ * (0 too) among the rows of the Status chosen (every row when none is
+ * chosen); then any other Type the rows have. A Type's word counts as the
+ * same whatever its capitals or spaces. -> [{ word, count }]
+ */
+export function typeCounts(rows, types, final = '') {
+  const counts = new Map();
+  for (const r of rows) {
+    if (!isDone(r) || !passesFilter(r, { final, type: '' })) continue;
+    const res = resultOf(r, null);
+    if (!res.type) continue;
+    const word = arr(types).find((t) => sameWord(t?.word, res.type))?.word ?? res.type.trim();
+    counts.set(word, (counts.get(word) ?? 0) + 1);
+  }
+  const listed = arr(types).map((t) => ({ word: t.word, count: counts.get(t.word) ?? 0 }));
+  const others = [...counts]
+    .filter(([word]) => !arr(types).some((t) => sameWord(t?.word, word)))
+    .map(([word, count]) => ({ word, count }))
+    .sort((a, b) => a.word.localeCompare(b.word));
+  return [...listed, ...others];
+}
+
+/**
+ * The Status box and the Type box beside the rows' heading, as on Amazon.
+ * The Status box lists every Status with how many rows, and choosing one is
+ * the same as pressing its Status card (the box and the cards always show
+ * the same choice); the Type box always lists every Type, each with how many
+ * rows of that Status have it.
+ */
+function filters(ctx, rows = []) {
+  const { h, state } = ctx;
+  const f = state.filter;
+  const n = finalCounts(rows);
+  const list = typeCounts(rows, state.saved?.types, f.final);
+  // A Type chosen before that is no longer listed stays, so the choice is still visible.
+  if (f.type && !list.some((t) => sameWord(t.word, f.type))) list.push({ word: f.type, count: 0 });
+  return h(
+    'div',
+    { class: 'fk-filters', 'data-id': 'filters' },
+    h(
+      'label',
+      { class: 'fk-filter', for: 'fk-filter-final' },
+      h('span', { class: 'fk-filter-word' }, 'Status'),
+      h(
+        'select',
+        { id: 'fk-filter-final', 'data-id': 'filter-final', value: f.final, onchange: (e) => ctx.update((st) => (st.filter = { ...noFilter(), final: e.target.value })) },
+        h('option', { value: '' }, `Every Status (${rows.length})`),
+        ['pass', 'fail', 'manual', 'none'].map((k) => h('option', { key: `s-${k}`, value: k }, `${k === 'none' ? FINAL_NONE : FINAL_WORDS[k]} (${n[k]})`)),
+      ),
+    ),
+    h(
+      'label',
+      { class: 'fk-filter', for: 'fk-filter-type' },
+      h('span', { class: 'fk-filter-word' }, 'Type'),
+      h('select', { id: 'fk-filter-type', 'data-id': 'filter-type', value: f.type, onchange: (e) => ctx.update((st) => (st.filter.type = e.target.value)) }, h('option', { value: '' }, 'Every Type'), list.map((t) => h('option', { key: `t-${t.word}`, value: t.word }, `${t.word} (${t.count})`))),
+    ),
+    f.final || f.type ? h('button', { type: 'button', class: 'btn btn-quiet btn-small', onclick: () => ctx.update((st) => (st.filter = noFilter())), 'data-id': 'filter-clear' }, icon(h, 'close'), 'Show every row') : null,
+  );
+}
+
+/** A row the Status and the Type chosen show, as on Amazon. */
+function passesFilter(r, f) {
+  const res = resultOf(r, null);
+  const has = isDone(r);
+  if (f.final && (f.final === 'none' ? has && FINAL_WORDS[res.final] : !has || res.final !== f.final)) return false;
+  if (f.type && !(has && sameWord(f.type, res.type))) return false;
+  return true;
+}
+
+/**
+ * "Staff checked 12 results: 10 right (83%). Pass: 5 checked, 5 right
+ * (100%). …": the rows a staff member marked right or changed by hand, by
+ * the Status the dashboard itself gave them. Copied from the Amazon screen.
+ */
+export function staffStatsLine(rows) {
+  const marked = arr(rows).filter((r) => r?.last?.staff?.was);
+  if (!marked.length) return 'Staff checked no results yet. On a row\'s page, "The result is right" or "Change the result" counts one.';
+  const pct = (right, n) => `${Math.round((right / n) * 100)}%`;
+  const part = (list) => {
+    const right = list.filter(markedRight).length;
+    return `${list.length} checked, ${right} right (${pct(right, list.length)})`;
+  };
+  const right = marked.filter(markedRight).length;
+  const out = [`Staff checked ${marked.length === 1 ? '1 result' : `${marked.length} results`}: ${right} right (${pct(right, marked.length)}).`];
+  for (const k of ['pass', 'fail', 'manual']) {
+    const list = marked.filter((r) => r.last.staff.was.final === k);
+    if (list.length) out.push(`${FINAL_WORDS[k]}: ${part(list)}.`);
+  }
+  return out.join(' ');
+}
+
+/** The table of rows, like the Amazon one: every column of the file in its order, numbered from 1, then Status, Type and Note, the rows the Status and the Type chosen show; the live checking area beside it while the rows are checked one by one. */
+function rowsCard(ctx) {
+  const { h, words, state } = ctx;
   const sheet = state.saved?.sheet ?? null;
   const rows = arr(state.saved?.rows);
+  const shown = rows.filter((r) => passesFilter(r, state.filter));
   // While a new file's columns are chosen, its rows are not made yet, and the old file's rows are not shown.
   const waiting = state.columns.need ? state.upload.file?.name || 'the new file' : null;
   let body;
   if (waiting) body = h('p', { class: 'fk-empty-state', 'data-id': 'rows-waiting' }, icon(h, 'table'), `The rows of "${waiting}" show here once its columns are chosen above. Cancel brings back the rows shown before.`);
   else if (!rows.length) body = h('p', { class: 'fk-empty-state', 'data-id': 'no-rows' }, icon(h, 'table'), `This ${sheet?.kind === 'csv' ? 'file' : 'tab'} has column names but no rows under them.`);
+  else if (!shown.length) body = h('p', { class: 'fk-empty-state', 'data-id': 'no-match' }, icon(h, 'table'), 'No row has that Status and Type.');
   else {
     const columns = arr(sheet?.columns).map((c) => ({ key: c?.key ?? null, col: c?.col ?? null, letter: c?.letter ?? '', name: c?.name ?? '' }));
     // The column names stay in view while the rows scroll under them.
@@ -775,7 +934,7 @@ function rowsCard(ctx) {
         'table',
         { class: 'fk-rows-table' },
         h('thead', null, h('tr', null, h('th', { scope: 'col' }, 'Row'), columns.map((c) => h('th', { scope: 'col', key: c.key ?? `c${c.col}`, 'data-col': c.key ?? 'other' }, columnHead(h, c))), h('th', { scope: 'col' }, h('span', { class: 'sr-only' }, 'Check')))),
-        h('tbody', null, rows.map((r) => tableRow(ctx, r, columns))),
+        h('tbody', null, shown.map((r) => tableRow(ctx, r, columns))),
       ),
     );
   }
@@ -783,7 +942,16 @@ function rowsCard(ctx) {
   return h(
     'section',
     { class: 'card fk-rows-card', key: 'rows', 'data-id': 'rows' },
-    h('div', { class: 'fk-rows-head' }, h('h2', null, 'Rows'), rows.length && !waiting ? h('span', { class: 'fk-rows-count', 'data-id': 'rows-count' }, rowsWord(rows.length)) : null),
+    h(
+      'div',
+      { class: 'fk-rows-head' },
+      h('h2', null, 'Rows'),
+      rows.length && !waiting ? h('span', { class: 'fk-rows-count', 'data-id': 'rows-count' }, shown.length === rows.length ? rowsWord(rows.length) : `${shown.length} of ${rowsWord(rows.length)} shown`) : null,
+      rows.length && !waiting ? filters(ctx, rows) : null,
+    ),
+    // How often the dashboard is right, by what staff marked right or changed.
+    rows.length && !waiting ? h('p', { class: 'fk-staff-stats', 'data-id': 'staff-stats' }, icon(h, 'user'), staffStatsLine(rows)) : null,
+    state.rowsNotice ? h('div', { 'data-id': 'rows-notice' }, words.notice(h, state.rowsNotice.tone, state.rowsNotice.text)) : null,
     h('div', { class: `fk-rows-layout${panel ? ' fk-with-live' : ''}` }, h('div', { class: 'fk-rows-main' }, body), panel),
   );
 }
@@ -1043,8 +1211,16 @@ function applyCheckEvent(view, e) {
 async function startCheck(ctx, id) {
   const s = ctx.state;
   if (busy(s)) return;
+  // A result a staff member changed by hand, or marked right: "Check again" asks first, then replaces it, as on Amazon.
+  const listed = arr(s.saved?.rows).find((x) => x?.id === id);
+  if (changedByStaff(listed) && !ctx.confirm('A staff member changed this row\'s result by hand. "Check again" replaces it with what the dashboard finds. Go on?')) return;
+  if (markedRight(listed) && !ctx.confirm('A staff member marked this row\'s result as right. "Check again" checks it afresh and clears that mark. Go on?')) return;
   const run = { rowId: id, running: true, controller: new AbortController(), view: { ...newView(), action: 'Starting the check…' }, notice: null };
-  ctx.update((st) => (st.check = run));
+  ctx.update((st) => {
+    st.check = run;
+    st.notice = null;
+    st.rowsNotice = null;
+  });
   const isCurrent = () => s.check === run;
   const out = await ctx.local.stream('POST', `${ROWS}/${encodeURIComponent(id)}/check`, {}, (e) => {
     if (!isCurrent()) return;
@@ -1097,6 +1273,7 @@ async function checkRows(ctx, { again = false } = {}) {
     // An earlier single check's view would hide this one's on the row page.
     if (st.check && !st.check.running) st.check = null;
     st.all = run;
+    st.rowsNotice = null;
   });
   const isCurrent = () => s.all === run;
   const refreshOpen = (id) => {
@@ -1105,8 +1282,8 @@ async function checkRows(ctx, { again = false } = {}) {
   const out = await ctx.local.stream('POST', `${BASE}/check-all`, again ? { again: true } : {}, (e) => {
     if (!isCurrent()) return;
     if (e?.event === 'run-started') {
-      // "Check every row again": the server has removed every row's last check.
-      if (e.again) for (const r of arr(s.saved?.rows)) if (r) r.done = false;
+      // "Check every row again": the server has removed every row's last check, but for a result a staff member changed, as on Amazon.
+      if (e.again) for (const r of arr(s.saved?.rows)) if (r && !changedByStaff(r)) Object.assign(r, { last: null, done: false, final: FINAL_WORDS[r.prevFinal] ? r.prevFinal : null, finalSays: null });
     } else if (e?.event === 'row') {
       run.view = { ...newView(), action: 'Starting the check…' };
       run.current = { rowId: e.rowId, label: e.label ?? '' };
@@ -1142,12 +1319,80 @@ async function checkRows(ctx, { again = false } = {}) {
   refreshOpen(run.current?.rowId);
 }
 
-/** "Check every row again": asks first, then every row's last check goes and the rows are checked from the first one. */
+/** "Check every row again", as on Amazon: asks first, then every result goes and the rows are checked from the first one; a result a staff member changed stays. */
 function checkEveryRowAgain(ctx) {
-  const n = arr(ctx.state.saved?.rows).length;
+  const rows = arr(ctx.state.saved?.rows);
+  const n = rows.length;
   if (!n || busy(ctx.state)) return;
-  if (!ctx.confirm(n === 1 ? 'This checks the 1 row again and replaces its last check. Go on?' : `This checks all ${n} rows again and replaces their last checks. Go on?`)) return;
+  // Rows whose result a staff member changed by hand keep it and are passed by; a result only marked right is checked again, and its mark goes.
+  const kept = rows.filter(changedByStaff).length;
+  const marked = rows.filter(markedRight).length;
+  if (kept === n) {
+    ctx.update((st) => (st.rowsNotice = { tone: 'warn', text: kept === 1 ? 'The 1 row was changed by staff, so it keeps its result and there is nothing to check again.' : `All ${n} rows were changed by staff, so they keep their results and there is nothing to check again.` }));
+    return;
+  }
+  const marks = marked ? ` The ${rowsWord(marked)} marked right by staff ${marked === 1 ? 'loses its mark' : 'lose their marks'}.` : '';
+  const question = kept ? `This checks the ${rowsWord(n - kept)} not changed by staff again and replaces their results. The ${rowsWord(kept)} changed by staff ${kept === 1 ? 'keeps its result' : 'keep their results'}.${marks} Go on?` : n === 1 ? `This checks the 1 row again and replaces its result.${marks} Go on?` : `This checks all ${n} rows again and replaces their results.${marks} Go on?`;
+  if (!ctx.confirm(question)) return;
   return checkRows(ctx, { again: true });
+}
+
+// ---- a result changed by a staff member (copied from the Amazon screen) ----
+
+/** "Change the result": the form, filled with the row's result as it is. */
+function editResult(ctx, r) {
+  const res = resultOf(r, null);
+  ctx.update((st) => {
+    st.edit = { rowId: r.id, final: FINAL_WORDS[res.final] ? res.final : 'manual', typeKey: r?.last?.typeKey ?? typeKeyOfWord(st.saved?.types, res.type), note: res.note ?? '', busy: false, error: null };
+    st.notice = null;
+  });
+}
+
+async function saveResult(ctx) {
+  const s = ctx.state;
+  const e = s.edit;
+  if (!e || e.busy) return;
+  ctx.update((st) => Object.assign(st.edit, { busy: true, error: null }));
+  try {
+    const out = await ctx.local.api('POST', `${ROWS}/${encodeURIComponent(e.rowId)}/result`, { final: e.final, typeKey: e.typeKey, note: e.note });
+    ctx.update((st) => {
+      if (out?.row) putRows(st, [out.row]);
+      // A check that finished on this page no longer gives the row's result.
+      if (st.check?.rowId === e.rowId && !st.check.running) st.check = null;
+      st.edit = null;
+      st.notice = { tone: 'good', text: 'The result was changed. This row now says "Changed by staff".', route: e.rowId };
+    });
+    if (s.open?.id === e.rowId) openRow(ctx, e.rowId, { keep: true });
+  } catch (err) {
+    ctx.update((st) => {
+      if (st.edit) Object.assign(st.edit, { busy: false, error: err.message });
+    });
+  }
+}
+
+/** "The result is right": the dashboard's result stays, marked checked by staff and right; the line above the table counts it. */
+async function markRight(ctx, r) {
+  const s = ctx.state;
+  if (busy(s) || s.marking || !r?.id) return;
+  ctx.update((st) => {
+    st.marking = true;
+    st.notice = null;
+  });
+  try {
+    const out = await ctx.local.api('POST', `${ROWS}/${encodeURIComponent(r.id)}/right`, {});
+    ctx.update((st) => {
+      st.marking = false;
+      if (out?.row) putRows(st, [out.row]);
+      if (st.check?.rowId === r.id && !st.check.running) st.check = null;
+      st.notice = { tone: 'good', text: 'Marked as right. This row now says "Marked right by staff", and the line above the table counts it.', route: r.id };
+    });
+    if (s.open?.id === r.id) openRow(ctx, r.id, { keep: true });
+  } catch (err) {
+    ctx.update((st) => {
+      st.marking = false;
+      st.notice = { tone: 'error', text: err.message, route: r.id };
+    });
+  }
 }
 
 /** Stop: at once. The row it was on is not checked. */
@@ -1155,9 +1400,10 @@ function stopAll(ctx) {
   ctx.state.all?.controller?.abort();
 }
 
-/** Scrolls the table to a row. */
+/** Scrolls the table to a row, showing every row first when the filter hides it, as on Amazon. */
 function showRow(ctx, id) {
   const r = arr(ctx.state.saved?.rows).find((x) => x?.id === id);
+  if (r && !passesFilter(r, ctx.state.filter)) ctx.update((st) => (st.filter = noFilter()));
   if (r) ctx.reveal?.(`row-${r.n}`, 'center');
 }
 
@@ -1189,7 +1435,7 @@ function checkingWords(ctx, rows) {
   return `Checking ${rowWords(r, run.current.label)}: ${done} of ${total} ${total === 1 ? 'row' : 'rows'} done, ${left} left`;
 }
 
-/** The main buttons above the table, as on Amazon: "Start checking" (or "Carry on checking"), Stop while it runs, and "Check every row again". No Status cards yet. */
+/** The four Status cards and the main buttons, in one row above the table, as on Amazon: "Start checking" (or "Carry on checking"), Stop while it runs, and "Check every row again". */
 function overview(ctx, rows) {
   const { h, state } = ctx;
   const running = Boolean(state.all?.running);
@@ -1198,6 +1444,7 @@ function overview(ctx, rows) {
   return h(
     'section',
     { class: 'fk-overview', key: 'overview', 'data-id': 'overview' },
+    finalCards(ctx, rows),
     h(
       'div',
       { class: 'fk-main-actions', 'data-id': 'main-actions' },
@@ -1482,16 +1729,63 @@ function comparisonCard(ctx, res) {
   );
 }
 
-/** The row's Type and Note, as on Amazon: those of the check that just finished, else of its last check, else those the file already had. Its Status is not said again here: it is at the top of the page, large, with its reason. */
-function resultCard(ctx, r, res) {
+/** "Change the result", on a row's page, as on Amazon: the Status, the Type and the Note, then Save. */
+function editForm(ctx, r) {
+  const { h, words, state } = ctx;
+  const e = state.edit;
+  if (!e || e.rowId !== r.id) return null;
+  const types = arr(state.saved?.types);
+  return h(
+    'section',
+    { class: 'card fk-edit-result', key: 'edit', 'data-id': 'edit-result' },
+    h('h3', null, 'Change the result'),
+    h('p', { class: 'card-sub' }, 'Choose the Status and the Type, write the Note, then press Save. The row then says "Changed by staff", and the line above the table counts the dashboard\'s result as wrong. "Check every row again" leaves it as you set it; "Check again" on this page replaces it.'),
+    h(
+      'div',
+      { class: 'fk-form-grid' },
+      h(
+        'div',
+        { class: 'fk-form-field' },
+        h('label', { class: 'label', for: 'fk-edit-final' }, 'Status'),
+        h('select', { id: 'fk-edit-final', value: e.final, disabled: e.busy, 'data-id': 'edit-final', onchange: (ev) => ctx.update((st) => (st.edit.final = ev.target.value)) }, ['pass', 'fail', 'manual'].map((k) => h('option', { key: k, value: k, selected: e.final === k }, FINAL_WORDS[k]))),
+      ),
+      h(
+        'div',
+        { class: 'fk-form-field' },
+        h('label', { class: 'label', for: 'fk-edit-type' }, 'Type'),
+        h('select', { id: 'fk-edit-type', value: e.typeKey, disabled: e.busy, 'data-id': 'edit-type', onchange: (ev) => ctx.update((st) => (st.edit.typeKey = ev.target.value)) }, h('option', { value: '', selected: !e.typeKey }, 'Choose a Type'), types.map((t) => h('option', { key: t.key, value: t.key, selected: e.typeKey === t.key }, t.word))),
+      ),
+    ),
+    h('div', { class: 'fk-form-field fk-wide' }, h('label', { class: 'label', for: 'fk-edit-note' }, 'Note'), h('textarea', { id: 'fk-edit-note', rows: '4', value: e.note, disabled: e.busy, 'data-id': 'edit-note', oninput: (ev) => (e.note = ev.target.value) })),
+    words.notice(h, 'error', e.error),
+    h(
+      'div',
+      { class: 'actions' },
+      h('button', { type: 'button', class: 'btn btn-primary', disabled: e.busy || !e.typeKey, onclick: () => saveResult(ctx), 'data-id': 'save-result' }, icon(h, 'check'), e.busy ? 'Saving…' : 'Save'),
+      h('button', { type: 'button', class: 'btn btn-quiet', disabled: e.busy, onclick: () => ctx.update({ edit: null }), 'data-id': 'cancel-result' }, 'Cancel'),
+    ),
+  );
+}
+
+/**
+ * The row's Type and Note, as on Amazon: those of the check that just
+ * finished here (just), else those a staff member chose or marked right, with
+ * when, else of its last check, else those the file already had. Its Status
+ * is not said again here: it is at the top of the page, large, with its
+ * reason.
+ */
+function resultCard(ctx, r, res, just = null) {
   const { h, words } = ctx;
-  const shown = res?.type ? { type: res.type, note: res.note, at: res.finishedAt } : r?.last ? { type: r.last.type, note: r.last.note, at: r.last.at } : null;
+  // A result a staff member changed by hand comes first: the check's own Type and Note no longer count.
+  const staff = just ? null : r?.last?.staff ?? null;
+  const shown = just ? { type: just.type, note: just.note, at: just.finishedAt } : staff ? { type: r.last.type, note: r.last.note, at: r.last.at } : res?.type ? { type: res.type, note: res.note, at: res.finishedAt } : r?.last ? { type: r.last.type, note: r.last.note, at: r.last.at } : null;
+  const when = staff ? `${staff.right ? 'Marked right' : 'Changed'} by staff on ${words.ist(staff.at)}` : shown?.at ? words.ist(shown.at) : null;
   return h(
     'section',
     { class: 'card fk-result-card', 'data-id': 'card-result' },
     h('h3', null, 'Type and Note'),
     shown
-      ? h('div', null, h('p', { class: 'fk-row-status' }, h('span', { class: 'tag', 'data-id': 'result-type' }, shown.type), ' ', shown.at ? h('span', { class: 'muted small' }, words.ist(shown.at)) : null), h('p', { class: 'fk-note-text', 'data-id': 'result-note' }, shown.note))
+      ? h('div', null, h('p', { class: 'fk-row-status' }, h('span', { class: 'tag', 'data-id': 'result-type' }, shown.type), ' ', when ? h('span', { class: 'muted small', 'data-id': 'result-when' }, when) : null), h('p', { class: 'fk-note-text', 'data-id': 'result-note' }, shown.note))
       : r?.prev
         ? h('div', null, h('p', { class: 'fk-row-status' }, h('span', { class: 'tag' }, r.prev.type || 'No Type'), ' ', h('span', { class: 'muted small' }, 'From the file')), h('p', { class: 'fk-note-text' }, r.prev.note))
         : h('p', { class: 'muted' }, 'Not checked yet.'),
@@ -1512,6 +1806,8 @@ function finalBanner(ctx, live, listed) {
   const key = res.from !== 'now' && FINAL_WORDS[res.final] ? res.final : null;
   let says;
   if (res.from === 'now') says = 'This row is being checked now.';
+  else if (key && res.from === 'check' && res.staff?.right) says = `Marked right by staff on ${ctx.words.ist(res.staff.at)}.${res.finalSays ? ` ${res.finalSays}` : ''}`;
+  else if (key && res.from === 'check' && res.staff) says = `Changed by staff on ${ctx.words.ist(res.staff.at)}. "Check again" replaces it with what the dashboard finds.`;
   else if (key && res.from === 'check') says = res.finalSays || 'This row was checked before the dashboard kept a reason for its Status. Press "Check again" to see the reason.';
   else if (key && res.from === 'file') says = 'From the file: the uploaded file already had a Status for this row.';
   else if (isDone(listed)) says = 'This row was checked before Flipkart rows were given a Status. Press "Check again" to give it one.';
@@ -1577,6 +1873,8 @@ function rowPage(ctx) {
   // What was read: the check running now, as far as it got, or the last check, kept with the row.
   const res = liveView ? liveView.result : o.result;
   const listed = arr(state.saved?.rows).find((x) => x?.id === r.id) ?? r;
+  // A check of this row that has just finished here: its Status, Type and Note show at once, before the table is fetched again.
+  const just = liveView && !liveView.running && FINAL_WORDS[liveView.result?.final] ? liveView.result : null;
   return h(
     'div',
     { key: 'row-page', 'data-id': 'row-page' },
@@ -1590,11 +1888,16 @@ function rowPage(ctx) {
         { class: 'actions' },
         h('button', { type: 'button', class: 'btn btn-primary', disabled: busy(state), onclick: () => startCheck(ctx, r.id), 'data-id': 'check' }, icon(h, single?.running ? 'spinner' : isDone(listed) ? 'refresh' : 'play', single?.running ? 'icon-spin' : ''), single?.running ? 'Checking…' : isDone(listed) ? 'Check again' : 'Check'),
         single?.running ? h('button', { type: 'button', class: 'btn btn-danger', onclick: () => stopCheck(ctx), 'data-id': 'stop' }, icon(h, 'stop'), 'Stop') : null,
+        h('button', { type: 'button', class: 'btn', disabled: busy(state) || Boolean(state.edit), title: 'Choose the Status, the Type and the Note yourself.', onclick: () => editResult(ctx, listed), 'data-id': 'change-result' }, icon(h, 'edit'), 'Change the result'),
+        // "The result is right": only for the dashboard's own result (not one staff chose).
+        isDone(listed) && listed.last && !changedByStaff(listed) ? h('button', { type: 'button', class: 'btn', disabled: busy(state) || state.marking || markedRight(listed), title: 'Counts this result as checked by staff and right.', onclick: () => markRight(ctx, listed), 'data-id': 'result-right' }, icon(h, 'check'), markedRight(listed) ? 'Marked right by staff' : state.marking ? 'Marking…' : 'The result is right') : null,
       ),
     ),
     finalBanner(ctx, liveView, listed),
+    words.notice(h, state.notice?.tone ?? 'info', state.notice?.text),
     single?.notice ? words.notice(h, single.notice.tone, single.notice.text) : null,
-    h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, listed, res), detailsCard(ctx, r), readCards(ctx, res)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
+    editForm(ctx, r),
+    h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, listed, res, just), detailsCard(ctx, r), readCards(ctx, res)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
     comparisonCard(ctx, res),
     bigPicture(ctx),
   );

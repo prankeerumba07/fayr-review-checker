@@ -1,7 +1,8 @@
 // Flipkart's own storage, only in data/flipkart/ (data/ is kept out of git and
 // never served as a file): the uploaded file (upload.xlsx or upload.csv), the
 // rows made from it with the columns found, each with its last check's steps
-// (rows.json), the pictures placed in its cells and the screenshots got for a
+// and a result a staff member changed or marked right (rows.json), the
+// pictures placed in its cells and the screenshots got for a
 // row (pictures/), Flipkart's own settings with the columns chosen last and
 // the passing marks (settings.json), the campaigns with what was read from their products'
 // Flipkart pages (campaigns.json), and each product's public reviews
@@ -43,6 +44,11 @@ export class StoreError extends Error {
 const TEXT_LIMIT = 2000;
 
 const cleanText = (v, limit = TEXT_LIMIT) => String(v ?? '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ').trim().slice(0, limit);
+
+/** What the dashboard itself said of a row, for the count of right results: its check's Status, Type key and Type. Copied from the Amazon store. */
+function dashboardSaid(check) {
+  return { final: check.final ?? null, typeKey: check.typeKey ?? null, type: check.type ?? null };
+}
 
 /** A cell of a row as kept: its words, its links, a mismatch, and how a picture was given. Copied from the Amazon store. */
 function cleanShot(s) {
@@ -461,14 +467,61 @@ export function createFlipkartStore(dataDir) {
         return row;
       });
     },
-    /** "Check every row again", as on Amazon: every row's last check goes, so the rows are checked again from the first one. Their pictures stay. -> how many had one. */
+    /**
+     * A row's result as a staff member changed it, as on Amazon: the Status
+     * (its key and its word), the Type (its key and its words) and the Note
+     * they chose, kept with when, in place of the check's own (its steps and
+     * what it read stay, so the row's page still shows them); a row not
+     * checked yet gets this result alone. "Check every row again" passes such
+     * a row by; "Check again" replaces it. -> the row as kept.
+     */
+    setStaffResult(id, { final, typeKey, note, at = new Date().toISOString() }) {
+      return locked(async () => {
+        const d = await savedRows();
+        const row = d?.rows.find((r) => r.id === id);
+        if (!row) throw new StoreError(404, 'No row has that id.');
+        if (!Object.hasOwn(FINAL_WORDS, String(final))) throw new StoreError(400, 'Choose a Status: Pass, Fail or Needs Manual Staff Checking.');
+        if (!Object.hasOwn(TYPE_WORDS, String(typeKey))) throw new StoreError(400, 'Choose a Type from the list.');
+        const c = row.check ?? null;
+        // What the dashboard itself said (never a result staff set): a change means the dashboard was wrong, for the count of right results.
+        const was = c?.final && !c.staff ? dashboardSaid(c) : c?.staff?.was ?? null;
+        row.check = { ...(c ?? { checkId: null, startedAt: null, finishedAt: null, seconds: null, steps: [] }), final, status: FINAL_WORDS[final], typeKey, type: TYPE_WORDS[typeKey], note: cleanText(note, 4000), finalSays: null, staff: { at: timeOrNull(at) ?? new Date().toISOString(), right: false, was } };
+        await writeWhole(rowsFile, JSON.stringify(d));
+        return row;
+      });
+    },
+    /**
+     * "The result is right", as on Amazon: a staff member looked at the
+     * dashboard's result and found it right. The result stays as it is,
+     * marked checked by staff and right (for the count of right results);
+     * checking the row again clears the mark. -> the row as kept.
+     */
+    markRight(id, { at = new Date().toISOString() } = {}) {
+      return locked(async () => {
+        const d = await savedRows();
+        const row = d?.rows.find((r) => r.id === id);
+        if (!row) throw new StoreError(404, 'No row has that id.');
+        if (!row.check?.final) throw new StoreError(409, 'This row has no result to mark as right. Check it first.');
+        if (row.check.staff && !row.check.staff.right) throw new StoreError(409, 'This result was chosen by staff, not by the dashboard, so it cannot be marked as right. Press "Check again" to get the dashboard\'s result first.');
+        row.check.staff = { at: timeOrNull(at) ?? new Date().toISOString(), right: true, was: dashboardSaid(row.check) };
+        await writeWhole(rowsFile, JSON.stringify(d));
+        return row;
+      });
+    },
+    /**
+     * "Check every row again", as on Amazon: every row's last check goes, so
+     * the rows are checked again from the first one; a result a staff member
+     * changed is kept, so that row is passed by, and a result only marked
+     * right by staff goes like any other (its mark with it). Their pictures
+     * stay. -> how many rows lost their check.
+     */
     clearChecks() {
       return locked(async () => {
         const d = await savedRows();
         if (!d) return 0;
         let n = 0;
         for (const r of d.rows) {
-          if (!r.check) continue;
+          if (!r.check || (r.check.staff && !r.check.staff.right)) continue;
           delete r.check;
           n++;
         }
