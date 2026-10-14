@@ -46,9 +46,16 @@
 // dashboard right. On a row's page, as on Amazon, "Change the result" (the
 // Status, the Type and the Note, then Save: "Changed by staff") and "The
 // result is right" ("Marked right by staff"), each with when; "Check again"
-// replaces a staff result, after asking. No Download button yet. The
-// local server reads and keeps the file and the campaigns, and runs the
-// checks and the Google login; this screen only shows them.
+// replaces a staff result, after asking. "Prepare email" opens the Amazon
+// screen's email box for the row: who the email is to (the reviewer's name,
+// and the email address when the file has an email address column), its
+// subject and its message, filled in for the row as on Amazon, which can be
+// changed, each with a Copy button. Unlike Amazon, nothing is ever sent from
+// here (no Send button, no Test or Real choice, no Gmail), and the box says
+// so. Beside "Check every row again", the Amazon screen's Download button:
+// "The checked Excel file" and "The results only". The local server reads
+// and keeps the file and the campaigns, and runs the checks and the Google
+// login; this screen only shows them.
 
 const BASE = '/local/flipkart';
 const ROWS = `${BASE}/rows`;
@@ -150,6 +157,8 @@ function initial() {
     rowsNotice: null, // above the table: { tone, text }
     marking: false, // "The result is right" being saved
     edit: null, // "Change the result" on a row's page: { rowId, final, typeKey, note, busy, error }
+    email: null, // "Prepare email" on a row's page: { rowId, route, loading, error, item, copied, copyError }; nothing is ever sent
+    excel: { busy: false, error: null }, // "The checked Excel file" being prepared, under Download
     thumbs: {}, // `${id}:${which}:${i}:${at}` -> object URL
     big: null, // the picture opened large: { title, url, loading, error }
     seq: { open: 0, big: 0, thumbs: 0 },
@@ -391,10 +400,11 @@ async function startLogin(ctx, what) {
 function enter(ctx) {
   const s = ctx.state;
   const here = ctx.route || '';
-  // As on Amazon: a message belongs to the page it was given on, and goes when you open another page; so does the form to change a result.
+  // As on Amazon: a message belongs to the page it was given on, and goes when you open another page; so do the form to change a result and the email box.
   if (s.notice?.route !== undefined && s.notice.route !== here) s.notice = null;
   if (here) s.rowsNotice = null;
   if (s.edit && s.edit.rowId !== here) s.edit = null;
+  if (s.email && s.email.route !== here) s.email = null;
   // Every 2 seconds the top bar asks about the Google login, and the Campaigns box looks again while products are being read.
   if (!ctx.state.poll && typeof ctx.every === 'function') {
     const stop = ctx.every(READING_POLL_MS, () => {
@@ -435,6 +445,8 @@ function reset(ctx) {
     st.campaigns.gen += 1;
     st.account.busy = false;
     st.account.seq += 1;
+    st.excel.busy = false;
+    if (st.email) st.email.loading = false;
   });
 }
 
@@ -1220,6 +1232,8 @@ async function startCheck(ctx, id) {
     st.check = run;
     st.notice = null;
     st.rowsNotice = null;
+    // The row's email was for its result before this check.
+    if (st.email?.rowId === id) st.email = null;
   });
   const isCurrent = () => s.check === run;
   const out = await ctx.local.stream('POST', `${ROWS}/${encodeURIComponent(id)}/check`, {}, (e) => {
@@ -1359,6 +1373,8 @@ async function saveResult(ctx) {
       if (out?.row) putRows(st, [out.row]);
       // A check that finished on this page no longer gives the row's result.
       if (st.check?.rowId === e.rowId && !st.check.running) st.check = null;
+      // The row's email was for its result before.
+      if (st.email?.rowId === e.rowId) st.email = null;
       st.edit = null;
       st.notice = { tone: 'good', text: 'The result was changed. This row now says "Changed by staff".', route: e.rowId };
     });
@@ -1392,6 +1408,71 @@ async function markRight(ctx, r) {
       st.marking = false;
       st.notice = { tone: 'error', text: err.message, route: r.id };
     });
+  }
+}
+
+// ---- "Prepare email": the Amazon screen's email box for one row, with nothing ever sent ----
+
+/** "Prepare email", on a row's page: the email for the row, filled in by the local server as on Amazon, to read, change and copy. */
+async function openEmail(ctx, r) {
+  const s = ctx.state;
+  if (busy(s) || !r?.id) return;
+  const box = { rowId: r.id, route: ctx.route || '', loading: true, error: null, item: null, copied: null, copyError: null };
+  ctx.update((st) => {
+    st.email = box;
+    st.notice = null;
+  });
+  try {
+    const out = await ctx.local.api('GET', `${ROWS}/${encodeURIComponent(r.id)}/email`);
+    if (s.email !== box) return;
+    ctx.update(() => Object.assign(box, { loading: false, item: out?.email && typeof out.email === 'object' ? { ...out.email } : null }));
+  } catch (err) {
+    if (s.email !== box) return;
+    ctx.update(() => Object.assign(box, { loading: false, error: err.message }));
+  }
+}
+
+const COPY_WHAT = { address: 'email address', subject: 'subject', message: 'message' };
+
+/** A Copy button pressed: the email address, the subject or the message, as the box shows it now (with any words changed), ready to paste into an email. */
+async function copyWords(ctx, which) {
+  const box = ctx.state.email;
+  const it = box?.item;
+  if (!it) return;
+  try {
+    const clipboard = globalThis.navigator?.clipboard;
+    if (typeof clipboard?.writeText !== 'function') throw new Error('No clipboard here.');
+    await clipboard.writeText(String(it[which] ?? ''));
+    if (ctx.state.email === box) ctx.update(() => Object.assign(box, { copied: which, copyError: null }));
+  } catch {
+    if (ctx.state.email === box) ctx.update(() => Object.assign(box, { copied: null, copyError: `The ${COPY_WHAT[which]} could not be copied. Select its words and copy them yourself: Command and C on a Mac, Ctrl and C on Windows.` }));
+  }
+}
+
+// ---- downloads (copied from the Amazon screen) ----
+
+/** "The results only": Row (its number on the dashboard), Order ID, Status, Type and Note. A row not checked yet has no Status. */
+function downloadCsv(ctx) {
+  const rows = [['Row', 'Order ID', 'Status', 'Type', 'Note']];
+  for (const r of arr(ctx.state.saved?.rows)) {
+    const shown = resultOf(r, null);
+    rows.push([r?.n ?? '', r?.orderId ?? '', shown.from ? FINAL_WORDS[shown.final] ?? '' : '', shown.type, shown.note]);
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  ctx.download(`flipkart-review-results-${stamp}.csv`, ctx.words.csv(rows));
+}
+
+/** "The checked Excel file": the uploaded file with each checked row's Status, Type and Note written in by the local server. */
+async function downloadExcel(ctx) {
+  const s = ctx.state;
+  if (s.excel.busy) return;
+  ctx.update((st) => (st.excel = { busy: true, error: null }));
+  try {
+    const out = await ctx.local.blob(`${BASE}/sheet/checked.xlsx`);
+    ctx.download(out?.fileName || 'checked.xlsx', out?.blob, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    ctx.update((st) => (st.excel = { busy: false, error: null }));
+  } catch (err) {
+    ctx.update((st) => (st.excel = { busy: false, error: err.message }));
   }
 }
 
@@ -1436,8 +1517,27 @@ function checkingWords(ctx, rows) {
 }
 
 /** The four Status cards and the main buttons, in one row above the table, as on Amazon: "Start checking" (or "Carry on checking"), Stop while it runs, and "Check every row again". */
-function overview(ctx, rows) {
+/** The one Download button, as on Amazon: it offers the checked Excel file and the results only. */
+function downloadMenu(ctx) {
   const { h, state } = ctx;
+  const excelOk = state.saved?.sheet?.kind === 'xlsx';
+  // The menu closes once a file is chosen.
+  const shut = (e) => e?.currentTarget?.closest?.('details')?.removeAttribute('open');
+  return h(
+    'details',
+    { class: 'fk-menu', 'data-id': 'download' },
+    h('summary', { class: 'btn' }, icon(h, state.excel.busy ? 'spinner' : 'download', state.excel.busy ? 'icon-spin' : ''), state.excel.busy ? 'Preparing…' : 'Download', icon(h, 'chevron', 'fk-menu-chevron')),
+    h(
+      'div',
+      { class: 'fk-menu-list' },
+      h('button', { type: 'button', class: 'fk-menu-item', disabled: !excelOk || state.excel.busy, title: excelOk ? null : 'Needs an Excel file uploaded.', onclick: (e) => { shut(e); downloadExcel(ctx); }, 'data-id': 'download-excel' }, icon(h, 'file'), h('span', { class: 'fk-menu-words' }, h('strong', null, 'The checked Excel file'), h('span', { class: 'fk-menu-note' }, 'Your file, with the results filled in'))),
+      h('button', { type: 'button', class: 'fk-menu-item', onclick: (e) => { shut(e); downloadCsv(ctx); }, 'data-id': 'download-csv' }, icon(h, 'table'), h('span', { class: 'fk-menu-words' }, h('strong', null, 'The results only'), h('span', { class: 'fk-menu-note' }, 'Row, order ID, Status, Type and Note'))),
+    ),
+  );
+}
+
+function overview(ctx, rows) {
+  const { h, words, state } = ctx;
   const running = Boolean(state.all?.running);
   const { total, left } = tallyOf(rows);
   const mark = running ? 'spinner' : total && !left ? 'check' : 'play';
@@ -1451,6 +1551,8 @@ function overview(ctx, rows) {
       h('button', { type: 'button', class: 'btn btn-primary', disabled: busy(state) || !left, onclick: () => checkRows(ctx), 'data-id': 'start-checking' }, icon(h, mark, running ? 'icon-spin' : ''), runWords(rows, running)),
       running ? h('button', { type: 'button', class: 'btn btn-danger', onclick: () => stopAll(ctx), 'data-id': 'stop-all' }, icon(h, 'stop'), 'Stop') : null,
       h('button', { type: 'button', class: 'btn', disabled: busy(state), onclick: () => checkEveryRowAgain(ctx), 'data-id': 'check-every-row' }, icon(h, 'refresh'), 'Check every row again'),
+      downloadMenu(ctx),
+      words.notice(h, 'error', state.excel.error),
     ),
   );
 }
@@ -1767,6 +1869,55 @@ function editForm(ctx, r) {
   );
 }
 
+/** A Copy button beside the email address, the subject or the message; "Copied" once it is. */
+function copyButton(ctx, which) {
+  const { h, state } = ctx;
+  const done = state.email?.copied === which;
+  return h('button', { type: 'button', class: 'btn btn-small btn-quiet', title: `Copies the ${COPY_WHAT[which]}, to paste into your own email.`, onclick: () => copyWords(ctx, which), 'data-id': `copy-${which}` }, icon(h, done ? 'check' : 'file'), done ? 'Copied' : 'Copy');
+}
+
+/** Words typed into the email box: kept as they are typed, and a Copy button that said "Copied" says Copy again. */
+const typedInto = (ctx, it, which) => (ev) => {
+  it[which] = ev.target.value;
+  if (ctx.state.email?.copied === which) ctx.update((st) => (st.email.copied = null));
+};
+
+/**
+ * The Amazon screen's email box for one row, with nothing ever sent: who the
+ * email is to (the reviewer's name, and the email address when the file has
+ * an email address column), its subject and its message, which can be
+ * changed, each with a Copy button; then Close. No Send button, no Test or
+ * Real choice and no Gmail, and the box says so.
+ */
+function emailBox(ctx, r) {
+  const { h, words, state } = ctx;
+  const e = state.email;
+  if (!e || e.rowId !== r.id) return null;
+  const it = e.item;
+  const noAddress = it && !it.addressOk ? (it.emailColumn ? it.addressSays : `${it.addressSays} A column named "Email", "Email ID" or "Email Address" in the next file is found by itself.`) : null;
+  return h(
+    'section',
+    { class: 'card fk-email-panel', key: 'email', 'data-id': 'email-panel' },
+    h('div', { class: 'card-head' }, h('h2', null, icon(h, 'mail'), 'Prepare email')),
+    h('p', { class: 'card-sub', 'data-id': 'email-not-sent' }, 'Nothing is sent from here. Read the email and change its words if you like, then press Copy beside the email address, the subject and the message, and paste each one into your own email.'),
+    e.loading ? h('p', { class: 'muted', role: 'status' }, 'Preparing the email…') : null,
+    words.notice(h, 'error', e.error),
+    it
+      ? h(
+          'div',
+          { class: 'fk-email-item', key: it.rowId, 'data-id': `email-${it.rowId}` },
+          h('div', { class: 'fk-email-head' }, h('h3', { 'data-id': 'email-name' }, `${it.label}: ${it.name}`)),
+          h('p', { class: 'fk-email-to fk-copy-line' }, h('span', { class: 'fk-filter-word' }, 'To: '), h('span', { 'data-id': 'email-to' }, [it.reviewer, it.address].filter(Boolean).join(', ') || 'No name and no email address in the file'), it.addressOk ? copyButton(ctx, 'address') : null),
+          noAddress ? h('p', { class: 'muted small', 'data-id': 'email-no-address' }, noAddress) : null,
+          h('div', { class: 'fk-form-field' }, h('div', { class: 'fk-copy-head' }, h('label', { class: 'label', for: 'fk-email-subject' }, 'Subject'), copyButton(ctx, 'subject')), h('input', { id: 'fk-email-subject', type: 'text', autocomplete: 'off', value: it.subject, 'data-id': 'email-subject', oninput: typedInto(ctx, it, 'subject') })),
+          h('div', { class: 'fk-form-field' }, h('div', { class: 'fk-copy-head' }, h('label', { class: 'label', for: 'fk-email-message' }, 'Message'), copyButton(ctx, 'message')), h('textarea', { id: 'fk-email-message', rows: '14', spellcheck: 'true', value: it.message, 'data-id': 'email-message', oninput: typedInto(ctx, it, 'message') })),
+          words.notice(h, 'error', e.copyError),
+        )
+      : null,
+    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn btn-quiet', onclick: () => ctx.update({ email: null }), 'data-id': 'close-email' }, 'Close')),
+  );
+}
+
 /**
  * The row's Type and Note, as on Amazon: those of the check that just
  * finished here (just), else those a staff member chose or marked right, with
@@ -1891,12 +2042,15 @@ function rowPage(ctx) {
         h('button', { type: 'button', class: 'btn', disabled: busy(state) || Boolean(state.edit), title: 'Choose the Status, the Type and the Note yourself.', onclick: () => editResult(ctx, listed), 'data-id': 'change-result' }, icon(h, 'edit'), 'Change the result'),
         // "The result is right": only for the dashboard's own result (not one staff chose).
         isDone(listed) && listed.last && !changedByStaff(listed) ? h('button', { type: 'button', class: 'btn', disabled: busy(state) || state.marking || markedRight(listed), title: 'Counts this result as checked by staff and right.', onclick: () => markRight(ctx, listed), 'data-id': 'result-right' }, icon(h, 'check'), markedRight(listed) ? 'Marked right by staff' : state.marking ? 'Marking…' : 'The result is right') : null,
+        // "Prepare email", in place of the Amazon screen's "Email this user": only when the row's Type has an email.
+        listed.emailKey ? h('button', { type: 'button', class: 'btn', disabled: busy(state) || Boolean(state.email), title: 'Shows the email for this user, to read, change and copy into your own email. Nothing is sent from here.', onclick: () => openEmail(ctx, listed), 'data-id': 'prepare-email' }, icon(h, 'mail'), 'Prepare email') : null,
       ),
     ),
     finalBanner(ctx, liveView, listed),
     words.notice(h, state.notice?.tone ?? 'info', state.notice?.text),
     single?.notice ? words.notice(h, single.notice.tone, single.notice.text) : null,
     editForm(ctx, r),
+    emailBox(ctx, r),
     h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, listed, res, just), detailsCard(ctx, r), readCards(ctx, res)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
     comparisonCard(ctx, res),
     bigPicture(ctx),

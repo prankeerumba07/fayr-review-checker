@@ -4,7 +4,8 @@
    tabs and the Google login in the top bar, the upload area with the lines about the file and the column
    chooser, the Campaigns box, the Status cards, "Start checking", the table
    of rows with the Status and Type boxes and the live checking area beside
-   it, and a row's page with "Change the result". */
+   it, the Download button, and a row's page with "Change the result" and
+   the email box ("Prepare email", with its Copy buttons). */
 
 /* ---- the top bar: marketplace tabs ---- */
 
@@ -243,7 +244,7 @@
 .fk-rows-card > div > .notice { margin: 8px 16px; }
 .fk-staff-line { display: inline-flex; align-items: center; gap: 4px; }
 .fk-staff-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 13px; color: var(--muted); }
-.fk-edit-result textarea { min-height: 6em; resize: vertical; line-height: 1.5; }
+.fk-edit-result textarea, .fk-email-item textarea { min-height: 6em; resize: vertical; line-height: 1.5; }
 @media (max-width: 760px) {
   .fk-final-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .fk-final-card-label { white-space: normal; }
@@ -275,3 +276,33 @@
 .fk-comparison-table th[scope="row"] { min-width: 7rem; white-space: normal; color: var(--text); background: var(--surface); font-weight: 500; }
 .fk-cell-text { min-width: 9rem; max-width: 22rem; }
 .fk-result-cell { min-width: 10rem; }
+
+/* ---- the email box on a row's page ("Prepare email"), like the Amazon one (views/amazon.css), under Flipkart's own names; the Copy buttons beside the email address, the subject and the message are Flipkart's own, since nothing is sent from here ---- */
+
+.fk-email-item textarea { min-height: 18em; }
+.fk-email-panel .card-head h2 { display: flex; align-items: center; gap: 8px; }
+.fk-email-panel .card-head .icon { color: #c08f2a; }
+.fk-email-item { padding: 12px 0; border-top: 1px solid var(--line); }
+.fk-email-item:first-of-type { border-top: 0; }
+.fk-email-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-bottom: 4px; }
+.fk-email-head h3 { margin: 0; }
+.fk-email-to { margin: 0 0 8px; font-size: 13px; }
+.fk-copy-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.fk-copy-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; margin-bottom: 4px; }
+.fk-copy-head .label { margin-bottom: 0; }
+
+/* ---- the Download button beside "Check every row again", like the Amazon one ---- */
+
+.fk-menu { position: relative; }
+.fk-menu > summary { list-style: none; }
+.fk-menu > summary::-webkit-details-marker { display: none; }
+.fk-menu-chevron { width: 14px; height: 14px; transition: transform .2s ease; }
+.fk-menu[open] .fk-menu-chevron { transform: rotate(180deg); }
+.fk-menu-list { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; width: 300px; padding: 4px; display: grid; gap: 2px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow-lift); animation: fk-menu-in .14s ease-out; }
+@keyframes fk-menu-in { from { opacity: 0; transform: translateY(-4px); } }
+.fk-menu-item { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 10px; font: inherit; font-size: 13px; text-align: left; color: var(--text); border: 0; border-radius: var(--radius-sm); background: transparent; cursor: pointer; transition: background-color .12s; }
+.fk-menu-item:hover:not(:disabled) { background: var(--surface-2); }
+.fk-menu-item:disabled { opacity: .5; cursor: not-allowed; }
+.fk-menu-item .icon { margin-top: 2px; color: #c08f2a; }
+.fk-menu-words { display: grid; }
+.fk-menu-note { font-size: 12px; color: var(--muted); }

@@ -21,6 +21,8 @@ const settle = async () => {
   for (let i = 0; i < 8; i++) await tick();
 };
 const classesOf = (tree) => findAll(tree, () => true).flatMap((n) => String(n.attrs?.class ?? '').split(/\s+/)).filter(Boolean);
+/** A choice in the Download menu, beside the main buttons. */
+const inMenu = (n) => String(n.attrs?.['data-id'] ?? '').startsWith('download-');
 
 const ORDER_SHOT = 'https://drive.google.com/open?id=1TestFlipkartOrder02abcd';
 const DELIVERY_SHOT = 'https://drive.google.com/open?id=1TestFlipkartDelivery02ab';
@@ -135,7 +137,7 @@ const aFile = (name = 'flipkart-orders.xlsx') => new File([Buffer.from('made-up 
 /** The Google login as the server says it, one state at a time. */
 const GOOGLE_OUT = { state: 'out', name: null, says: null, chrome: false };
 
-function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT, press = null, pages = {}, staff = null } = {}) {
+function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT, press = null, pages = {}, staff = null, emails = {}, file = null } = {}) {
   const calls = [];
   const local = {
     calls,
@@ -149,6 +151,12 @@ function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT,
       if (method === 'GET' && page) {
         if (!pages[page[1]]) throw new ApiError(404, 'No row has that id.');
         return structuredClone(pages[page[1]]);
+      }
+      // "Prepare email": the email the server fills in for a row, or its refusal.
+      const mail = /^\/local\/flipkart\/rows\/([^/]+)\/email$/.exec(path);
+      if (method === 'GET' && mail) {
+        if (!emails[mail[1]]) throw new ApiError(400, 'Row 1 has no email: its Type has none, or it is not checked yet.');
+        return { email: structuredClone(await emails[mail[1]]) };
       }
       if (method === 'GET' && path === '/local/flipkart/sheet') return structuredClone(saved);
       if (method === 'GET' && path === '/local/flipkart/campaigns') return { campaigns: [], reading: false };
@@ -171,6 +179,12 @@ function fakeLocal({ saved = NONE, answer = () => UPLOADED, google = GOOGLE_OUT,
       return local.checking ? local.checking(onEvent, signal) : { ok: true };
     },
     image: async (path) => `blob:${path}`,
+    // "The checked Excel file": what the test's server answers.
+    blob: async (path) => {
+      calls.push({ method: 'GET', path, blob: true });
+      if (!file) throw new ApiError(404, 'Not found.');
+      return file(path);
+    },
     revoke: (url) => local.revoked.push(url),
   };
   return local;
@@ -287,7 +301,8 @@ test('as on Amazon: each link a small label saying where it goes, opening in a n
   assert.deepEqual(findAll(table, (n) => /\bfk-col-letter\b/.test(n.attrs?.class ?? '')).map(textOf), [...LETTERS]);
   const page = s.page();
   assert.deepEqual(findAll(page, (n) => n.tag === 'button' && /^(Check|Check again)$/.test(textOf(n))).map((n) => n.attrs['data-id']), ['check-r000000000001', 'check-r000000000002', 'check-r000000000003'], 'a Check button for each row');
-  assert.deepEqual(findAll(byId(page, 'main-actions'), (n) => n.tag === 'button').map(textOf), ['Start checking', 'Check every row again'], 'above the table, as on Amazon');
+  assert.deepEqual(findAll(byId(page, 'main-actions'), (n) => n.tag === 'button' && !inMenu(n)).map(textOf), ['Start checking', 'Check every row again'], 'above the table, as on Amazon');
+  assert.deepEqual([findAll(byId(page, 'main-actions'), (n) => n.tag === 'details').map((n) => n.attrs['data-id']), textOf(findAll(byId(page, 'download'), (n) => n.tag === 'summary')[0])], [['download'], 'Download'], 'then the Download button, as on Amazon');
   assert.deepEqual(findAll(byId(page, 'counts'), (n) => n.tag === 'button').map(textOf), ['Pass0', 'Fail0', 'Needs Manual Staff Checking0', 'Not checked yet3'], 'beside them, the four Status cards, as on Amazon');
   assert.equal(findAll(table, (n) => n.tag === 'img').length, 0, 'no picture is shown or fetched in the table');
   assert.deepEqual(s.local.calls.map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/sheet', 'GET /local/flipkart/campaigns', 'GET /local/flipkart/account'], 'a link is only opened when it is pressed');
@@ -877,7 +892,7 @@ test('"Start checking", as on Amazon: the rows checked one by one from the first
   const s = await opened(local);
   const shown = [];
   s.ctx.reveal = (id, block) => shown.push([id, block]);
-  const buttons = () => findAll(byId(s.page(), 'main-actions'), (n) => n.tag === 'button').map((b) => [b.attrs['data-id'], textOf(b), Boolean(b.attrs.disabled)]);
+  const buttons = () => findAll(byId(s.page(), 'main-actions'), (n) => n.tag === 'button' && !inMenu(n)).map((b) => [b.attrs['data-id'], textOf(b), Boolean(b.attrs.disabled)]);
   assert.deepEqual(buttons(), [['start-checking', 'Start checking', false], ['check-every-row', 'Check every row again', false]]);
   assert.equal(byId(s.page(), 'run'), null, 'no checking area before rows are checked');
   let release;
@@ -1205,6 +1220,137 @@ test('a staff member changing a row\'s result, as on Amazon: on its page, "Chang
   assert.deepEqual([textOf(byId(all.page(), 'rows-notice')), all.local.calls.filter((c) => c.stream).length], ['The 1 row was changed by staff, so it keeps its result and there is nothing to check again.', 0]);
 });
 
+/** The email the server fills in for Row 1, as "Prepare email" shows it. Made-up words. */
+const EMAIL = { rowId: 'r000000000001', label: 'Row 1', reviewer: 'Test Person Two', reviewerColumn: true, orderId: 'OD100000000000000002', address: 'test.person2@example.test', addressOk: true, addressSays: null, emailColumn: true, key: 'reviewNotLive', name: 'Review not live', subject: 'Your order OD100000000000000002: please send the link to your review', message: 'Hello Test Person Two,\n\nMade-up words of the email.\n\nThank you,\nThe support team' };
+
+/** The clipboard, as the browser has it: what each Copy button copied, or a refusal. */
+function clipboard(refuse = false) {
+  const copied = [];
+  const writeText = async (text) => {
+    if (refuse) throw new Error('Made-up refusal.');
+    copied.push(text);
+  };
+  Object.defineProperty(globalThis.navigator, 'clipboard', { configurable: true, value: { writeText } });
+  return copied;
+}
+
+test('"Prepare email" on a row\'s page, the Amazon screen\'s email box for the row: who it is to, its subject and its message, filled in for the row, which can be changed; a Copy button beside the email address, the subject and the message copies each one; nothing is ever sent (no Send button, no Test or Real choice), and the box says so', async () => {
+  const rows = checkedRows().map((r, i) => ({ ...r, emailKey: i === 0 ? 'reviewNotLive' : null }));
+  const saved = { ...SAVED, rows, types: TYPES };
+  const pages = { r000000000001: { row: rows[0], result: null }, r000000000002: { row: rows[1], result: null } };
+  const local = fakeLocal({ saved, pages, emails: { r000000000001: EMAIL } });
+  const copied = clipboard();
+  try {
+    const s = await rowScreen(local);
+    const box = () => byId(s.page(), 'email-panel');
+    assert.equal(box(), null, 'no email box until "Prepare email" is pressed');
+    const prepare = byId(s.page(), 'prepare-email');
+    assert.deepEqual([textOf(prepare), Boolean(prepare.attrs.disabled)], ['Prepare email', false]);
+    // In the place of "Email this user" on Amazon: after "The result is right".
+    assert.deepEqual(findAll(byId(s.page(), 'row-page'), (n) => n.tag === 'button' && ['check', 'change-result', 'result-right', 'prepare-email'].includes(n.attrs?.['data-id'])).map((b) => b.attrs['data-id']), ['check', 'change-result', 'result-right', 'prepare-email']);
+    prepare.attrs.onclick();
+    await settle();
+    assert.deepEqual(local.calls.filter((c) => c.path.endsWith('/email')).map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/rows/r000000000001/email']);
+    assert.equal(byId(s.page(), 'prepare-email').attrs.disabled, true, 'once open, it is not opened again');
+    assert.deepEqual([textOf(findAll(box(), (n) => n.tag === 'h2')[0]), textOf(byId(box(), 'email-not-sent')), textOf(byId(box(), 'email-name')), textOf(byId(box(), 'email-to')), byId(box(), 'email-subject').attrs.value, byId(box(), 'email-message').attrs.value], ['Prepare email', 'Nothing is sent from here. Read the email and change its words if you like, then press Copy beside the email address, the subject and the message, and paste each one into your own email.', 'Row 1: Review not live', 'Test Person Two, test.person2@example.test', EMAIL.subject, EMAIL.message]);
+    // A Copy button beside the address, the subject and the message, then Close: no Send button, no Test or Real choice, no test email address.
+    assert.deepEqual(findAll(box(), (n) => n.tag === 'button').map((b) => [b.attrs['data-id'], textOf(b)]), [['copy-address', 'Copy'], ['copy-subject', 'Copy'], ['copy-message', 'Copy'], ['close-email', 'Close']]);
+    assert.equal(findAll(box(), (n) => n.tag === 'input' && n.attrs.type !== 'text').length, 0, 'no tick box and no Test or Real choice');
+    assert.doesNotMatch(textOf(box()), /\bSend\b|Gmail|Test email address|Real:/);
+    // The words can be changed, and each Copy copies them as they are now.
+    byId(box(), 'email-subject').attrs.oninput({ target: { value: 'Made-up subject, changed' } });
+    byId(box(), 'copy-subject').attrs.onclick();
+    await settle();
+    byId(box(), 'copy-address').attrs.onclick();
+    await settle();
+    byId(box(), 'email-message').attrs.oninput({ target: { value: 'Made-up message, changed' } });
+    byId(box(), 'copy-message').attrs.onclick();
+    await settle();
+    assert.deepEqual(copied, ['Made-up subject, changed', 'test.person2@example.test', 'Made-up message, changed']);
+    assert.deepEqual(['copy-address', 'copy-subject', 'copy-message'].map((id) => textOf(byId(box(), id))), ['Copy', 'Copy', 'Copied'], 'the last one copied says so');
+    // A copy the browser refuses says what to do instead.
+    clipboard(true);
+    byId(box(), 'copy-subject').attrs.onclick();
+    await settle();
+    assert.match(textOf(box()), /The subject could not be copied\. Select its words and copy them yourself: Command and C on a Mac, Ctrl and C on Windows\./);
+    // Close puts it away; it goes too when another page is opened.
+    byId(box(), 'close-email').attrs.onclick();
+    assert.equal(box(), null);
+    byId(s.page(), 'prepare-email').attrs.onclick();
+    await settle();
+    assert.ok(box());
+    s.ctx.route = '';
+    flipkart.enter(s.ctx);
+    await settle();
+    assert.equal(s.state.email, null, 'the email box belongs to the page it was opened on');
+    // A row whose Type has no email (a Pass) has no "Prepare email".
+    const pass = await rowScreen(local, 'r000000000002');
+    assert.equal(byId(pass.page(), 'prepare-email'), null);
+  } finally {
+    delete globalThis.navigator.clipboard;
+  }
+});
+
+test('"Prepare email" says when there is no email address to copy (the file has no email address column, or nothing for this row), and why a row has no email', async () => {
+  const rows = checkedRows().map((r, i) => ({ ...r, emailKey: i === 0 ? 'reviewNotLive' : null }));
+  const saved = { ...SAVED, rows, types: TYPES };
+  const pages = { r000000000001: { row: rows[0], result: null } };
+  const open = async (email) => {
+    const s = await rowScreen(fakeLocal({ saved, pages, emails: email ? { r000000000001: email } : {} }));
+    byId(s.page(), 'prepare-email').attrs.onclick();
+    await settle();
+    return byId(s.page(), 'email-panel');
+  };
+  const noColumn = await open({ ...EMAIL, address: '', addressOk: false, addressSays: 'This file has no email address column.', emailColumn: false });
+  assert.deepEqual([textOf(byId(noColumn, 'email-to')), byId(noColumn, 'copy-address'), textOf(byId(noColumn, 'email-no-address'))], ['Test Person Two', null, 'This file has no email address column. A column named "Email", "Email ID" or "Email Address" in the next file is found by itself.']);
+  const empty = await open({ ...EMAIL, address: '', addressOk: false, addressSays: 'There is no email address in the file for this row.' });
+  assert.deepEqual([textOf(byId(empty, 'email-to')), textOf(byId(empty, 'email-no-address'))], ['Test Person Two', 'There is no email address in the file for this row.']);
+  const nobody = await open({ ...EMAIL, reviewer: '', reviewerColumn: false, address: '', addressOk: false, addressSays: 'This file has no email address column.', emailColumn: false });
+  assert.equal(textOf(byId(nobody, 'email-to')), 'No name and no email address in the file');
+  const refused = await open(null);
+  assert.match(textOf(refused), /Row 1 has no email: its Type has none, or it is not checked yet\./);
+  assert.equal(byId(refused, 'email-subject'), null);
+});
+
+test('the Download button beside "Check every row again", as on Amazon: "The checked Excel file" (the uploaded file with the results filled in, from the local server) and "The results only" (Row, Order ID, Status, Type and Note, a Status the file already had too); for a CSV file, only "The results only"', async () => {
+  const rows = [...checkedRows().slice(0, 2), { ...structuredClone(SAVED.rows[2]), prev: { status: 'Fail', type: 'Not delivered', note: 'Made-up note from the file.' }, prevFinal: 'fail', final: 'fail' }];
+  let answer = () => ({ blob: 'made-up bytes', fileName: 'flipkart-orders checked 2026-10-14.xlsx' });
+  const local = fakeLocal({ saved: { ...SAVED, rows, types: TYPES }, file: (path) => answer(path) });
+  const s = await opened(local);
+  const saves = [];
+  s.ctx.download = (name, data, type) => saves.push({ name, data, type });
+  const menu = () => byId(s.page(), 'download');
+  const summary = () => textOf(findAll(menu(), (n) => n.tag === 'summary')[0]);
+  const items = () => findAll(menu(), (n) => n.tag === 'button').map((b) => [b.attrs['data-id'], textOf(b), Boolean(b.attrs.disabled)]);
+  assert.deepEqual([menu().tag, summary()], ['details', 'Download']);
+  assert.deepEqual(items(), [['download-excel', 'The checked Excel fileYour file, with the results filled in', false], ['download-csv', 'The results onlyRow, order ID, Status, Type and Note', false]]);
+  // "The results only": made on this page, as on Amazon.
+  byId(s.page(), 'download-csv').attrs.onclick({});
+  assert.equal(saves.length, 1);
+  assert.match(saves[0].name, /^flipkart-review-results-\d{4}-\d{2}-\d{2}\.csv$/);
+  assert.equal(saves[0].data, words.csv([['Row', 'Order ID', 'Status', 'Type', 'Note'], [1, 'OD100000000000000002', 'Needs Manual Staff Checking', 'Review not live', MANUAL_LAST.note], [2, 'OD100000000000000003', 'Pass', 'Verified', PASS_LAST.note], [3, '', 'Fail', 'Not delivered', 'Made-up note from the file.']]));
+  // "The checked Excel file": from the local server, "Preparing…" while it comes; a refusal is said.
+  let release;
+  answer = () => new Promise((r) => (release = () => r({ blob: 'made-up bytes', fileName: 'flipkart-orders checked 2026-10-14.xlsx' })));
+  byId(s.page(), 'download-excel').attrs.onclick({});
+  await settle();
+  assert.deepEqual([summary(), items()[0][2]], ['Preparing…', true]);
+  release();
+  await settle();
+  assert.deepEqual(local.calls.filter((c) => c.blob).map((c) => c.path), ['/local/flipkart/sheet/checked.xlsx']);
+  assert.deepEqual([summary(), saves[1]], ['Download', { name: 'flipkart-orders checked 2026-10-14.xlsx', data: 'made-up bytes', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }]);
+  answer = () => {
+    throw new ApiError(400, 'The Type cell of Row 2 holds a formula, so a result cannot be written there.');
+  };
+  byId(s.page(), 'download-excel').attrs.onclick({});
+  await settle();
+  assert.match(textOf(byId(s.page(), 'main-actions')), /The Type cell of Row 2 holds a formula, so a result cannot be written there\./);
+  // A CSV file: no Excel file to fill in.
+  const csv = await opened(fakeLocal({ saved: { ...CSV_SAVED, types: TYPES } }));
+  const excel = byId(csv.page(), 'download-excel');
+  assert.deepEqual([Boolean(excel.attrs.disabled), excel.attrs.title, Boolean(byId(csv.page(), 'download-csv').attrs.disabled)], [true, 'Needs an Excel file uploaded.', false]);
+});
+
 test('the tabs go to the right screen: Amazon to #/amazon from the Flipkart screen, Flipkart to #/flipkart from the Amazon screen', () => {
   const s = screen(flipkart);
   byId(s.draw(), 'market-amazon').attrs.onclick({ stopPropagation() {} });
@@ -1298,6 +1444,16 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   const staffPage = await rowScreen(staffLocal);
   byId(staffPage.page(), 'change-result').attrs.onclick();
   add(staffPage);
+  // "Prepare email" open on a row's page, and the Download button while the checked Excel file is prepared.
+  const mailRow = { ...staffRow, emailKey: 'reviewNotLive' };
+  const mailPage = await rowScreen(fakeLocal({ saved: { ...SAVED, rows: [mailRow, SAVED.rows[1], SAVED.rows[2]], types: TYPES }, pages: { r000000000001: { row: mailRow, result: LAST_CHECK } }, emails: { r000000000001: EMAIL } }));
+  byId(mailPage.page(), 'prepare-email').attrs.onclick();
+  await settle();
+  add(mailPage);
+  const preparing = await opened(fakeLocal({ saved: SAVED, file: () => new Promise(() => {}) }));
+  byId(preparing.page(), 'download-excel').attrs.onclick({});
+  await settle();
+  add(preparing);
   for (const cls of used) {
     const from = cls.startsWith('fk-') ? css : shared;
     assert.match(from, new RegExp(`\\.${cls}\\b`), `${cls}: from ${cls.startsWith('fk-') ? 'views/flipkart.css' : 'styles.css'}`);
@@ -1352,7 +1508,7 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
     ['.fk-final-card-none .fk-final-card-label', '.final-card-none .final-card-label'],
     ...['pass', 'fail', 'manual', 'none'].map((k) => [`.fk-final-card-${k}[aria-pressed="true"]`, `.final-card-${k}[aria-pressed="true"]`]),
     ['.fk-filters', '.filters'], ['.fk-filter', '.filter'], ['.fk-filter-word', '.filter-word'], ['.fk-filter select', '.filter select'], ['.fk-rows-card > div > .notice', '.rows-card > div > .notice'],
-    ['.fk-staff-line', '.staff-line'], ['.fk-staff-stats', '.staff-stats'], ['.fk-edit-result textarea', '.edit-result textarea, .email-item textarea, .template textarea, .sign-off textarea'],
+    ['.fk-staff-line', '.staff-line'], ['.fk-staff-stats', '.staff-stats'], ['.fk-edit-result textarea, .fk-email-item textarea', '.edit-result textarea, .email-item textarea, .template textarea, .sign-off textarea'],
   ]) {
     assert.ok(rule(amazonCss, theirs), `${theirs} is an Amazon rule`);
     assert.equal(rule(css, mine), rule(amazonCss, theirs), `${mine} is the same as ${theirs}`);
@@ -1360,6 +1516,18 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   const small = (src) => src.match(/@media \(max-width: 760px\) \{([^]*?)\n\}/)?.[1] ?? null;
   assert.equal(small(css), small(amazonCss).replaceAll('.final-card', '.fk-final-card').replace('.account, .filters, .slim-actions', '.fk-account, .fk-filters, .fk-slim-actions'), 'in a narrow window, two cards to a line, as on Amazon');
   for (const cls of ['fk-final-cards', 'fk-final-card', 'fk-final-card-pass', 'fk-final-card-fail', 'fk-final-card-manual', 'fk-final-card-none', 'fk-final-card-label', 'fk-final-card-num', 'fk-filters', 'fk-filter', 'fk-filter-word', 'fk-staff-line', 'fk-staff-stats', 'fk-edit-result', 'fk-form-grid', 'fk-form-field', 'fk-wide']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
+  // The email box ("Prepare email") and the Download button look like the Amazon ones too; the Copy buttons are Flipkart's own.
+  for (const [mine, theirs] of [
+    ['.fk-email-item textarea', '.email-item textarea'], ['.fk-email-panel .card-head h2', '.email-panel .card-head h2'], ['.fk-email-panel .card-head .icon', '.email-panel .card-head .icon, .templates h3 .icon'],
+    ['.fk-email-item', '.email-item'], ['.fk-email-item:first-of-type', '.email-item:first-of-type'], ['.fk-email-head', '.email-head'], ['.fk-email-head h3', '.email-head h3'], ['.fk-email-to', '.email-to'],
+    ['.fk-menu', '.menu'], ['.fk-menu > summary', '.menu > summary'], ['.fk-menu > summary::-webkit-details-marker', '.menu > summary::-webkit-details-marker'], ['.fk-menu-chevron', '.menu-chevron'], ['.fk-menu[open] .fk-menu-chevron', '.menu[open] .menu-chevron'],
+    ['.fk-menu-item', '.menu-item'], ['.fk-menu-item:hover:not(:disabled)', '.menu-item:hover:not(:disabled)'], ['.fk-menu-item:disabled', '.menu-item:disabled'], ['.fk-menu-item .icon', '.menu-item .icon'], ['.fk-menu-words', '.menu-words'], ['.fk-menu-note', '.menu-note'], ['@keyframes fk-menu-in', '@keyframes menu-in'],
+  ]) {
+    assert.ok(rule(amazonCss, theirs), `${theirs} is an Amazon rule`);
+    assert.equal(rule(css, mine), rule(amazonCss, theirs), `${mine} is the same as ${theirs}`);
+  }
+  assert.equal(rule(css, '.fk-menu-list'), rule(amazonCss, '.menu-list').replace('menu-in', 'fk-menu-in'), 'the Download menu, opening the same way');
+  for (const cls of ['fk-email-panel', 'fk-email-item', 'fk-email-head', 'fk-email-to', 'fk-copy-line', 'fk-copy-head', 'fk-menu', 'fk-menu-chevron', 'fk-menu-list', 'fk-menu-item', 'fk-menu-words', 'fk-menu-note']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
   const wide = (src) => src.match(/@media \(max-width: 1200px\) \{([^]*?)\n\}/)?.[1] ?? null;
   assert.equal(wide(css), wide(amazonCss).replaceAll('.rows-layout.with-live', '.fk-rows-layout.fk-with-live').replaceAll('.live-panel', '.fk-live-panel'), 'in a narrower window, the checking area goes under the table, as on Amazon');
   for (const cls of ['fk-overview', 'fk-main-actions', 'fk-rows-layout', 'fk-with-live', 'fk-rows-main', 'fk-current-row', 'fk-live-panel', 'fk-live-head', 'fk-run-progress', 'fk-live-links', 'fk-live-flat', 'fk-steps-flat', 'fk-read', 'fk-ocr-text', 'fk-comparison-table', 'fk-cell-text', 'fk-result-cell', 'fields', 'field-row']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);

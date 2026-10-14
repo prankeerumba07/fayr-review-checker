@@ -31,12 +31,14 @@ import { parseReviewShot } from '../flipkart/review-read.js';
 import { DEFAULT_MARKS } from '../flipkart/settings.js';
 import { tinyPng } from './fixtures/flipkart/zip-tools.mjs';
 import { MAX_SHEET_BYTES, createFlipkartStore, putCampaign } from '../flipkart/store.js';
+import { readZip } from '../flipkart/zip.js';
+import { tabsOf } from '../flipkart/ooxml.js';
 import { TYPE_WORDS } from '../flipkart/final.js';
 import { ONLY_FLIPKART_NAMES } from '../flipkart/browser.js';
 import { isFlipkartSite, pageForPid } from '../flipkart/links.js';
 import { createStore } from '../amazon/store.js';
 import { createAmazonRoutes } from '../amazon/routes.js';
-import { FILE, HEADER, orderId, orderShot, deliveryShot, reviewLink, reviewShot, person } from './fixtures/flipkart/make-flipkart.mjs';
+import { FILE, HEADER, orderId, orderShot, deliveryShot, reviewLink, reviewShot, person, email as emailOf } from './fixtures/flipkart/make-flipkart.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURE = readFileSync(FILE);
@@ -978,9 +980,10 @@ test('a result a staff member changed or marked right, over HTTP, as on Amazon: 
   // A row not checked yet can be given a result too, with nothing the dashboard said; "Start checking" then passes it by.
   const given = (await change(three, { final: 'manual', typeKey: 'somethingElse', note: 'Made-up.' })).json.row;
   assert.deepEqual([given.done, given.final, given.last.staff.was], [true, 'manual', null]);
-  // The Type list comes with the rows, in the Amazon screen's order.
+  // The Type list comes with the rows, in the Amazon screen's order, without "Amazon review is deleted", which a Flipkart row never gets; a staff member cannot choose it either.
   const sheet = (await call('GET', '/local/flipkart/sheet', { at })).json;
-  assert.deepEqual([sheet.types.length, sheet.types[0], sheet.types.at(-1)], [23, { key: 'verified', word: 'Verified' }, { key: 'somethingElse', word: 'Something else' }]);
+  assert.deepEqual([sheet.types.length, sheet.types[0], sheet.types.at(-1), sheet.types.some((t) => t.key === 'reviewDeleted' || /amazon/i.test(t.word))], [22, { key: 'verified', word: 'Verified' }, { key: 'somethingElse', word: 'Something else' }, false]);
+  assert.deepEqual([(await change(three, { final: 'fail', typeKey: 'reviewDeleted' })).json.message], ['Choose a Type from the list.']);
   // After a restart, all of it is still there.
   const at2 = await serve({ flipkart: make() });
   const staffOf = async (row) => (await listed(row, at2)).last?.staff ?? null;
@@ -994,4 +997,77 @@ test('a result a staff member changed or marked right, over HTTP, as on Amazon: 
   const again = lines(await call('POST', `/local/flipkart/rows/${one.id}/check`, json({})));
   const now1 = await listed(one);
   assert.deepEqual([again.at(-1).event, now1.last.staff, now1.last.final, now1.last.type], ['done', null, again.at(-1).result.final, again.at(-1).result.type]);
+});
+
+test('"Prepare email" over HTTP, as on Amazon: the email for a row, filled in from its result and the file, with who it is to (the name in the Reviewer Name column, and the address in the email address column); none for a Pass or a row with no result; nothing is ever sent', async () => {
+  const { dir, at } = await fresh();
+  const json = (body) => ({ at, body: Buffer.from(JSON.stringify(body)), type: 'application/json' });
+  assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
+  const rows = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  assert.deepEqual(rows.map((r) => r.emailKey), rows.map(() => null), 'no row has a result yet');
+  const change = async (row, typeKey, final = 'fail') => (await call('POST', `/local/flipkart/rows/${row.id}/result`, json({ final, typeKey, note: 'Made-up.' }))).json.row;
+  const email = (row) => call('GET', `/local/flipkart/rows/${row.id}/email`, { at });
+  const refused = await email(rows[0]);
+  assert.deepEqual([refused.status, refused.json.message], [400, 'Row 1 has no email: its Type has none, or it is not checked yet.']);
+  // Row 1: its Type has an email, which "Prepare email" shows.
+  assert.equal((await change(rows[0], 'orderShotMissing')).emailKey, 'orderShotMissing');
+  const got = await email(rows[0]);
+  assert.equal(got.status, 200, got.text);
+  const e = got.json.email;
+  assert.deepEqual([e.rowId, e.label, e.reviewer, e.reviewerColumn, e.orderId, e.address, e.addressOk, e.addressSays, e.emailColumn, e.key, e.name, e.subject], [rows[0].id, 'Row 1', person(2), true, orderId(2), emailOf(2), true, null, true, 'orderShotMissing', 'Purchase screenshot missing', `Your order ${orderId(2)}: please send the purchase screenshot`]);
+  assert.ok(e.message.startsWith(`Hello ${person(2)},\n\nThis is about your order ${orderId(2)} for Test Brand Steel Bottle.\n\nThe purchase screenshot was not added in the form, so we cannot see the order.\n\nPlease reply to this email with the purchase screenshot: a screenshot of this order on Flipkart`), e.message);
+  assert.ok(e.message.endsWith('\n\nThank you,\nThe support team'), e.message);
+  // Row 4 has no email address in the file; a Pass has no email; and the row with a staff result changed to Something else gets that email.
+  assert.equal((await change(rows[3], 'reviewNotLive', 'manual')).emailKey, 'reviewNotLive');
+  const noAddress = (await email(rows[3])).json.email;
+  assert.deepEqual([noAddress.reviewer, noAddress.address, noAddress.addressOk, noAddress.addressSays, noAddress.key, noAddress.subject], [person(6), '', false, 'There is no email address in the file for this row.', 'reviewNotLive', `Your order ${orderId(6)}: please send the link to your review`]);
+  assert.equal((await change(rows[1], 'verified', 'pass')).emailKey, null);
+  assert.deepEqual([(await email(rows[1])).status, (await email(rows[1])).json.message], [400, 'Row 2 has no email: its Type has none, or it is not checked yet.']);
+  assert.equal((await change(rows[1], 'somethingElse', 'manual')).emailKey, 'somethingElse');
+  assert.equal((await email(rows[1])).json.email.subject, `Your order ${orderId(3)}: we could not finish checking it`);
+  const post = await call('POST', `/local/flipkart/rows/${rows[0].id}/email`, json({}));
+  assert.deepEqual([post.status, post.headers.allow, (await call('GET', '/local/flipkart/rows/r999999999999/email', { at })).status], [405, 'GET, HEAD', 404]);
+  // A file with no email address column and no Reviewer Name column: no name and no address.
+  assert.equal((await upload(at, 'flipkart orders.csv', Buffer.from(`Order ID,Product,Review Link\n${orderId(8)},Test Brand Mug,${reviewLink(8)}\n`))).status, 200);
+  const [only] = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  await change(only, 'duplicate');
+  const bare = (await email(only)).json.email;
+  assert.deepEqual([bare.reviewer, bare.reviewerColumn, bare.address, bare.addressOk, bare.addressSays, bare.emailColumn], ['', false, '', false, 'This file has no email address column.', false]);
+  assert.ok(bare.message.startsWith(`Hello,\n\nThis is about your order ${orderId(8)} for Test Brand Mug.\n\nThe same order, screenshot or review was already sent for another entry.`), bare.message);
+  // Nothing is ever sent: there is no route that sends, and nothing is kept about an email.
+  for (const path of ['/local/flipkart/emails/send', '/local/flipkart/emails/preview', '/local/flipkart/email-address']) assert.equal((await call('POST', path, json({}))).status, 404, path);
+  assert.deepEqual(filesIn(dir), ['flipkart/rows.json', 'flipkart/settings.json', 'flipkart/upload.csv']);
+});
+
+test('"The checked Excel file" over HTTP, as on Amazon: the uploaded file with each checked row\'s Status, Type and Note written in (a staff member\'s too), the Status, Type and Note columns the file did not have added after its last column with their headings, a Note\'s lines each on its own line, and every other part of the file as it was; none for a CSV file', async () => {
+  const { dir, at } = await fresh();
+  const json = (body) => ({ at, body: Buffer.from(JSON.stringify(body)), type: 'application/json' });
+  const checked = () => call('GET', '/local/flipkart/sheet/checked.xlsx', { at });
+  assert.deepEqual([(await checked()).status, (await checked()).json.message], [400, 'Upload the Excel file first.']);
+  assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
+  const rows = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  await call('POST', `/local/flipkart/rows/${rows[0].id}/result`, json({ final: 'fail', typeKey: 'orderShotMissing', note: 'Made-up first line.\nMade-up second line.' }));
+  await call('POST', `/local/flipkart/rows/${rows[3].id}/result`, json({ final: 'pass', typeKey: 'verified', note: 'Made-up.' }));
+  const got = await checked();
+  assert.equal(got.status, 200, got.text);
+  assert.equal(got.headers['content-type'], 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  assert.match(got.headers['content-disposition'], /^attachment; filename="flipkart-orders checked \d{4}-\d{2}-\d{2}\.xlsx"; filename\*=UTF-8''flipkart-orders%20checked%20\d{4}-\d{2}-\d{2}\.xlsx$/);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(got.data);
+  const ws = wb.getWorksheet('Flipkart');
+  const results = (n) => ['K', 'L', 'M'].map((c) => ws.getCell(`${c}${n}`).text);
+  assert.deepEqual([1, 2, 3, 4, 6].map(results), [['Status', 'Type', 'Note'], ['Fail', 'Purchase screenshot missing', 'Made-up first line.\nMade-up second line.'], ['', '', ''], ['', '', ''], ['Pass', 'Verified', 'Made-up.']], 'Row 1 is the file\'s row 2, and Row 4 its row 6');
+  assert.equal(ws.getCell('M2').alignment?.wrapText, true, "the Note's lines each on its own line");
+  assert.deepEqual([ws.getCell('A2').text, ws.getCell('F2').hyperlink, ws.getCell('E6').text], [orderId(2), orderShot(2), person(6)], "the file's own cells as they were");
+  // Every other part of the file stays byte for byte the same: the other tabs, the pictures, the links.
+  const [was, now] = [readZip(FIXTURE), readZip(got.data)];
+  const tabPart = tabsOf(was).find((t) => t.name === 'Flipkart').part;
+  assert.deepEqual([...now.keys()].sort(), [...was.keys()].sort(), 'no part added or left out');
+  for (const name of was.keys()) if (name !== tabPart && name !== 'xl/styles.xml') assert.ok(was.get(name)().equals(now.get(name)()), `${name} is as it was`);
+  assert.ok(readFileSync(join(dir, 'flipkart', 'upload.xlsx')).equals(FIXTURE), 'the kept file is not changed');
+  const post = await call('POST', '/local/flipkart/sheet/checked.xlsx', json({}));
+  assert.deepEqual([post.status, post.headers.allow], [405, 'GET, HEAD']);
+  // A CSV file: only "The results only".
+  assert.equal((await upload(at, 'flipkart orders.csv', Buffer.from(`Order ID,Reviewer Name,Review Link\n${orderId(2)},${person(2)},${reviewLink(2)}\n`))).status, 200);
+  assert.deepEqual([(await checked()).status, (await checked()).json.message], [400, 'The uploaded sheet is not an Excel file, so there is no Excel file to fill in. Press "Download", then "The results only", instead.']);
 });

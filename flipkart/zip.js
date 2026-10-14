@@ -1,9 +1,10 @@
 // Reading a zip file, such as an .xlsx (an Excel file is a zip of XML files
-// and pictures). Copied from the Amazon reader (amazon/zip.js), reading only.
-// Built on Node's own zlib; limited, so a hostile file cannot fill this
-// computer's memory.
+// and pictures), and replacing some of its parts while every other part stays
+// byte for byte the same, for the checked Excel file. Copied from the Amazon
+// reader (amazon/zip.js). Built on Node's own zlib; limited, so a hostile
+// file cannot fill this computer's memory.
 
-import { inflateRawSync } from 'node:zlib';
+import { inflateRawSync, deflateRawSync, crc32 } from 'node:zlib';
 
 export const MAX_ENTRIES = 5000;
 export const MAX_TOTAL_BYTES = 300 * 1024 * 1024;
@@ -69,4 +70,82 @@ export function readZip(buffer) {
     });
   }
   return entries;
+}
+
+/**
+ * The zip with some entries' bytes replaced, every other entry copied byte
+ * for byte as it was (its header, its packed bytes, anything after them).
+ * Only the table of contents is written again, for the new places and sizes.
+ * replacements: Map from an entry's name to its new (unpacked) bytes.
+ */
+export function replaceInZip(buffer, replacements) {
+  const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer ?? []);
+  readZip(buf); // refuses anything that is not a plain zip
+  const end = endOfDirectory(buf);
+  const count = buf.readUInt16LE(end + 10);
+  const dirStart = buf.readUInt32LE(end + 16);
+  const entries = [];
+  let p = dirStart;
+  for (let n = 0; n < count; n++) {
+    const nameLen = buf.readUInt16LE(p + 28);
+    const extraLen = buf.readUInt16LE(p + 30);
+    const commentLen = buf.readUInt16LE(p + 32);
+    const flags = buf.readUInt16LE(p + 8);
+    const name = buf.toString(flags & 0x800 ? 'utf8' : 'latin1', p + 46, p + 46 + nameLen);
+    entries.push({ name, central: buf.subarray(p, p + 46 + nameLen + extraLen + commentLen), local: buf.readUInt32LE(p + 42) });
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  for (const name of replacements.keys()) if (!entries.some((e) => e.name === name)) throw new Error(`The Excel file has no part named ${name}.`);
+  const byPlace = [...entries].sort((a, b) => a.local - b.local);
+  const out = [];
+  let at = 0;
+  const newPlace = new Map();
+  const newCentral = new Map();
+  byPlace.forEach((e, i) => {
+    const stop = i + 1 < byPlace.length ? byPlace[i + 1].local : dirStart;
+    newPlace.set(e, at);
+    if (!replacements.has(e.name)) {
+      const raw = buf.subarray(e.local, stop);
+      out.push(raw);
+      at += raw.length;
+      return;
+    }
+    const data = Buffer.from(replacements.get(e.name));
+    const packed = deflateRawSync(data);
+    const crc = crc32(data) >>> 0;
+    const oldLocal = buf.subarray(e.local, e.local + 30);
+    const nameLen = oldLocal.readUInt16LE(26);
+    const nameBytes = buf.subarray(e.local + 30, e.local + 30 + nameLen);
+    const head = Buffer.alloc(30);
+    oldLocal.copy(head, 0, 0, 30);
+    head.writeUInt16LE(20, 4);
+    head.writeUInt16LE(oldLocal.readUInt16LE(6) & 0x800, 6); // keeps "the name is UTF-8"; no data descriptor, no password
+    head.writeUInt16LE(8, 8);
+    head.writeUInt32LE(crc, 14);
+    head.writeUInt32LE(packed.length, 18);
+    head.writeUInt32LE(data.length, 22);
+    head.writeUInt16LE(0, 28);
+    out.push(head, nameBytes, packed);
+    at += 30 + nameBytes.length + packed.length;
+    const central = Buffer.from(e.central);
+    central.writeUInt16LE(Math.max(20, central.readUInt16LE(6)), 6);
+    central.writeUInt16LE(central.readUInt16LE(8) & 0x800, 8);
+    central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(packed.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    newCentral.set(e, central);
+  });
+  const dirAt = at;
+  for (const e of entries) {
+    const central = newCentral.get(e) ?? Buffer.from(e.central);
+    central.writeUInt32LE(newPlace.get(e), 42);
+    out.push(central);
+    at += central.length;
+  }
+  const tail = Buffer.from(buf.subarray(end));
+  tail.writeUInt32LE(at - dirAt, 12);
+  tail.writeUInt32LE(dirAt, 16);
+  out.push(tail);
+  return Buffer.concat(out);
 }

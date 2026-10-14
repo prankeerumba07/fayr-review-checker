@@ -1,7 +1,7 @@
 // Small readers for the parts of an Excel file (.xlsx) that exceljs does not
-// read: XML text, a part's relationships, and which worksheet part holds a
-// tab. Copied from the Amazon reader (amazon/ooxml.js), reading only. Pure;
-// the zip is readZip()'s Map.
+// read or must not rewrite: XML text, a part's relationships, and which
+// worksheet part holds a tab. Copied from the Amazon reader (amazon/ooxml.js).
+// Pure; the zip is readZip()'s Map.
 
 export function unescapeXml(s) {
   return String(s)
@@ -12,6 +12,16 @@ export function unescapeXml(s) {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&');
+}
+
+/** Text as XML: &, < and > escaped (and " for attributes), and characters XML cannot hold left out. */
+export function escapeXml(s, { attribute = false } = {}) {
+  const t = String(s ?? '')
+    .replace(/[^\u0009\u000A\u000D -퟿-�\u{10000}-\u{10FFFF}]/gu, '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return attribute ? t.replace(/"/g, '&quot;') : t;
 }
 
 /** A tag's attributes as an object. */

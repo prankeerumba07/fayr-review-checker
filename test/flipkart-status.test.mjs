@@ -79,11 +79,14 @@ async function check({ row = ROW, answers = {}, read = reading(PURCHASE), delive
 const steps89 = (r) => [r.steps[7].state, r.steps[7].detail, r.steps[8].state, r.steps[8].detail];
 const status = (r) => [r.final, r.status, r.typeKey, r.type];
 
-test("the Statuses, Types and words are the Amazon checker's own", () => {
+test("the Statuses, Types and words are the Amazon checker's own, but for \"Amazon review is deleted\", which a Flipkart row never gets", () => {
+  const notAmazonOnly = ([k]) => k !== 'reviewDeleted';
   assert.deepEqual(FINAL_WORDS, AMAZON_FINAL_WORDS);
-  assert.deepEqual(TYPE_KEYS, AMAZON_TYPE_KEYS, 'every Type, in the order the Amazon screen lists them');
-  assert.deepEqual({ ...TYPE_WORDS }, { ...DEFAULT_SETTINGS.typeWords });
-  assert.deepEqual({ ...TYPE_FINAL }, { ...AMAZON_TYPE_FINAL });
+  assert.deepEqual(TYPE_KEYS, AMAZON_TYPE_KEYS.filter((k) => k !== 'reviewDeleted'), 'every other Type, in the order the Amazon screen lists them');
+  assert.deepEqual({ ...TYPE_WORDS }, Object.fromEntries(Object.entries(DEFAULT_SETTINGS.typeWords).filter(notAmazonOnly)));
+  assert.deepEqual({ ...TYPE_FINAL }, Object.fromEntries(Object.entries(AMAZON_TYPE_FINAL).filter(notAmazonOnly)));
+  assert.equal(TYPE_KEYS.length, 22);
+  assert.ok(!Object.values(TYPE_WORDS).some((w) => /amazon/i.test(w)), 'no Type names Amazon');
   for (const [k, why] of [['pass', 'all is well'], ['fail', 'the order ID is different.'], ['manual', 'the review was not found']]) assert.equal(finalSentence(k, why), amazonFinalSentence(k, why));
   assert.equal(lowerFirst('The review is not there.'), 'the review is not there');
   assert.deepEqual(['Pass', 'failed', 'Needs Manual Staff Checking', 'Maybe'].map(finalFromWords), ['pass', 'fail', 'manual', null]);

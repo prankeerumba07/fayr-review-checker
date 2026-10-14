@@ -9,7 +9,11 @@
 // page, with its last check, and its pictures; POST …/check to check it, as on
 // Amazon, the steps streamed as they run, ending with the row's Status, Type
 // and Note, kept with the row; POST …/result for a result a staff member
-// chose, and …/right for "The result is right", as on Amazon) and /local/flipkart/check-all (POST:
+// chose, and …/right for "The result is right", as on Amazon; GET …/email
+// for "Prepare email": the email for the row, filled in as on Amazon, which
+// is never sent from here), /local/flipkart/sheet/checked.xlsx (GET: "The
+// checked Excel file", the uploaded file with each checked row's Status, Type
+// and Note written in, as on Amazon) and /local/flipkart/check-all (POST:
 // "Start checking", later "Carry on checking", or "Check every row again",
 // the rows checked one by one as on Amazon, each row's steps streamed as they
 // run). The file is read on this
@@ -33,12 +37,15 @@
 // either screen counts for both. Nothing here changes that login or that
 // window.
 
-import { openWorkbook, guessColumns, columnProblems, rememberedChoice, sheetRows, SheetError, FIELDS, RESULT_FIELDS, RESULT_HEADERS, columnLetter, resultColumns, dayFirst } from './workbook.js';
+import { openWorkbook, guessColumns, columnProblems, rememberedChoice, sheetRows, SheetError, FIELDS, RESULT_FIELDS, RESULT_HEADERS, columnLetter, resultColumns, dayFirst, EMAIL_SHAPE } from './workbook.js';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS, ROW_ID, StoreError } from './store.js';
 import { cellLinks, linkLabel, linksIn, isDriveLink, linkKey, reviewPageLink } from './links.js';
-import { FINAL_WORDS, FINAL_KEYS, TYPE_KEYS, TYPE_WORDS, finalOfFile } from './final.js';
+import { FINAL_WORDS, FINAL_KEYS, TYPE_KEYS, TYPE_WORDS, finalOfFile, typeFromWords } from './final.js';
+import { emailFor, hasEmail } from './emails.js';
+import { writeCells, headingStyle, WriteError } from './xlsx-write.js';
+import { readZip } from './zip.js';
 import { createScreenshots, downloadable } from './screenshots.js';
 import { runCheck, PAUSE_SAYS, keptDay, clean } from './check.js';
 import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct, campaignsFound, campaignsFor, brandIn } from './campaigns.js';
@@ -73,6 +80,8 @@ const stoppedByFlipkart = (r) => r?.end === 'prevented' || r?.end === 'slow';
 const isChecked = (r) => Boolean(r?.check);
 /** A row in a sentence, as on Amazon: "Row 3", its number on the dashboard. */
 const labelOf = (r) => `Row ${r?.n ?? '?'}`;
+/** The key of a row's Type, as on Amazon: its last check's (or the one staff chose), else the one its Type in the file names when the file gives it a Status; null when the row has no result. */
+const typeKeyOf = (r) => (r?.check?.final ? r.check.typeKey ?? null : r?.prev && finalOfFile(r.prev) ? typeFromWords(r.prev.type) : null);
 /** A pause's sentence, naming the button there is to press: Check or "Check again" for one row, "Carry on checking" for the rows one by one. */
 const pressing = (says, button) => String(says).replace('"Carry on checking"', button).replace(/then try again\.$/, `then press ${button}.`);
 
@@ -260,6 +269,8 @@ export function rowView(r) {
     final: r.check?.final ?? (r.prev ? finalOfFile(r.prev) : null),
     finalSays: r.check?.final ? r.check.finalSays ?? null : null,
     done: isChecked(r),
+    // The Type whose email "Prepare email" shows, as on Amazon's "Email this user"; null when the row's Type has none (Verified, Rating Only) or it has no result.
+    emailKey: hasEmail(typeKeyOf(r)) ? typeKeyOf(r) : null,
   };
 }
 
@@ -382,6 +393,18 @@ export function sheetView(saved, campaigns = []) {
   const sheet = { fileName: s.fileName, kind: s.kind, tab: s.tab, headers: s.headers, lastCol: s.lastCol, mapping: s.mapping, columns: tableColumns(s, s.mapping), rowCount: saved.rows.length, uploadedAt: s.uploadedAt };
   sheet.about = aboutFile(sheet, saved.rows, campaigns);
   return { sheet, rows: saved.rows.map(rowView), types };
+}
+
+/** A file name as safe words for a download, as on Amazon: no folder, no quotes, no control characters. */
+function downloadName(fileName, today, ext = 'xlsx') {
+  const base = String(fileName ?? '').toWellFormed().split(/[\\/]/).pop().replace(/\.(xlsx|xlsm|csv)$/i, '').replace(/[\u0000-\u001f"\\]/g, '').trim() || 'sheet';
+  return `${base} checked ${today}.${ext}`;
+}
+
+/** Today in India, as 2026-10-05. */
+function todayInIndia(now = new Date()) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
 }
 
 /**
@@ -931,7 +954,72 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
     }
   }
 
-  /** A row's routes: its page (GET), its check (POST …/check), a result a staff member chose (POST …/result) or marked right (POST …/right), and its pictures (GET …/picture/<cell>/<n>, or …/small/…, the same picture). */
+  /** The row's own email address, from the file's email address column, as on Amazon: { address, ok, says }, says being why it is not one. */
+  function addressOf(row, sheet) {
+    const col = sheet?.mapping?.email;
+    if (!Number.isInteger(col)) return { address: '', ok: false, says: 'This file has no email address column.' };
+    const text = String(row?.values?.[col]?.text ?? '').trim();
+    if (!text) return { address: '', ok: false, says: 'There is no email address in the file for this row.' };
+    if (!EMAIL_SHAPE.test(text)) return { address: text, ok: false, says: `What the file has for this row is not an email address: "${text}".` };
+    return { address: text, ok: true, says: null };
+  }
+
+  /**
+   * "Prepare email", on a row's page: the email for the row, filled in from
+   * its last check and the file as on Amazon, with who it is to (the name in
+   * the Reviewer Name column, and the row's own email address when the file
+   * has an email address column). Unlike Amazon, nothing is ever sent from
+   * here: a staff member copies it into their own email.
+   */
+  async function rowEmail(res, id) {
+    const saved = await store.sheet();
+    const row = saved?.rows?.find((r) => r.id === id) ?? null;
+    if (!row) return refuse(res, 404, 'No row has that id.');
+    const typeKey = typeKeyOf(row);
+    const reviewer = reviewerOf(row, saved);
+    const email = hasEmail(typeKey) ? emailFor({ typeKey, row, result: row.check ?? null, reviewer }) : null;
+    if (!email) return refuse(res, 400, `${labelOf(row)} has no email: its Type has none, or it is not checked yet.`);
+    const own = addressOf(row, saved.sheet);
+    const mapping = saved.sheet.mapping ?? {};
+    return sendJson(res, 200, { email: { rowId: row.id, label: labelOf(row), reviewer: reviewer ?? '', reviewerColumn: Number.isInteger(mapping.reviewer), orderId: row.orderId?.text ?? '', address: own.address, addressOk: own.ok, addressSays: own.says, emailColumn: Number.isInteger(mapping.email), ...email } });
+  }
+
+  /** "The checked Excel file", as on Amazon: the uploaded Excel file with each checked row's Status (Pass, Fail or Needs Manual Staff Checking), Type and Note written in, a staff member's too, and nothing else changed. */
+  async function checkedExcel(res) {
+    const saved = await store.sheet();
+    if (!saved || saved.old) return refuse(res, 400, 'Upload the Excel file first.');
+    const s = saved.sheet;
+    if (s.kind !== 'xlsx') return refuse(res, 400, 'The uploaded sheet is not an Excel file, so there is no Excel file to fill in. Press "Download", then "The results only", instead.');
+    const data = await store.sheetData();
+    if (!data || !s.tab) return refuse(res, 400, 'Upload the Excel file first.');
+    const cols = resultColumns(s.mapping, s.lastCol);
+    const writes = [];
+    for (const r of saved.rows) {
+      if (!Number.isInteger(r.row) || !FINAL_WORDS[r.check?.final]) continue;
+      // Each write names its row as the dashboard does ("Row 20"), for a message about it; it goes in the row of the file.
+      const where = labelOf(r);
+      writes.push({ row: r.row, label: where, col: cols.status, text: FINAL_WORDS[r.check.final], name: 'Status' }, { row: r.row, label: where, col: cols.type, text: r.check.type ?? '', name: 'Type' }, { row: r.row, label: where, col: cols.note, text: r.check.note ?? '', name: 'Note', wrap: true });
+    }
+    const head = s.headerRow ?? 1;
+    for (const a of cols.added) writes.push({ row: head, col: a.col, text: a.header, style: headingStyle(data, s.tab, head, a.col) });
+    let out;
+    try {
+      out = writeCells(data, s.tab, writes);
+    } catch (err) {
+      if (err instanceof WriteError) return refuse(res, 400, err.message);
+      throw err;
+    }
+    // A file with macros (.xlsm) keeps its own kind, or Excel would refuse to open it.
+    const macros = /macroEnabled/i.test(String(readZip(data).get('[Content_Types].xml')?.() ?? ''));
+    const name = downloadName(s.fileName, todayInIndia(now()), macros ? 'xlsm' : 'xlsx');
+    res.statusCode = 200;
+    res.setHeader('Content-Type', macros ? 'application/vnd.ms-excel.sheet.macroEnabled.12' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${name.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.setHeader('Content-Length', out.length);
+    res.end(out);
+  }
+
+  /** A row's routes: its page (GET), its check (POST …/check), a result a staff member chose (POST …/result) or marked right (POST …/right), its email (GET …/email), and its pictures (GET …/picture/<cell>/<n>, or …/small/…, the same picture). */
   async function rowRoute(req, res, method, parts) {
     const id = parts[1];
     if (parts.length === 2) {
@@ -956,6 +1044,13 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         return refuse(res, 405, 'Only POST is answered here.');
       }
       return parts[2] === 'result' ? changeResult(req, res, id) : markRight(req, res, id);
+    }
+    if (parts.length === 3 && parts[2] === 'email') {
+      if (method !== 'GET') {
+        res.setHeader('Allow', 'GET, HEAD');
+        return refuse(res, 405, 'Only GET and HEAD are answered here.');
+      }
+      return rowEmail(res, id);
     }
     if (parts.length === 5 && ['picture', 'small'].includes(parts[2]) && SHOTS.includes(parts[3]) && /^[0-9]$/.test(parts[4])) {
       if (method !== 'GET') {
@@ -1001,6 +1096,11 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         if (method === 'POST') return (await uploadSheet(req, res)), true;
         res.setHeader('Allow', 'GET, HEAD, POST');
         return refuse(res, 405, 'Only GET, HEAD and POST are answered here.'), true;
+      }
+      if (path === 'sheet/checked.xlsx') {
+        if (method === 'GET') return (await checkedExcel(res)), true;
+        res.setHeader('Allow', 'GET, HEAD');
+        return refuse(res, 405, 'Only GET and HEAD are answered here.'), true;
       }
       if (path === 'check-all') {
         if (method === 'POST') return (await checkAll(req, res)), true;

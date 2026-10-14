@@ -13,12 +13,13 @@
 // A row not checked yet has none. (In the code, the Status's key is called
 // "final": 'pass', 'fail' or 'manual'.) The Type words are the Amazon
 // checker's own (its settings' typeWords as they come), never read from its
-// settings file.
+// settings file, but for "Amazon review is deleted", which a Flipkart row
+// never gets.
 
 export const FINAL_KEYS = ['pass', 'fail', 'manual'];
 export const FINAL_WORDS = { pass: 'Pass', fail: 'Fail', manual: 'Needs Manual Staff Checking' };
 
-/** Every Type, in the order the Amazon screen lists them, with its words. */
+/** Every Type, in the order the Amazon screen lists them, with its words; not "Amazon review is deleted". */
 export const TYPE_WORDS = Object.freeze({
   verified: 'Verified',
   ratingOnly: 'Rating Only',
@@ -36,7 +37,6 @@ export const TYPE_WORDS = Object.freeze({
   notDelivered: 'Not delivered',
   productNotMatching: 'Product is not matching',
   wrongReviewLink: 'Wrong review link',
-  reviewDeleted: 'Amazon review is deleted',
   reviewNotLive: 'Review not live',
   reviewLinkNeeded: 'Review link needed',
   reviewerNotMatching: 'Reviewer name is different',
@@ -59,7 +59,6 @@ export const TYPE_FINAL = Object.freeze({
   notDelivered: 'fail',
   productNotMatching: 'fail',
   wrongReviewLink: 'fail',
-  reviewDeleted: 'fail',
   cannotAddReviews: 'fail',
   needDriveAccess: 'manual',
   needAccess: 'manual',

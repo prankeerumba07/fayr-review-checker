@@ -336,6 +336,17 @@ export function createFlipkartStore(dataDir) {
       if (!d?.sheet) return null;
       return d.sheet.mapping && Array.isArray(d.sheet.headers) && Array.isArray(d.rows) ? d : { old: true };
     },
+    /** The uploaded file's bytes as it came (upload.xlsx or upload.csv), for the checked Excel file; null when there is none. */
+    async sheetData() {
+      const name = (await readJson(rowsFile, null))?.sheet?.file;
+      if (name !== 'upload.xlsx' && name !== 'upload.csv') return null;
+      try {
+        return await readFile(join(dir, name));
+      } catch (err) {
+        if (err.code === 'ENOENT') return null;
+        throw err;
+      }
+    },
     /**
      * Keeps the uploaded file and the rows made from it, in place of the file
      * before and its rows. info: { fileName, kind, tab, headerRow, headers,
