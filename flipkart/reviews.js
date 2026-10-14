@@ -6,10 +6,12 @@
 // (readProductReviews): the product's own page, found by its product ID, then
 // its "See all reviews" link, opened newest first, page 1, then page 2, and
 // so on, until the first page whose reviews are all older than a given date,
-// the last page, or 50 pages, whichever comes first. A robot check, a block
-// or an error stops it there ("Flipkart prevented this check", with the
-// page's status number, its title and whether it showed any reviews), and so
-// does a page that takes too long; the pages read before it are kept. A
+// the last page, or 50 pages, whichever comes first. A robot check or a block
+// stops it there ("Flipkart prevented this check", with the page's status
+// number, its title and whether it showed any reviews), and so does an error
+// page still there when it is opened once more 60 seconds later (the only
+// page ever opened again), and a page that takes too long; the pages read
+// before it are kept. A
 // reading that stopped, at a date or part way, can go on from the page where
 // it stopped, keeping the pages read before. Each review keeps its own link,
 // as the page's data gives it (the one link to one review Flipkart's website
@@ -26,6 +28,8 @@ import { prepareReviewsPage, readReviewsPage, reviewsInPageData, reviewsPageLink
 export const MAX_REVIEW_PAGES = 50;
 /** How long after the page before a page of reviews is opened, at the least: gentler than other pages. */
 export const REVIEW_PAGE_GAP_MS = 8000;
+/** How long after Flipkart's error page before that page is opened once more: the only page ever opened again, never after a robot check or a refused page. */
+export const ERROR_WAIT_MS = 60_000;
 
 /** What Flipkart did when it prevented a page, in plain words. */
 const PREVENTED = {
@@ -33,6 +37,47 @@ const PREVENTED = {
   blocked: 'it refused the page',
   error: 'it showed an error',
 };
+/** Said after what Flipkart did on a page opened once more after an error. */
+const againSaid = (kind) => (kind === 'error' ? `, also when the page was opened once more ${ERROR_WAIT_MS / 1000} seconds later` : `, when the page was opened once more ${ERROR_WAIT_MS / 1000} seconds after an error`);
+
+/** Waits ms, or less when Stop is pressed. */
+function waitFor(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+/** What Flipkart showed on a page that opened on Flipkart (page-read.js whatPageIs), with the reviews it shows when told how to find them; else null. */
+function kindOn(res, reviewsOf = null) {
+  const u = res?.ok ? parseUrl(res.url) : null;
+  if (!u || !isFlipkart(u)) return null;
+  return whatPageIs(reviewsOf ? { ...res.facts, reviews: reviewsOf(res) } : res.facts, res.status).kind;
+}
+/** A page of reviews' reviews: from the page's own data, each whole with its own ID; else as the page shows them. */
+function reviewsOn(res) {
+  const data = reviewsInPageData(res.html);
+  return data.length ? data : (res.facts?.reviews ?? []).map((r) => ({ id: null, ...r, link: null }));
+}
+/**
+ * Opens a page (open); when Flipkart shows an error on it, waits
+ * ERROR_WAIT_MS, told first (onAgain), and opens it once more, only once;
+ * never after a robot check or a refused page, and nothing after Stop.
+ * -> { res, again (opened once more), stopped }
+ */
+async function openOnceMore(open, kindOf, { sleep, signal, onAgain }) {
+  const res = await open();
+  if (kindOf(res) !== 'error') return { res, again: false, stopped: false };
+  onAgain(ERROR_WAIT_MS);
+  await sleep(ERROR_WAIT_MS, signal);
+  if (signal?.aborted) return { res, again: false, stopped: true };
+  return { res: await open(), again: true, stopped: false };
+}
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 /** A date as the dashboard writes it: 12-10-2026. */
@@ -63,9 +108,10 @@ function refusedSaid(r) {
  * earlier reading of the same "All reviews" link that stopped, at a date or
  * part way: its reviews are kept, and the reading goes on from the page after
  * its last one (none is opened when its last page is already all older than
- * the date); onPage(n, read) — told before each page is opened, with how
- * many reviews were read before it; signal — Stop: no
- * page is opened after it. -> { pid, link, readAt, since, pages (how many
+ * the date); onPage(n, read, wait) — told before each page is opened, with how
+ * many reviews were read before it, and with wait (ERROR_WAIT_MS) before a
+ * page that showed an error is opened once more; signal — Stop: no page is
+ * opened after it; sleep — how that wait is waited (tests only). -> { pid, link, readAt, since, pages (how many
  * were read), total (how many reviews Flipkart says the product has), end
  * ('date', 'last page', 'limit', 'prevented', 'slow', 'closed', 'network',
  * 'elsewhere', 'stopped' or 'none'), prevented ('captcha', 'blocked' or
@@ -78,7 +124,7 @@ function refusedSaid(r) {
  * [{ id, name, stars, title, text, dateSaid, date, dateLatest, city,
  * certified, reviewFor, link (its own link on Flipkart, or null), page }] }.
  */
-export async function readReviews(browser, product, { since = null, maxPages = MAX_REVIEW_PAGES, now = () => new Date(), onWait, onPage = () => {}, from = null, signal = null } = {}) {
+export async function readReviews(browser, product, { since = null, maxPages = MAX_REVIEW_PAGES, now = () => new Date(), onWait, onPage = () => {}, from = null, signal = null, sleep = waitFor } = {}) {
   const at = now();
   const today = indiaDay(at);
   const until = typeof since === 'string' && DAY.test(since) ? since : null;
@@ -104,8 +150,12 @@ export async function readReviews(browser, product, { since = null, maxPages = M
     for (let n = out.pages + 1; n <= maxPages; n++) {
       if (signal?.aborted) return stop('stopped', n, 'The check was stopped, so the reading of the reviews stopped there.');
       onPage(n, out.reviews.length);
-      out.opened++;
-      const res = await browser.open(reviewsPageLink(link, n), { onWait, read: readReviewsPage, prepare: prepareReviewsPage, html: true, gap: REVIEW_PAGE_GAP_MS });
+      const open = () => {
+        out.opened++;
+        return browser.open(reviewsPageLink(link, n), { onWait, read: readReviewsPage, prepare: prepareReviewsPage, html: true, gap: REVIEW_PAGE_GAP_MS });
+      };
+      const { res, again, stopped } = await openOnceMore(open, (r) => kindOn(r, reviewsOn), { sleep, signal, onAgain: (ms) => onPage(n, out.reviews.length, ms) });
+      if (stopped) return stop('stopped', n, 'The check was stopped, so the reading of the reviews stopped there.');
       if (res?.error === 'elsewhere') return stop('elsewhere', n, `A page of the reviews led to ${res.host}, not to Flipkart, so the reading stopped there.`);
       if (!res?.ok) {
         if (res?.error === 'closed') return stop('closed', n, 'The Live Flipkart Browser was closed, so the reading of the reviews stopped there.');
@@ -115,13 +165,11 @@ export async function readReviews(browser, product, { since = null, maxPages = M
       if (res.prepared?.loginBox) out.loginBox = true;
       const u = parseUrl(res.url);
       if (!u || !isFlipkart(u)) return stop('elsewhere', n, `A page of the reviews led to ${u ? u.hostname : 'another website'}, not to Flipkart, so the reading stopped there.`);
-      // The page's own data has each review whole, with its own ID; else the reviews as the page shows them.
-      const data = reviewsInPageData(res.html);
-      const found = data.length ? data : (res.facts?.reviews ?? []).map((r) => ({ id: null, ...r, link: null }));
+      const found = reviewsOn(res);
       const page = whatPageIs({ ...res.facts, reviews: found }, res.status);
       if (PREVENTED[page.kind]) {
         const refused = refusedPage(n, res, found);
-        return Object.assign(stop('prevented', n, `Flipkart prevented this check while its reviews were read: ${PREVENTED[page.kind]}. ${refusedSaid(refused)}`), { prevented: page.kind, refused });
+        return Object.assign(stop('prevented', n, `Flipkart prevented this check while its reviews were read: ${PREVENTED[page.kind]}${again ? againSaid(page.kind) : ''}. ${refusedSaid(refused)}`), { prevented: page.kind, refused });
       }
       out.total ??= Number.isInteger(res.facts?.total) ? res.facts.total : null;
       if (page.kind === 'not-found' && n === 1) return Object.assign(out, { end: 'none', says: 'Flipkart says this product has no reviews page.' });
@@ -162,17 +210,18 @@ export async function readReviews(browser, product, { since = null, maxPages = M
  * with product: { pid, name, rating, ratings, reviews } as its page shows it.
  * end is 'none' when the page does not show the product, or no way to all its
  * reviews; the product's page that cannot be had ends it as a review page
- * would (stoppedAt 0). from — an earlier reading of this product that
+ * would (stoppedAt 0), and its error page is opened once more 60 seconds
+ * later as one would be. from — an earlier reading of this product that
  * stopped, at a date or part way: the reading goes on from the page where it
  * stopped, and the product's page is not opened again.
  */
-export async function readProductReviews(browser, pid, { since = null, maxPages = MAX_REVIEW_PAGES, now = () => new Date(), onWait, onPage = () => {}, from = null, signal = null } = {}) {
+export async function readProductReviews(browser, pid, { since = null, maxPages = MAX_REVIEW_PAGES, now = () => new Date(), onWait, onPage = () => {}, from = null, signal = null, sleep = waitFor } = {}) {
   const at = now();
   const until = typeof since === 'string' && DAY.test(since) ? since : null;
   const out = { pid: ANY_PID.test(String(pid ?? '')) ? pid : null, link: null, readAt: at.toISOString(), since: until, pages: 0, total: null, end: null, stoppedAt: null, says: null, loginBox: false, links: true, reviews: [], product: null };
   const none = (end, says, extra = {}) => Object.assign(out, { end, says, ...extra });
   if (!out.pid) return none('none', 'The product has no Flipkart product ID, so its reviews could not be read.');
-  if (from?.link && from.pid === pid && from.product) return { ...(await readReviews(browser, { read: { pid, allReviews: from.link } }, { since: until, maxPages, now, onWait, onPage, from, signal })), product: from.product };
+  if (from?.link && from.pid === pid && from.product) return { ...(await readReviews(browser, { read: { pid, allReviews: from.link } }, { since: until, maxPages, now, onWait, onPage, from, signal, sleep })), product: from.product };
   if (signal?.aborted) return none('stopped', "The check was stopped, so the product's page was not opened.", { stoppedAt: 0 });
   try {
     await browser.begin();
@@ -180,7 +229,8 @@ export async function readProductReviews(browser, pid, { since = null, maxPages 
     return none('closed', 'The Live Flipkart Browser could not be opened on this computer, so no review was read.', { stoppedAt: 0 });
   }
   onPage(0);
-  const res = await browser.open(pageForPid(pid), { onWait, html: true });
+  const { res, again, stopped } = await openOnceMore(() => browser.open(pageForPid(pid), { onWait, html: true }), (r) => kindOn(r), { sleep, signal, onAgain: (ms) => onPage(0, 0, ms) });
+  if (stopped) return none('stopped', "The check was stopped, so the product's page was not read.", { stoppedAt: 0 });
   if (res?.error === 'elsewhere') return none('elsewhere', `The product's page led to ${res.host}, not to Flipkart, so no review was read.`, { stoppedAt: 0 });
   if (!res?.ok) {
     if (res?.error === 'closed') return none('closed', "The Live Flipkart Browser was closed, so the product's page was not read.", { stoppedAt: 0 });
@@ -192,14 +242,14 @@ export async function readProductReviews(browser, pid, { since = null, maxPages 
   const page = whatPageIs(res.facts, res.status);
   if (PREVENTED[page.kind]) {
     const refused = refusedPage(0, res, null);
-    return none('prevented', `Flipkart prevented this check at the product's page: ${PREVENTED[page.kind]}. ${refusedSaid(refused)} No review was read; try again later.`, { prevented: page.kind, refused, stoppedAt: 0 });
+    return none('prevented', `Flipkart prevented this check at the product's page: ${PREVENTED[page.kind]}${again ? againSaid(page.kind) : ''}. ${refusedSaid(refused)} No review was read; try again later.`, { prevented: page.kind, refused, stoppedAt: 0 });
   }
   const p = productOnPage(res.facts);
   if (page.kind === 'not-found' || !p.name || p.pid !== pid) return none('none', "Flipkart's page for the product's ID did not show the product, so its reviews could not be read.");
   out.product = { pid, name: p.name, rating: p.rating, ratings: p.ratings, reviews: p.reviews };
   const link = p.allReviews ?? reviewsLinkInPage(res.html, pid);
   if (!link) return none('none', p.reviews === 0 ? 'Flipkart shows no reviews for this product.' : "The product's page on Flipkart showed no way to see all its reviews, so they could not be read.");
-  return { ...(await readReviews(browser, { read: { pid, allReviews: link } }, { since: until, maxPages, now, onWait, onPage, signal })), product: out.product };
+  return { ...(await readReviews(browser, { read: { pid, allReviews: link } }, { since: until, maxPages, now, onWait, onPage, signal, sleep })), product: out.product };
 }
 
 /** Reads a product's public reviews (as readReviews does) and keeps them in data/flipkart/reviews/<product ID>.json, in place of the ones read before. */

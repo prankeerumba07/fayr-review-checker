@@ -121,7 +121,7 @@ test('step 8 finds what does not match, for a staff member, never a Fail: other 
   assert.equal(noDay.finalSays, 'A staff member needs to check this transaction because neither the delivery screenshot nor the purchase screenshot shows a day, so whether the review was posted after the order was delivered could not be checked.');
 });
 
-test("Flipkart's own cases are for a staff member, never a Fail, with a Note that says why: not among the reviews Flipkart shows (older than they are, on the Published tab, or being written), words under another name, under \"Flipkart Customer\" or with no name to check, two that fit, one posted before the delivery day, Flipkart stopping the reading, no live campaign", async () => {
+test("Flipkart's own cases are for a staff member, never a Fail, with a Note that says why: not among the reviews Flipkart shows (older than they are, on the Published tab, or being written), words under another name, under \"Flipkart Customer\" or with no name to check, two that fit, one posted before the delivery day, no live campaign", async () => {
   const notThere = await check({ reviews: [made(1), made(2)], answer: { total: 2 } });
   assert.deepEqual([...status(notThere), steps89(notThere)[0]], ['manual', 'Needs Manual Staff Checking', 'reviewNotLive', 'Review not live', 'not-reached']);
   assert.equal(notThere.note, 'A staff member needs to check this transaction because the review is not among the 2 reviews Flipkart shows for the product. It may not be public yet. The purchase screenshot and the delivery screenshot match the form.');
@@ -143,11 +143,9 @@ test("Flipkart's own cases are for a staff member, never a Fail, with a Note tha
   const early = await check({ reviews: [made(1), { ...MINE, dateSaid: '4 months ago', date: '2026-06-10', dateLatest: '2026-07-10' }] });
   assert.deepEqual([early.typeKey, early.finalSays], ['reviewNotLive', "A staff member needs to check this transaction because the only review on Flipkart with the review screenshot's words under the name on the review screenshot was posted before 23-07-2026, the day the order was delivered, so it does not count for this order."]);
   assert.match(early.note, / A staff member must check whether that review is for this order\. /);
-  const stopped = await check({ reviews: [made(1)], answer: { end: 'prevented', prevented: 'blocked', says: 'Flipkart prevented this check while its reviews were read: it refused the page. The review read before was kept.' } });
-  assert.deepEqual([stopped.paused, stopped.typeKey, stopped.finalSays], [null, 'somethingElse', 'A staff member needs to check this transaction because Flipkart stopped the reading of its reviews before the review was found, so whether it is live could not be told.']);
   const noCampaign = await check({ campaigns: [] });
   assert.deepEqual([noCampaign.typeKey, noCampaign.finalSays], ['reviewLinkNeeded', 'A staff member needs to check this transaction because the review screenshot shows a written review, but the row uses no live campaign with a product read from Flipkart, so the review could not be looked for on Flipkart.']);
-  assert.ok([notThere, older, published, typing, other, customer, noName, twice, early, stopped, noCampaign].every((r) => r.final === 'manual'), 'never a Fail');
+  assert.ok([notThere, older, published, typing, other, customer, noName, twice, early, noCampaign].every((r) => r.final === 'manual'), 'never a Fail');
 });
 
 test("the screenshots' problems as on Amazon: a different order ID, amount or product, not delivered, a missing screenshot fail; one that cannot be opened or read, a detail neither shows, and a possible reading mistake are for a staff member; they come before the review's, and each other problem is one more sentence", async () => {
@@ -172,9 +170,13 @@ test("the screenshots' problems as on Amazon: a different order ID, amount or pr
   assert.deepEqual([drive.final, drive.typeKey, drive.note], ['manual', 'needDriveAccess', 'A staff member needs to check this transaction because the purchase screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to it. The dashboard can only open a Drive file that the Google account logged in to it can open. Check that the file is shared with the Google account shown in the top bar, then check this row again.']);
   const unreadable = await check({ delivery: deliveryReading([], { ok: false, problem: 'its words are not clear enough to read' }) });
   assert.deepEqual([unreadable.final, unreadable.typeKey, unreadable.finalSays], ['manual', 'deliveryNotClear', 'A staff member needs to check this transaction because the delivery screenshot could not be read: its words are not clear enough to read.']);
-  // The amount on neither screenshot, as on Amazon: a staff member checks it, even with the review found.
+  // The amount on neither screenshot: not compared, and the Note says so; alone, it never sends a Flipkart row to a staff member.
   const noAmount = await check({ read: reading(PURCHASE.slice(0, 4)) });
-  assert.deepEqual([noAmount.final, noAmount.typeKey, noAmount.finalSays, noAmount.steps[3].detail.split('. ').at(-1)], ['manual', 'orderNotClear', 'A staff member needs to check this transaction because neither screenshot shows the amount, so it cannot be matched to this order.', 'Neither screenshot shows the amount.']);
+  assert.deepEqual([noAmount.final, noAmount.typeKey, noAmount.steps[3].state, noAmount.comparison.find((c) => c.field === 'Amount')], ['pass', 'verified', 'pass', { field: 'Amount', sheet: '349', order: 'Not shown', delivery: 'Not shown', result: 'Not shown on either screenshot, so not compared.', ok: null }]);
+  assert.match(noAmount.note, /^This transaction passed: [^.]+\. Neither screenshot shows the amount, so it was not compared\. /);
+  // With another problem, the amount not compared is still said, after it.
+  const noAmountSlip = await check({ read: reading(PURCHASE.slice(0, 4).map((t) => t.replace(ID, 'OD100000000000000003'))), delivery: deliveryReading(DELIVERY.map((t) => t.replace(ID, 'OD100000000000000003'))) });
+  assert.deepEqual([noAmountSlip.final, noAmountSlip.typeKey, / Neither screenshot shows the amount, so it was not compared\./.test(noAmountSlip.note)], ['manual', 'orderIdNotMatching', true]);
   // A failing problem gives the Status before one for a staff member, and before the review's; each other problem is one more sentence.
   const both = await check({ read: reading(PURCHASE.map((t) => t.replace(ID, 'OD100000000000000777'))), delivery: deliveryReading([], { ok: false, problem: 'its words are not clear enough to read' }), reviews: [made(1)], answer: { total: 1 } });
   assert.equal(both.note, `This transaction failed because the order ID on the purchase screenshot does not match the order ID the user gave. The user gave order ID ${ID}, and the purchase screenshot shows order ID OD100000000000000777. The delivery screenshot could not be read: its words are not clear enough to read. The review is not among the 1 review Flipkart shows for the product.`);
@@ -205,9 +207,14 @@ test("the review's own problems as on Amazon: none given, or a link that is not 
   assert.equal(rating.finalSays, 'This transaction passed: the purchase screenshot and the delivery screenshot match the form, and the review screenshot shows a star rating with no written words.');
 });
 
-test('a check that paused or was stopped gets no Status; something that went wrong on this computer is for a staff member', async () => {
+test('a check that paused (a download, or Flipkart stopping the reading before the review was found) or was stopped gets no Status; something that went wrong on this computer is for a staff member', async () => {
   const paused = await check({ answers: { delivery: { pause: 'google-out' } } });
   assert.deepEqual([paused.paused.kind, paused.final, paused.status, paused.note], ['google-out', null, null, null]);
+  const refused = await check({ reviews: [made(1)], answer: { end: 'prevented', prevented: 'blocked', says: 'Flipkart prevented this check while its reviews were read: it refused the page. The review read before was kept.' } });
+  assert.deepEqual([refused.paused, refused.final, refused.typeKey, refused.note], [{ kind: 'flipkart-blocked', says: 'Flipkart refused a page. Wait a while, then press "Carry on checking".', step: 7 }, null, null, null]);
+  // The review found among the reviews read before Flipkart stopped: the row still gets its Status.
+  const found = await check({ answer: { end: 'prevented', prevented: 'error', says: 'Flipkart prevented this check while its reviews were read: it showed an error. The 3 reviews read before were kept.' } });
+  assert.deepEqual([found.paused, found.final, found.typeKey], [null, 'pass', 'verified']);
   const stop = new AbortController();
   stop.abort();
   const stopped = await check({ signal: stop.signal });

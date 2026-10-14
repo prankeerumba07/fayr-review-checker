@@ -649,7 +649,7 @@ test("the line under the upload line says which campaign the rows use, found the
   assert.deepEqual([about.length, about.at(-1)], [4, 'The rows use the live campaign "Test Brand Bottles" (4 rows, by their product names). 1 row uses no campaign, so its product is compared with its name in the file.'], 'row 5 has no product name');
 });
 
-test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in a checking run (a pretend reading in place of the Live Flipkart Browser) and kept in data/flipkart/reviews/<product ID>.json for every row; a copy read in the last hour serves the next check; back to the oldest day the rows need, from what each row's last check kept (its delivery day, else its order day); a copy kept before each review's own link was kept is read again, once; a reading Flipkart stopped part way is said in the row's Note, for a staff member, is kept only when it has at least as many reviews as the copy kept before (else only what the refused page showed is added), and the next try in the next day goes on from where it stopped", async () => {
+test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in a checking run (a pretend reading in place of the Live Flipkart Browser) and kept in data/flipkart/reviews/<product ID>.json for every row; a copy read in the last hour serves the next check; back to the oldest day the rows need, from what each row's last check kept (its delivery day, else its order day); a copy kept before each review's own link was kept is read again, once; a reading Flipkart stopped part way pauses the check of a row whose review is not among the reviews read (one whose review is among them gets its Status), is kept only when it has at least as many reviews as the copy kept before (else only what the refused page showed is added), and the next try in the next day goes on from where it stopped", async () => {
   const dir = tempDir();
   const google = driveLogin();
   const reader = pretendReader();
@@ -730,13 +730,14 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   later(2);
   const stoppedAt = (pages, kind, n) => ({ pid: PID, link: LINK, readAt: clock.toISOString(), since: '2026-07-05', pages, total: 20, end: 'prevented', prevented: kind, refused: { page: pages + 1, status: 200, title: 'Flipkart', reviews: 0 }, stoppedAt: pages + 1, says: `Made-up: stopped at page ${pages + 1}.`, loginBox: false, links: true, reviews: Array.from({ length: n }, (_, i) => made(10 + i)), product: { pid: PID, name: 'Test Brand Steel Bottle', rating: 4.2, ratings: 100, reviews: 20 } });
   answer = stoppedAt(1, 'captcha', 1);
-  const robot = await check(rows[1]);
-  assert.deepEqual([robot.some((e) => e.event === 'paused'), robot.at(-1).result.final, robot.at(-1).result.typeKey], [false, 'manual', 'somethingElse'], 'the row is for a staff member; nothing is got around');
-  assert.match(robot.at(-1).result.note, /^A staff member needs to check this transaction because Flipkart stopped the reading of its reviews before the review was found, so whether it is live could not be told\. Made-up: stopped at page 2\. Check this row again later\./);
+  const lastCheck = (await store.row(rows[1].id)).check.checkId;
+  const paused = await check(rows[1]);
+  assert.deepEqual(paused.find((e) => e.event === 'paused'), { event: 'paused', kind: 'flipkart-captcha', says: 'Flipkart showed a robot check. This dashboard never answers a robot check. Press "Check again" when you are ready.' });
+  assert.deepEqual([paused.find((e) => e.event === 'done').result.final, (await store.row(rows[1].id)).check.checkId], [null, lastCheck], 'no Status: the row keeps its last check, and nothing is got around');
   assert.deepEqual([await keptCount(), (await store.reviews(PID)).refused], [4, { page: 2, status: 200, title: 'Flipkart', reviews: 0 }], 'not replaced by a reading stopped part way with fewer reviews');
   // Stopped by an error with as many reviews or more: kept; the next try goes on from where it stopped, and never from page 1.
   answer = stoppedAt(4, 'error', 4);
-  assert.equal((await check(rows[1])).at(-1).result.typeKey, 'somethingElse');
+  assert.equal((await check(rows[1])).find((e) => e.event === 'paused').kind, 'flipkart-error');
   assert.deepEqual([await keptCount(), (await store.reviews(PID)).end], [4, 'prevented']);
   answer = null;
   later(3);
@@ -756,12 +757,16 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   const partRun = lines(await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from(JSON.stringify({ again: true })), type: 'application/json' }));
   const passed = partRun.filter((e) => e.event === 'done').filter((e) => e.result.steps[6].state === 'pass');
   assert.deepEqual([asked.length, partRun.at(-1).event, passed.length > 1, passed.every((e) => !e.result.paused && /The review was found among the reviews read before that\./.test(e.result.steps[6].detail))], [12, 'run-done', true, true]);
-  // Flipkart refusing the product's page, before any page of reviews: every row of the run says so, for a staff member, and Flipkart is asked only once in the run.
+  // Flipkart refusing the product's page, before any page of reviews: the run pauses at the first row that needs Flipkart's reviews, saying what to
+  // press, with Flipkart asked once; "Carry on checking" goes on from that row.
   later(2);
   answer = { ...stoppedAt(0, 'blocked', 0), stoppedAt: 0 };
   const refusedRun = lines(await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from(JSON.stringify({ again: true })), type: 'application/json' }));
-  const told = refusedRun.filter((e) => e.event === 'done' && /so whether it is on Flipkart could not be told; nothing was got around\.$/.test(e.result.steps[6].detail ?? ''));
-  assert.deepEqual([asked.length, refusedRun.at(-1).event, told.length > 1, refusedRun.some((e) => e.event === 'paused')], [13, 'run-done', true, false]);
+  const stop = refusedRun.at(-1);
+  assert.deepEqual([asked.length, stop.event, stop.kind, stop.says, refusedRun.filter((e) => e.event === 'done' && e.result.paused).length], [13, 'paused', 'flipkart-blocked', 'Flipkart refused a page. Wait a while, then press "Carry on checking".', 1]);
+  answer = null;
+  const carryOn = lines(await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from('{}'), type: 'application/json' }));
+  assert.deepEqual([asked.length, carryOn.find((e) => e.event === 'row').rowId, carryOn.at(-1).event], [14, stop.rowId, 'run-done']);
 });
 
 /** "Start checking" as the page sends it, its lines read as they come; stop() closes it, as Stop does. */

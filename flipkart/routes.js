@@ -722,10 +722,9 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
    * and so is one stopped part way in the last day (a robot check, a refusal,
    * an error, a page too slow, Stop), its pages kept. A reading stopped part
    * way serves the rest of the run as it is (a row whose review is found in
-   * it can pass; for one whose review is not, the Note says Flipkart stopped
-   * the reading, or, after the Live Flipkart Browser was closed or offline,
-   * the check pauses), so Flipkart is not
-   * asked again in the same run; it is kept only when it has at least as many
+   * it gets its Status; one whose review is not pauses the check, and
+   * "Carry on checking" or "Check again" goes on from where it stopped), so
+   * Flipkart is not asked again in the same run; it is kept only when it has at least as many
    * reviews as the copy kept before, else only what Flipkart's refused page
    * showed is added to that copy. A reading Flipkart stopped before any page
    * of reviews (its product's page refused, say) serves the rest of the run

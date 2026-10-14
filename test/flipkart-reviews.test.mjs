@@ -12,7 +12,7 @@ import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { readReviews, readAndKeepReviews, readProductReviews, MAX_REVIEW_PAGES, REVIEW_PAGE_GAP_MS } from '../flipkart/reviews.js';
+import { readReviews, readAndKeepReviews, readProductReviews, MAX_REVIEW_PAGES, REVIEW_PAGE_GAP_MS, ERROR_WAIT_MS } from '../flipkart/reviews.js';
 import { createGate } from '../flipkart/browser.js';
 import { dateFromWords, indiaDay, reviewsPageLink, reviewsInPageData, pageData, reviewsLinkInPage, plainText } from '../flipkart/review-page.js';
 import { pageForPid, reviewPageLink, linkLabel } from '../flipkart/links.js';
@@ -146,18 +146,22 @@ test('at most 50 pages at one time', async () => {
   assert.equal(out.says, '500 reviews read, the most read at one time; older reviews were not read.');
 });
 
-test('a robot check, a block or an error stops the reading where it is: "Flipkart prevented this check" (never a page\'s number: Flipkart\'s website shows none), what the page showed (its status number, its title and whether it showed any reviews, never a name or a review\'s words), and the pages before it kept; so do a page that cannot be opened, a closed window and a page that leads away from Flipkart', async () => {
+test('a robot check, a block or an error stops the reading where it is: "Flipkart prevented this check" (never a page\'s number: Flipkart\'s website shows none), what the page showed (its status number, its title and whether it showed any reviews, never a name or a review\'s words), and the pages before it kept; an error page only once it is still there when opened once more 60 seconds later, a robot check or a block at once; so do a page that cannot be opened, a closed window and a page that leads away from Flipkart', async () => {
   const kinds = {
     captcha: [(url) => reviewPage(url, [], { text: 'Are you a human? Please confirm that you are a human.' }), 'it showed a robot check, which this dashboard never answers', 200],
     blocked: [(url) => reviewPage(url, [], { status: 403, text: 'Access Denied' }), 'it refused the page', 403],
-    error: [(url) => reviewPage(url, [], { status: 500, text: 'Something went wrong!' }), 'it showed an error', 500],
+    error: [(url) => reviewPage(url, [], { status: 500, text: 'Something went wrong!' }), 'it showed an error, also when the page was opened once more 60 seconds later', 500],
   };
+  const waited = [];
+  const sleep = async (ms) => waited.push(ms);
   for (const [kind, [page2, why, status]] of Object.entries(kinds)) {
+    waited.length = 0;
     const b = fakeBrowser((n, url) => (n === 1 ? reviewPage(url, [shown(1, 'Today')]) : page2(url)));
-    const out = await readReviews(b, product, { now });
-    assert.deepEqual([b.opened.length, out.end, out.stoppedAt, out.pages, out.reviews.length, out.refused, out.says], [2, 'prevented', 2, 1, 1, { page: 2, status, title: 'Reviews | Flipkart.com', reviews: 0 }, `Flipkart prevented this check while its reviews were read: ${why}. The page Flipkart sent had status ${status}, the title "Reviews | Flipkart.com" and no reviews on it. The review read before was kept.`], kind);
+    const out = await readReviews(b, product, { now, sleep });
+    const again = kind === 'error';
+    assert.deepEqual([b.opened.length, waited, out.opened, out.end, out.stoppedAt, out.pages, out.reviews.length, out.refused, out.says], [again ? 3 : 2, again ? [60000] : [], again ? 3 : 2, 'prevented', 2, 1, 1, { page: 2, status, title: 'Reviews | Flipkart.com', reviews: 0 }, `Flipkart prevented this check while its reviews were read: ${why}. The page Flipkart sent had status ${status}, the title "Reviews | Flipkart.com" and no reviews on it. The review read before was kept.`], kind);
   }
-  const at = async (stopAt, stopPage) => (await readReviews(fakeBrowser((n, url) => (n < stopAt ? reviewPage(url, [shown(n, 'Today')]) : stopPage(url))), product, { now })).says;
+  const at = async (stopAt, stopPage) => (await readReviews(fakeBrowser((n, url) => (n < stopAt ? reviewPage(url, [shown(n, 'Today')]) : stopPage(url))), product, { now, sleep })).says;
   assert.equal(await at(1, kinds.captcha[0]), 'Flipkart prevented this check while its reviews were read: it showed a robot check, which this dashboard never answers. The page Flipkart sent had status 200, the title "Reviews | Flipkart.com" and no reviews on it. No review was read; try again later.');
   assert.equal(await at(4, kinds.blocked[0]), 'Flipkart prevented this check while its reviews were read: it refused the page. The page Flipkart sent had status 403, the title "Reviews | Flipkart.com" and no reviews on it. The 3 reviews read before were kept.');
   // An error that still showed a review, with no title: said so, and its review is neither kept nor said.
@@ -165,7 +169,7 @@ test('a robot check, a block or an error stops the reading where it is: "Flipkar
     const p = reviewPage(url, [shown(7, 'Today')], { status: 503 });
     return { ...p, facts: { ...p.facts, title: '' } };
   });
-  assert.equal(odd, 'Flipkart prevented this check while its reviews were read: it showed an error. The page Flipkart sent had status 503, no title and 1 review on it. The review read before was kept.');
+  assert.equal(odd, 'Flipkart prevented this check while its reviews were read: it showed an error, also when the page was opened once more 60 seconds later. The page Flipkart sent had status 503, no title and 1 review on it. The review read before was kept.');
   assert.equal(await at(2, () => ({ ok: false, error: 'network', message: 'The page could not be opened.' })), 'The Live Flipkart Browser could not open more reviews, so the reading stopped there. The page could not be opened. The review read before was kept.');
   assert.equal(await at(2, () => ({ ok: false, error: 'closed', message: 'The Live Flipkart Browser was closed.' })), 'The Live Flipkart Browser was closed, so the reading of the reviews stopped there. The review read before was kept.');
   assert.equal(await at(2, () => ({ ok: false, error: 'elsewhere', host: 'www.example.com', message: 'The page went to www.example.com instead of Flipkart.' })), 'A page of the reviews led to www.example.com, not to Flipkart, so the reading stopped there. The review read before was kept.');
@@ -262,10 +266,40 @@ test('a campaign product\'s reviews as staff find them: its own page found by it
   assert.deepEqual([half.end, half.pages, half.stoppedAt, half.says], ['stopped', 1, 2, 'The check was stopped, so the reading of the reviews stopped there. The 2 reviews read before were kept.']);
 });
 
+test("an error page while the reviews are read is opened once more 60 seconds later, said first, and the reading goes on when it shows its reviews; a robot check then stops it, and nothing is opened a third time; Stop while waiting opens nothing more; the product's page is opened once more the same way", async () => {
+  assert.equal(ERROR_WAIT_MS, 60000);
+  const waited = [];
+  const told = [];
+  let tries = 0;
+  // Page 2 shows an error the first time, its review the second.
+  const b = fakeBrowser((n, url) => (n === 2 && tries++ === 0 ? reviewPage(url, [], { status: 500, text: 'Something went wrong!' }) : reviewPage(url, n <= 3 ? [shown(n, 'Today')] : [])));
+  const out = await readReviews(b, product, { now, sleep: async (ms) => waited.push(ms), onPage: (n, read, wait) => told.push([n, read, wait ?? null]) });
+  assert.deepEqual([b.opened.map((u) => Number(new URL(u).searchParams.get('page'))), waited, told, out.end, out.pages, out.reviews.length, out.opened], [[1, 2, 2, 3, 4], [60000], [[1, 0, null], [2, 1, null], [2, 1, 60000], [3, 2, null], [4, 3, null]], 'last page', 3, 3, 5]);
+  // An error, then a robot check when opened once more: stopped there, never opened a third time.
+  let second = 0;
+  const robot = fakeBrowser((n, url) => (n > 1 ? assert.fail('nothing more is opened') : second++ === 0 ? reviewPage(url, [], { status: 502 }) : reviewPage(url, [], { text: 'Are you a human? Please confirm that you are a human.' })));
+  const stopped = await readReviews(robot, product, { now, sleep: async () => {} });
+  assert.deepEqual([robot.opened.length, stopped.end, stopped.prevented, stopped.says], [2, 'prevented', 'captcha', 'Flipkart prevented this check while its reviews were read: it showed a robot check, which this dashboard never answers, when the page was opened once more 60 seconds after an error. The page Flipkart sent had status 200, the title "Reviews | Flipkart.com" and no reviews on it. No review was read; try again later.']);
+  // Stop while waiting: nothing more is opened. With the real wait, Stop ends it at once.
+  const stop = new AbortController();
+  const waiting = fakeBrowser((n, url) => (n === 1 ? reviewPage(url, [shown(1, 'Today')]) : reviewPage(url, [], { status: 500 })));
+  const began = Date.now();
+  const halted = await readReviews(waiting, product, { now, signal: stop.signal, onPage: (n, read, wait) => wait && setTimeout(() => stop.abort(), 20) });
+  assert.deepEqual([waiting.opened.length, halted.end, halted.stoppedAt, halted.says, Date.now() - began < 10_000], [2, 'stopped', 2, 'The check was stopped, so the reading of the reviews stopped there. The review read before was kept.', true]);
+  // The product's page: an error, then the page itself when opened once more; and an error twice, said so.
+  let p = 0;
+  const site = siteBrowser((url) => (p++ === 0 ? productPage(url, { status: 500, name: null, text: 'Something went wrong!' }) : productPage(url, { links: [GLOW] })), onePage);
+  const seen = [];
+  const read = await readProductReviews(site, PID, { now, sleep: async () => {}, onPage: (n, r, wait) => seen.push([n, wait ?? null]) });
+  assert.deepEqual([site.opened.filter((u) => /\/product\/p\/itme\?/.test(u)).length, seen.slice(0, 3), read.end, read.reviews.length], [2, [[0, null], [0, 60000], [1, null]], 'last page', 2]);
+  const twice = await readProductReviews(siteBrowser((url) => productPage(url, { status: 500, name: null, text: 'Something went wrong!' }), onePage), PID, { now, sleep: async () => {} });
+  assert.deepEqual([twice.end, twice.prevented, twice.says], ['prevented', 'error', 'Flipkart prevented this check at the product\'s page: it showed an error, also when the page was opened once more 60 seconds later. The page Flipkart sent had status 500 and the title "Flipkart". No review was read; try again later.']);
+});
+
 test('tried again after Flipkart stopped the reading: it goes on from the page where it stopped, the pages read before kept, and opens none when they already reach the date; a page holding only reviews read before (newer reviews moved them down) is not the last page; each page of reviews is opened at least 8 seconds after the page before', async () => {
   const dated = (n, url) => reviewPage(url, [shown(`${n}-1`, `${n * 3} days ago`), shown(`${n}-2`, `${n * 3} days ago`)], { total: 40 });
-  // Stopped by an error at page 3, its first two pages kept.
-  const first = await readReviews(fakeBrowser((n, url) => (n < 3 ? dated(n, url) : reviewPage(url, [], { status: 500 }))), product, { now, since: '2026-09-22' });
+  // Stopped by an error at page 3 (still there when opened once more), its first two pages kept.
+  const first = await readReviews(fakeBrowser((n, url) => (n < 3 ? dated(n, url) : reviewPage(url, [], { status: 500 }))), product, { now, since: '2026-09-22', sleep: async () => {} });
   assert.deepEqual([first.end, first.pages, first.stoppedAt, first.reviews.length, first.refused], ['prevented', 2, 3, 4, { page: 3, status: 500, title: 'Reviews | Flipkart.com', reviews: 0 }]);
   // Tried again: page 3 first, never pages 1 and 2 again; on to the first page all older than the date.
   const asked = [];

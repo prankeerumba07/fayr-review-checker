@@ -38,15 +38,16 @@
 // name with the products of the live campaigns the row uses, by their real
 // names read from Flipkart, or, with no live campaign, with its product name
 // in the sheet. A detail that is not shown, or could not be read, is never
-// called different and never passes. Every step runs, even after a problem;
-// then the comparison table puts the sheet and the two screenshots side by
-// side. No one logged in to Google, a login using the Live Amazon Browser,
-// Google's login page, or the Live Flipkart Browser closed, offline or led
-// to another website pauses the check, as on Amazon: the row gets no result,
-// nothing is got around, and the row can be checked again later. Flipkart
-// stopping the reading of its reviews (a robot check, a refused page, an
-// error, a page too slow) before the review was found is said in the Note,
-// for a staff member, and nothing is got around.
+// called different and never passes; but the amount shown on neither
+// screenshot is only not compared, and the Note says so. Every step runs,
+// even after a problem; then the comparison table puts the sheet and the two
+// screenshots side by side. No one logged in to Google, a login using the
+// Live Amazon Browser, Google's login page, Flipkart stopping the reading of
+// its reviews (a robot check, a refused page, an error page, a page too slow)
+// before the review was found, or the Live Flipkart Browser closed, offline
+// or led to another website pauses the check, as on Amazon: the row gets no
+// result, nothing is got around, and the row can be checked again later, the
+// reading going on from where it stopped.
 
 import { randomBytes } from 'node:crypto';
 import { downloadable } from './screenshots.js';
@@ -110,8 +111,6 @@ const SHOTS = ['order', 'delivery'];
 const RANK = { orderId: 1, product: 2, delivered: 3, open: 4, details: 5, shown: 6 };
 /** A sentence of the Note when both screenshots passed but the review did not, in the Amazon checker's words. */
 const SHOTS_MATCH = 'The purchase screenshot and the delivery screenshot match the form.';
-/** How Flipkart stops a reading of its reviews (reviews.js): a robot check, a refused page or an error, or a page too slow. The check goes on, and its Note says so. */
-const FLIPKART_STOPPED = new Set(['prevented', 'slow']);
 /** What a link in the review link cell opens when it is not one review, in the Amazon checker's words for the same pages. */
 const NOT_A_REVIEW = { 'Flipkart product page': 'a product page on Flipkart', "Flipkart product's reviews": "a product's list of reviews on Flipkart", 'App store': "an app store's page" };
 
@@ -771,12 +770,13 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
    * delivered (else placed) counting (reviewsFrom). Found, it passes, with
    * the stars Flipkart shows; words under another name, or under "Flipkart
    * Customer", two reviews that fit, or none, it fails, saying which. A row
-   * with nothing to search with opens nothing. A robot check, a block or a
+   * with nothing to search with opens nothing. A robot check, a refused page,
+   * an error page (still there when opened once more a minute later) or a
    * page that takes too long pauses the check, as on Amazon, and nothing is
    * got around; but a review found among the pages read before it is found.
    */
-  /** What step 7 did, for the Status: why it searched nothing (skip: 'later', 'nothing', 'noCampaign' or 'noProduct'), what it read (got) and found (m), and whether Flipkart stopped the reading before the review was found (stopped). */
-  const seven = { skip: null, got: null, m: null, stopped: false };
+  /** What step 7 did, for the Status: why it searched nothing (skip: 'later', 'nothing', 'noCampaign' or 'noProduct'), and what it read (got) and found (m). */
+  const seven = { skip: null, got: null, m: null };
   async function findReviewStep(n) {
     if (!reviews) {
       seven.skip = 'later';
@@ -802,7 +802,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       rowId: row.id,
       signal,
       day: result.reviewsFrom.day,
-      onPage: (p, read) => say(p === 0 ? "Opening the product's page on Flipkart" : `Reading Flipkart's reviews, newest first${read ? ` (${read} read so far)` : ''}`),
+      onPage: (p, read, wait) => say(wait ? `Flipkart showed an error page; opening it once more in ${Math.round(wait / 1000)} seconds` : p === 0 ? "Opening the product's page on Flipkart" : `Reading Flipkart's reviews, newest first${read ? ` (${read} read so far)` : ''}`),
     });
     checkStop();
     const kept = (got.reviews ?? []).length;
@@ -818,14 +818,9 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     result.found = m ? { how: m.how, count: m.count, nameFrom: m.name.from, counted: m.counted, nameOnly: m.nameOnly, before: m.before, share: m.share, rareShare: m.rareShare, review: m.review ? { id: m.review.id ?? null, name: m.review.name ?? null, stars: m.review.stars ?? null, title: m.review.title ?? null, text: m.review.text ?? null, dateSaid: m.review.dateSaid ?? null, date: m.review.date ?? null, dateLatest: m.review.dateLatest ?? null, link: reviewPageLink(m.review.link, m.review.id) } : null } : null;
     seven.got = got;
     seven.m = m;
-    // Flipkart stopping the reading (a robot check, a refused page, an error, a page too slow) before the review was found is said, for a staff
-    // member, and nothing is got around; the Live Flipkart Browser closed, offline or led to another website pauses the check, as on Amazon.
-    const byFlipkart = FLIPKART_STOPPED.has(got.end);
-    if (pause && m?.how !== 'found' && !byFlipkart) pauseAt(n, pause, PAUSE_SAYS[pause], `${got.says} The check paused here; nothing was got around.`);
-    if (byFlipkart && m?.how !== 'found') {
-      seven.stopped = true;
-      return finish(n, 'fail', `${got.says} The review was not among the reviews read before that, so whether it is on Flipkart could not be told; nothing was got around.`);
-    }
+    // Flipkart stopping the reading (a robot check, a refused page, an error page, a page too slow), or the Live Flipkart Browser closed, offline or
+    // led to another website, before the review was found pauses the check, as on Amazon: nothing is got around, and the reading goes on from there later.
+    if (pause && m?.how !== 'found') pauseAt(n, pause, PAUSE_SAYS[pause], `${got.says} The check paused here; nothing was got around.`);
     if (got.end === 'none' || !kept) return finish(n, 'fail', got.says ?? "Flipkart's reviews could not be read.");
     const how = got.reused || (got.wentOn && !got.opened) ? ' They were read earlier and kept on this computer, so Flipkart was not opened again.' : got.wentOn ? ' The reading went on from where it had stopped, keeping the reviews read before.' : '';
     // "1 month ago" is a day only roughly: the oldest review read, about then.
@@ -959,8 +954,9 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
    * transaction, 'manual' for one a staff member must look at (a detail one
    * digit away from the sheet may only be a reading mistake). Empty when both
    * pass: the order ID and the product shown and the same on both, the order
-   * date and the amount shown on at least one and the same wherever shown, and
-   * the delivery screenshot says Delivered.
+   * date shown on at least one and the same wherever shown, the amount the
+   * same wherever shown (shown on neither, it is not compared), and the
+   * delivery screenshot says Delivered.
    */
   function judge() {
     const out = [];
@@ -1047,7 +1043,9 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       else for (const w of hidden) add(RANK.shown, `${w}NotClear`, { kind: 'not shown', detail: 'product', which: [w], final: 'manual', noId: w === 'delivery' && !idOn(d) });
     }
     if (notOrderPage) add(RANK.shown, 'deliveryNotClear', { kind: 'no details', which: ['delivery'], final: 'manual' });
-    if (read.length === 2) for (const k of ['orderDate', 'amount']) if (compared.includes(k) && formHas[k] && read.every((w) => st(w, k) === NOT_SHOWN)) add(RANK.shown, 'orderNotClear', { kind: 'not shown', detail: k, which: read, final: 'manual' });
+    if (read.length === 2 && compared.includes('orderDate') && formHas.orderDate && read.every((w) => st(w, 'orderDate') === NOT_SHOWN)) add(RANK.shown, 'orderNotClear', { kind: 'not shown', detail: 'orderDate', which: read, final: 'manual' });
+    // The amount shown on neither screenshot is only not compared: alone, it never sends a row to a staff member (an amount shown and different does).
+    if (read.length === 2 && compared.includes('amount') && formHas.amount && read.every((w) => st(w, 'amount') === NOT_SHOWN)) judgeNotes.push('Neither screenshot shows the amount, so it was not compared.');
     // Within a rank, the purchase screenshot's problem comes first.
     const first = (p) => (p.which ? (p.which.includes('order') ? 0 : 1) : 0);
     return out.sort((a, b) => a.rank - b.rank || first(a) - first(b) || a.at - b.at);
@@ -1218,7 +1216,6 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     if (seven.skip === 'noCampaign') return { type: 'reviewLinkNeeded', says: ['The review screenshot shows a written review, but the row uses no live campaign with a product read from Flipkart, so the review could not be looked for on Flipkart.'], then: "Add a campaign for this brand with its products, or ask the user for the review's link, then check this row again." };
     if (seven.skip === 'noProduct') return { type: 'somethingElse', says: ["Which of the campaign's products was bought could not be told from the purchase screenshot, so the review could not be looked for on Flipkart."], then: 'Check the screenshots by hand.' };
     if (seven.skip || !g) return { type: 'somethingElse', says: ['The review was not looked for on Flipkart.'], then: 'Check this row again.' };
-    if (seven.stopped) return { type: 'somethingElse', says: ['Flipkart stopped the reading of its reviews before the review was found, so whether it is live could not be told.', g.says], then: 'Check this row again later.' };
     if (!m) return { type: 'reviewNotLive', says: ['The review is not among the reviews Flipkart shows for the product.', g.says], then: 'It may not be public yet.' };
     if (m.how === 'found') return null;
     const many = (k, one, more) => (k === 1 ? one : more);
@@ -1418,7 +1415,8 @@ export function buildComparison(r) {
     }
     if (diff.length) return [`Different on ${named(diff)}.`, false];
     if (same.length) return [`The same on ${named(same)}.`, true];
-    if (hidden.length === 2) return ['Not shown on either screenshot.', false];
+    // The amount shown on neither screenshot is not compared, and is no problem.
+    if (hidden.length === 2) return k === 'amount' ? ['Not shown on either screenshot, so not compared.', null] : ['Not shown on either screenshot.', false];
     return hidden.length ? [`Not shown on ${named(hidden)}.`, null] : ['Not compared.', null];
   };
   for (const [k, field, sheet] of [['orderId', 'Order ID', s.orderId], ['orderDate', 'Order date', s.orderDate], ['amount', 'Amount', s.amount], ['product', 'Product', s.product]].filter(([k]) => compared.includes(k))) {
