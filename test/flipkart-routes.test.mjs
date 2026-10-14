@@ -533,7 +533,7 @@ const ALL_SAME = 'Order ID: the same. Order date: the same. Amount: the same. Pr
 /** Step 7 for a row that uses no live campaign: Flipkart is not opened. */
 const NO_CAMPAIGN = "The row uses no live campaign with a product read from Flipkart, so there is no product's page to find the review on.";
 
-test("Check over HTTP, as on Amazon: the steps streamed as they run; the screenshots downloaded through the Amazon screen's Google login (a pretend Google Drive) and kept only in data/flipkart/; one that cannot be had says why in the Amazon words; the purchase screenshot read and compared with the sheet, with Flipkart's own passing marks; the row's page shows it all after a reload; no Status; no Google login pauses first; one check at a time", async () => {
+test("Check over HTTP, as on Amazon: the steps streamed as they run; the screenshots downloaded through the Amazon screen's Google login (a pretend Google Drive) and kept only in data/flipkart/; one that cannot be had says why in the Amazon words; the purchase screenshot read and compared with the sheet, with Flipkart's own passing marks; the row's Status, Type and Note kept with it, on its page and in the table, after a reload too; no Google login pauses first; one check at a time", async () => {
   const dir = tempDir();
   const google = driveLogin();
   const reader = pretendReader();
@@ -551,20 +551,23 @@ test("Check over HTTP, as on Amazon: the steps streamed as they run; the screens
   assert.deepEqual([res.status, res.headers['content-type']], [200, 'application/x-ndjson; charset=utf-8']);
   const events = lines(res);
   assert.deepEqual([events[0].event, events[0].steps, events.at(-1).event], ['started', STEP_NAMES, 'done']);
-  assert.deepEqual(events.filter((e) => e.event === 'step').map((e) => `${e.step.n} ${e.step.state}`), ['1 running', '1 pass', '2 running', '2 pass', '3 running', '3 fail', '4 not-reached', '5 running', '5 pass', '6 running', '6 pass', '7 running', '7 not-reached', '8 later', '9 later'], 'each step as it runs');
+  assert.deepEqual(events.filter((e) => e.event === 'step').map((e) => `${e.step.n} ${e.step.state}`), ['1 running', '1 pass', '2 running', '2 pass', '3 running', '3 fail', '4 not-reached', '5 running', '5 pass', '6 running', '6 pass', '7 running', '7 not-reached', '8 not-reached', '9 running', '9 fail'], 'each step as it runs');
   const result = events.at(-1).result;
-  assert.deepEqual(result.steps.map((s) => s.detail), ['Opened the purchase screenshot.', ALL_SAME, 'The delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.', 'The delivery screenshot could not be opened, so it was not read.', 'Opened the review screenshot.', 'A written review by "Test Reviewer": "Good product, works well."', NO_CAMPAIGN, null, null], 'with no live campaign, no product page is opened on Flipkart');
+  assert.deepEqual(result.steps.map((s) => s.detail), ['Opened the purchase screenshot.', ALL_SAME, 'The delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.', 'The delivery screenshot could not be opened, so it was not read.', 'Opened the review screenshot.', 'A written review by "Test Reviewer": "Good product, works well."', NO_CAMPAIGN, 'The review was not found on Flipkart, so there is nothing to compare.', 'Needs Manual Staff Checking: Need Google Drive Access.'], 'with no live campaign, no product page is opened on Flipkart');
   assert.deepEqual([result.order.orderIds, result.order.details.amount.state, reader.read], [[orderId(2)], 'same', [one.id]], 'its purchase screenshot read on this computer (here by a pretend reader in place of Tesseract), and compared with the sheet');
   assert.deepEqual(JSON.parse(readFileSync(join(dir, 'flipkart', 'settings.json'), 'utf8')).passingMarks, DEFAULT_MARKS, "Flipkart's own passing marks, written in its own settings, starting with the Amazon checker's values");
-  assert.deepEqual([result.paused, 'status' in result, 'type' in result, 'note' in result], [null, false, false, false], 'no Status, Type or Note');
+  assert.deepEqual([result.paused, result.final, result.status, result.typeKey, result.type], [null, 'manual', 'Needs Manual Staff Checking', 'needDriveAccess', 'Need Google Drive Access'], 'the screenshot that could not be had gives the Status, as on Amazon');
+  assert.match(result.note, /^A staff member needs to check this transaction because the delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file\. /);
   assert.deepEqual([...new Set(google.fetched)], ['1TestFlipkartOrder02abcd', '1TestFlipkartDelivery02ab', '1TestFlipkartReview02abcd'], "through the Amazon screen's Google login");
   // After a reload: the row's page shows the check's steps, and each picture kept or why it could not be had.
   const page = (await call('GET', `/local/flipkart/rows/${one.id}`, { at })).json;
   assert.deepEqual([page.result.checkId, page.result.steps, page.result.order.orderIds, page.result.order.details.product.state], [result.checkId, result.steps, [orderId(2)], 'same'], 'what the purchase screenshot says is kept with the row');
+  assert.deepEqual([page.result.final, page.result.status, page.result.typeKey, page.result.type, page.result.note, page.result.finalSays], [result.final, result.status, result.typeKey, result.type, result.note, result.finalSays], 'the Status, Type and Note too');
   assert.deepEqual(page.row.shots.order.pictures.map((p) => [p.i, p.ok, p.type, p.link]), [[0, true, 'image/png', orderShot(2)]]);
   assert.deepEqual(page.row.shots.delivery.pictures, [{ i: 0, ok: false, link: deliveryShot(2), problem: { kind: 'drive', site: 'Google Drive', says: 'the Google account logged in to the dashboard has no access to the file' } }]);
   const table = (await call('GET', '/local/flipkart/sheet', { at })).json.rows[0];
-  assert.deepEqual([table.prev, table.check, table.shots.order.pictures.length], [null, undefined, 1], 'the table: no Status');
+  assert.deepEqual([table.prev, table.check, table.shots.order.pictures.length], [null, undefined, 1]);
+  assert.deepEqual([table.final, table.finalSays, table.last], ['manual', result.finalSays, { checkId: result.checkId, final: 'manual', finalSays: result.finalSays, status: 'Needs Manual Staff Checking', type: 'Need Google Drive Access', typeKey: 'needDriveAccess', note: result.note, at: result.finishedAt, seconds: result.seconds }], "the table: the row's Status, Type and Note, as on Amazon");
   const big = await call('GET', `/local/flipkart/rows/${one.id}/picture/order/0`, { at });
   const small = await call('GET', `/local/flipkart/rows/${one.id}/small/order/0`, { at });
   assert.deepEqual([big.status, big.headers['content-type'], big.data.equals(SHOT_PNG), small.status, small.data.equals(SHOT_PNG)], [200, 'image/png', true, 200, true], 'the picture as it is kept, large and small');
@@ -572,7 +575,7 @@ test("Check over HTTP, as on Amazon: the steps streamed as they run; the screens
   // A row whose pictures are in its cells needs no download, so it is checked with no Google login too.
   google.state = 'out';
   const second2 = lines(await check(two)).at(-1).result;
-  assert.deepEqual(second2.steps.map((s) => s.state), ['pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'not-reached', 'later', 'later']);
+  assert.deepEqual([second2.steps.map((s) => s.state), second2.typeKey], [['pass', 'pass', 'pass', 'pass', 'pass', 'pass', 'not-reached', 'not-reached', 'fail'], 'reviewLinkNeeded'], 'with no live campaign, the review could not be looked for on Flipkart');
   assert.deepEqual([second2.steps[3].detail, reader.readDelivery], ['It says "Delivered, Thu 23rd Jul". Order ID: the same. Order date: not shown. Amount: not shown. Product: the same.', [two.id]], 'its delivery screenshot read and compared too');
   // After a reload: what the delivery screenshot says, and the comparison table, are kept with the row.
   const page2 = (await call('GET', `/local/flipkart/rows/${two.id}`, { at })).json.result;
@@ -598,7 +601,8 @@ test("Check over HTTP, as on Amazon: the steps streamed as they run; the screens
   google.hold = null;
   release();
   const third = lines(await running).at(-1).result;
-  assert.deepEqual(third.steps.map((s) => [s.state, s.detail]).filter(([state]) => state !== 'later'), [['pass', 'Opened 2 purchase screenshots.'], ['pass', ALL_SAME], ['fail', 'The cell says "Delivered Left at the door" instead of holding a screenshot.'], ['not-reached', 'There is no delivery screenshot to read.'], ['pass', 'Opened the review screenshot.'], ['pass', 'A written review by "Test Reviewer": "Good product, works well."'], ['not-reached', NO_CAMPAIGN]]);
+  assert.deepEqual([third.steps[8].detail, third.finalSays], ['Fail: Delivery screenshot missing.', 'This transaction failed because the user wrote "Delivered Left at the door" in the form instead of giving a delivery screenshot.']);
+  assert.deepEqual(third.steps.slice(0, 7).map((s) => [s.state, s.detail]), [['pass', 'Opened 2 purchase screenshots.'], ['pass', ALL_SAME], ['fail', 'The cell says "Delivered Left at the door" instead of holding a screenshot.'], ['not-reached', 'There is no delivery screenshot to read.'], ['pass', 'Opened the review screenshot.'], ['pass', 'A written review by "Test Reviewer": "Good product, works well."'], ['not-reached', NO_CAMPAIGN]]);
   // A passing mark written wrongly in Flipkart's settings: nothing is checked until it is put right, and it is said plainly.
   writeFileSync(join(dir, 'flipkart', 'settings.json'), JSON.stringify({ passingMarks: { ...DEFAULT_MARKS, productNameShare: 2 } }));
   const wrong = 'In Flipkart\'s settings file, data/flipkart/settings.json, "passingMarks.productNameShare" must be a share from 0.01 to 1 (0.8 means 80% of the words), without quotes. Nothing can be checked until it is put right.';
@@ -645,7 +649,7 @@ test("the line under the upload line says which campaign the rows use, found the
   assert.deepEqual([about.length, about.at(-1)], [4, 'The rows use the live campaign "Test Brand Bottles" (4 rows, by their product names). 1 row uses no campaign, so its product is compared with its name in the file.'], 'row 5 has no product name');
 });
 
-test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in a checking run (a pretend reading in place of the Live Flipkart Browser) and kept in data/flipkart/reviews/<product ID>.json for every row; a copy read in the last hour serves the next check; back to the oldest day the rows need, from what each row's last check kept (its delivery day, else its order day); a reading stopped part way pauses the check, is kept only when it has at least as many reviews as the copy kept before (else only what the refused page showed is added), and the next try in the next day goes on from where it stopped", async () => {
+test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in a checking run (a pretend reading in place of the Live Flipkart Browser) and kept in data/flipkart/reviews/<product ID>.json for every row; a copy read in the last hour serves the next check; back to the oldest day the rows need, from what each row's last check kept (its delivery day, else its order day); a copy kept before each review's own link was kept is read again, once; a reading Flipkart stopped part way is said in the row's Note, for a staff member, is kept only when it has at least as many reviews as the copy kept before (else only what the refused page showed is added), and the next try in the next day goes on from where it stopped", async () => {
   const dir = tempDir();
   const google = driveLogin();
   const reader = pretendReader();
@@ -656,12 +660,13 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   const made = (i, date = '2026-10-13') => ({ id: `made-up-${i}`, name: `Made-up Reviewer ${i}`, stars: 4, title: 'Nice', text: `Made-up review number ${i}.`, dateSaid: 'Today', date, dateLatest: date, city: 'Test Town', certified: true, reviewFor: null, page: 1 });
   // The review on every made-up review screenshot (pretendReader), as Flipkart shows it.
   const MINE_ID = '00000000-0000-4000-8000-000000000001';
-  const MINE = { ...made('mine', '2026-10-01'), id: MINE_ID, name: 'Test Reviewer', stars: 5, title: 'Wonderful', text: 'Good product, works well.', dateSaid: '12 days ago' };
+  const MINE_LINK = `https://www.flipkart.com/reviews/${PID}:7?reviewId=${MINE_ID}`;
+  const MINE = { ...made('mine', '2026-10-01'), id: MINE_ID, name: 'Test Reviewer', stars: 5, title: 'Wonderful', text: 'Good product, works well.', dateSaid: '12 days ago', link: MINE_LINK };
   const asked = [];
   let answer = null;
   const reviews = async (browser, pid, opts) => {
     asked.push({ pid, since: opts.since, from: opts.from?.pages ?? null });
-    return answer ?? { pid, link: LINK, readAt: clock.toISOString(), since: opts.since, pages: 2, total: 20, end: opts.since ? 'date' : 'limit', stoppedAt: null, says: 'Made-up.', loginBox: false, reviews: [made(1), MINE, made(2), made(3, '2026-07-01')], product: { pid, name: 'Test Brand Steel Bottle', rating: 4.2, ratings: 100, reviews: 20 } };
+    return answer ?? { pid, link: LINK, readAt: clock.toISOString(), since: opts.since, pages: 2, total: 20, end: opts.since ? 'date' : 'limit', stoppedAt: null, says: 'Made-up.', loginBox: false, links: true, reviews: [made(1), MINE, made(2), made(3, '2026-07-01')], product: { pid, name: 'Test Brand Steel Bottle', rating: 4.2, ratings: 100, reviews: 20 } };
   };
   const routes = createFlipkartRoutes({ dataDir: dir, auth, google, shotOptions: { gapMs: 0 }, readers: { ...reader, reviews }, now: () => clock });
   const at = await serve({ flipkart: routes });
@@ -675,14 +680,25 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   const check = async (row) => lines(await call('POST', `/local/flipkart/rows/${row.id}/check`, { at, body: Buffer.from('{}'), type: 'application/json' }));
   const step7 = (events) => events.at(-1).result?.steps?.[6];
   const keptCount = async () => (await store.reviews(PID))?.reviews?.length ?? 0;
+  // A copy read in full just now, but kept before each review's own link was kept (14-10-2026): it is not used, and the reviews are read again.
+  await store.saveReviews(PID, { pid: PID, link: LINK, readAt: clock.toISOString(), since: null, pages: 2, total: 4, end: 'last page', stoppedAt: null, says: 'Made-up.', loginBox: false, reviews: [made(1), { ...MINE, link: undefined }], product: { pid: PID, name: 'Test Brand Steel Bottle', rating: 4.2, ratings: 100, reviews: 20 } });
   // Row 2's Check: no other row has been checked yet, so back to the row's own day; kept; the review found in it.
   const firstCheck = await check(rows[1]);
   const first = step7(firstCheck);
   assert.deepEqual([first.state, first.detail], ['pass', 'Found the review among Flipkart\'s public reviews: its words match the review screenshot\'s, and it is under the name on the review screenshot. On Flipkart it has 5 stars, and it was posted 12 days ago (01-10-2026). Read 4 reviews of the product from "See all reviews" on Flipkart, newest first (back to 01-07-2026; the rows need reviews back to 23-07-2026). Reviews posted on or after the day the order was delivered (23-07-2026, on the delivery screenshot) can be the user\'s.']);
-  assert.deepEqual([asked, await keptCount(), (await store.reviews(PID)).readAt], [[{ pid: PID, since: '2026-07-23', from: null }], 4, '2026-10-13T05:00:00.000Z']);
+  assert.deepEqual([asked, await keptCount(), (await store.reviews(PID)).readAt, (await store.reviews(PID)).links], [[{ pid: PID, since: '2026-07-23', from: null }], 4, '2026-10-13T05:00:00.000Z', true]);
+  assert.deepEqual([firstCheck.at(-1).result.final, firstCheck.at(-1).result.typeKey, firstCheck.at(-1).result.steps[7].state], ['manual', 'reviewerNotMatching', 'fail'], "found, but the made-up file's Reviewer Name column names another made-up person, so a staff member checks whose review it is");
   // What was found is kept with the row's check, for its page.
   const keptFound = (await store.sheet()).rows.find((r) => r.id === rows[1].id).check.found;
-  assert.deepEqual([keptFound.how, keptFound.review.id, keptFound.review.stars, keptFound.review.link], ['found', MINE_ID, 5, `https://www.flipkart.com/reviews/${MINE_ID}`]);
+  assert.deepEqual([keptFound.how, keptFound.review.id, keptFound.review.stars, keptFound.review.link], ['found', MINE_ID, 5, MINE_LINK], "with the review's own link, as Flipkart's reviews pages sent it");
+  // A check kept before 14-10-2026 with a link Flipkart's website does not open: its page is given no link.
+  const kept1 = (await store.sheet()).rows.find((r) => r.id === rows[1].id).check;
+  const oldLink = `https://www.flipkart.com/reviews/${MINE_ID}`;
+  const stored = JSON.parse(readFileSync(join(dir, 'flipkart', 'rows.json'), 'utf8'));
+  stored.rows.find((r) => r.id === rows[1].id).check.found.review.link = oldLink;
+  writeFileSync(join(dir, 'flipkart', 'rows.json'), JSON.stringify(stored));
+  const oldPage = (await call('GET', `/local/flipkart/rows/${rows[1].id}`, { at })).json.result;
+  assert.deepEqual([oldPage.found.review.link, oldPage.found.review.id, oldPage.final], [null, MINE_ID, kept1.final]);
   // Row 3's Check soon after: its own day is older, so the reading goes on from where the first one stopped.
   await check(rows[2]);
   const day3 = (await store.sheet()).rows.find((r) => r.id === rows[2].id).check.reviewsFrom.day;
@@ -712,14 +728,15 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   assert.deepEqual([asked.length, asked.at(-1).since], [6, '2026-07-05']);
   // A reading stopped by a robot check: the check pauses, saying what to press; the fuller copy kept before stays, with what the refused page showed.
   later(2);
-  const stoppedAt = (pages, kind, n) => ({ pid: PID, link: LINK, readAt: clock.toISOString(), since: '2026-07-05', pages, total: 20, end: 'prevented', prevented: kind, refused: { page: pages + 1, status: 200, title: 'Flipkart', reviews: 0 }, stoppedAt: pages + 1, says: `Made-up: stopped at page ${pages + 1}.`, loginBox: false, reviews: Array.from({ length: n }, (_, i) => made(10 + i)), product: { pid: PID, name: 'Test Brand Steel Bottle', rating: 4.2, ratings: 100, reviews: 20 } });
+  const stoppedAt = (pages, kind, n) => ({ pid: PID, link: LINK, readAt: clock.toISOString(), since: '2026-07-05', pages, total: 20, end: 'prevented', prevented: kind, refused: { page: pages + 1, status: 200, title: 'Flipkart', reviews: 0 }, stoppedAt: pages + 1, says: `Made-up: stopped at page ${pages + 1}.`, loginBox: false, links: true, reviews: Array.from({ length: n }, (_, i) => made(10 + i)), product: { pid: PID, name: 'Test Brand Steel Bottle', rating: 4.2, ratings: 100, reviews: 20 } });
   answer = stoppedAt(1, 'captcha', 1);
-  const paused = await check(rows[1]);
-  assert.deepEqual(paused.find((e) => e.event === 'paused'), { event: 'paused', kind: 'flipkart-captcha', says: 'Flipkart showed a robot check. This dashboard never answers a robot check. Press "Check again" when you are ready.' });
+  const robot = await check(rows[1]);
+  assert.deepEqual([robot.some((e) => e.event === 'paused'), robot.at(-1).result.final, robot.at(-1).result.typeKey], [false, 'manual', 'somethingElse'], 'the row is for a staff member; nothing is got around');
+  assert.match(robot.at(-1).result.note, /^A staff member needs to check this transaction because Flipkart stopped the reading of its reviews before the review was found, so whether it is live could not be told\. Made-up: stopped at page 2\. Check this row again later\./);
   assert.deepEqual([await keptCount(), (await store.reviews(PID)).refused], [4, { page: 2, status: 200, title: 'Flipkart', reviews: 0 }], 'not replaced by a reading stopped part way with fewer reviews');
   // Stopped by an error with as many reviews or more: kept; the next try goes on from where it stopped, and never from page 1.
   answer = stoppedAt(4, 'error', 4);
-  assert.equal((await check(rows[1])).find((e) => e.event === 'paused').kind, 'flipkart-error');
+  assert.equal((await check(rows[1])).at(-1).result.typeKey, 'somethingElse');
   assert.deepEqual([await keptCount(), (await store.reviews(PID)).end], [4, 'prevented']);
   answer = null;
   later(3);
@@ -739,6 +756,12 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   const partRun = lines(await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from(JSON.stringify({ again: true })), type: 'application/json' }));
   const passed = partRun.filter((e) => e.event === 'done').filter((e) => e.result.steps[6].state === 'pass');
   assert.deepEqual([asked.length, partRun.at(-1).event, passed.length > 1, passed.every((e) => !e.result.paused && /The review was found among the reviews read before that\./.test(e.result.steps[6].detail))], [12, 'run-done', true, true]);
+  // Flipkart refusing the product's page, before any page of reviews: every row of the run says so, for a staff member, and Flipkart is asked only once in the run.
+  later(2);
+  answer = { ...stoppedAt(0, 'blocked', 0), stoppedAt: 0 };
+  const refusedRun = lines(await call('POST', '/local/flipkart/check-all', { at, body: Buffer.from(JSON.stringify({ again: true })), type: 'application/json' }));
+  const told = refusedRun.filter((e) => e.event === 'done' && /so whether it is on Flipkart could not be told; nothing was got around\.$/.test(e.result.steps[6].detail ?? ''));
+  assert.deepEqual([asked.length, refusedRun.at(-1).event, told.length > 1, refusedRun.some((e) => e.event === 'paused')], [13, 'run-done', true, false]);
 });
 
 /** "Start checking" as the page sends it, its lines read as they come; stop() closes it, as Stop does. */
@@ -765,7 +788,7 @@ function startRun(at, body = {}) {
   return { lines, done, stop: () => req.destroy() };
 }
 
-test('"Start checking" over HTTP, as on Amazon: the rows not checked yet, one by one from the first one, each row\'s steps streamed and its new line sent once it is finished; no one logged in to Google, a login using the Live Amazon Browser, or a pause in a row\'s check pauses before or at that row, and checking carries on from it; Stop; "Check every row again"; one check at a time; still no Status', async () => {
+test('"Start checking" over HTTP, as on Amazon: the rows not checked yet, one by one from the first one, each row\'s steps streamed and its new line sent once it is finished; no one logged in to Google, a login using the Live Amazon Browser, or a pause in a row\'s check pauses before or at that row, and checking carries on from it; Stop; "Check every row again"; one check at a time; each row\'s new line carries its Status, Type and Note', async () => {
   const dir = tempDir();
   const google = driveLogin();
   const reader = pretendReader();
@@ -843,12 +866,13 @@ test('"Start checking" over HTTP, as on Amazon: the rows not checked yet, one by
   const run = await checkAll();
   assert.deepEqual(runLines(run), [['run-started', null, 1], ['row', 'Row 1', 1], ['row-done', 'Row 1', 2], ['row', 'Row 3', 2], ['row-done', 'Row 3', 3], ['row', 'Row 4', 3], ['row-done', 'Row 4', 4], ['row', 'Row 5', 4], ['row-done', 'Row 5', 5], ['run-done', null, 5]]);
   assert.deepEqual(run.filter((e) => e.event === 'started').map((e) => [e.name, e.steps]), [['Row 1', STEP_NAMES], ['Row 3', STEP_NAMES], ['Row 4', STEP_NAMES], ['Row 5', STEP_NAMES]], "each row's steps, streamed as they run");
-  assert.deepEqual(run.filter((e) => e.event === 'row-done').map((e) => [e.rows.length, e.rows[0].id === e.rowId, e.rows[0].done, e.rows[0].prev]), [[1, true, true, null], [1, true, true, null], [1, true, true, null], [1, true, true, null]], 'the row\'s new line for the table: checked, and still no Status');
-  assert.deepEqual(run.find((e) => e.event === 'done').result.steps.map((s) => s.state), ['pass', 'pass', 'fail', 'not-reached', 'pass', 'pass', 'not-reached', 'later', 'later'], "row 1's check: the screenshots, its purchase and review screenshots read, and its delivery screenshot not, as it could not be had");
+  const doneOf = (rowId) => run.find((e) => e.event === 'done' && e.result.rowId === rowId).result;
+  assert.deepEqual(run.filter((e) => e.event === 'row-done').map((e) => [e.rows.length, e.rows[0].id === e.rowId, e.rows[0].done, e.rows[0].prev, e.rows[0].final, e.rows[0].last.note]), run.filter((e) => e.event === 'row-done').map((e) => [1, true, true, null, doneOf(e.rowId).final, doneOf(e.rowId).note]), "the row's new line for the table: checked, with its Status, Type and Note at once");
+  assert.deepEqual(run.find((e) => e.event === 'done').result.steps.map((s) => s.state), ['pass', 'pass', 'fail', 'not-reached', 'pass', 'pass', 'not-reached', 'not-reached', 'fail'], "row 1's check: the screenshots, its purchase and review screenshots read, and its delivery screenshot not, as it could not be had");
   assert.deepEqual(run.at(-1), { event: 'run-done', checked: 4, total: 5, done: 5, left: 0 });
   assert.deepEqual(await doneNow(), [true, true, true, true, true]);
   const page = (await call('GET', `/local/flipkart/rows/${one.id}`, { at })).json;
-  assert.deepEqual([page.row.done, page.result.steps.length, 'status' in page.result], [true, 9, false], "its page shows its last check's steps, and no Status");
+  assert.deepEqual([page.row.done, page.result.steps.length, page.result.status, page.row.last.status], [true, 9, 'Needs Manual Staff Checking', 'Needs Manual Staff Checking'], "its page shows its last check's steps and its Status");
   const all = await checkAll();
   assert.deepEqual([all.status, all.json.message], [409, 'All rows are checked. To check them all again, press "Check every row again".']);
 
@@ -877,7 +901,7 @@ test('"Start checking" over HTTP, as on Amazon: the rows not checked yet, one by
   assert.deepEqual(runLines(redone).filter(([e]) => e === 'row').map(([, label]) => label), ['Row 1', 'Row 2', 'Row 3', 'Row 4', 'Row 5']);
   assert.deepEqual(redone.at(-1), { event: 'run-done', checked: 5, total: 5, done: 5, left: 0 });
   const table = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
-  assert.deepEqual(table.map((r) => [r.done, r.prev]), Array.from({ length: 5 }, () => [true, null]), 'every row checked, and no Status');
+  assert.deepEqual(table.map((r) => [r.done, r.prev, ['pass', 'fail', 'manual'].includes(r.final)]), Array.from({ length: 5 }, () => [true, null, true]), 'every row checked, each with its Status');
 
   // The same safety as every route.
   const get = await call('GET', '/local/flipkart/check-all', { at });

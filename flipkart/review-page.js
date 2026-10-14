@@ -7,11 +7,11 @@
 // so no other page opens); it never types anything. readReviewsPage reads each
 // review as the page shows it. In Node: the reviews in the page's own data,
 // as Flipkart sent the page (reviewsInPageData: they carry each review's own
-// ID and its whole text), and Flipkart's date words made into dates
+// ID, its own link and its whole text), and Flipkart's date words made into dates
 // (dateFromWords). Reviews are kept as Flipkart shows them; whatever is shown
 // on the screen later is cleaned first.
 
-import { parseUrl, isFlipkart, FLIPKART_ORIGIN } from './links.js';
+import { parseUrl, isFlipkart, FLIPKART_ORIGIN, reviewPageLink } from './links.js';
 
 /** How a review page is asked for: Flipkart's newest reviews first. */
 export const NEWEST_FIRST = 'MOST_RECENT';
@@ -170,8 +170,10 @@ const words = (v, limit = 5000) => (typeof v === 'string' ? plainText(v).replace
 /**
  * The reviews in the page's own data, in the page's order: each one's own ID,
  * the reviewer's name, the stars, the title, the whole text, the date words,
- * the city, whether Flipkart marks it a certified (verified) purchase, and
- * what it is a review for ("Quantity 50 ml"). [] when the page has none.
+ * the city, whether Flipkart marks it a certified (verified) purchase, what it
+ * is a review for ("Quantity 50 ml"), and its own link, the one that opens it
+ * on Flipkart (links.js reviewPageLink: null when the page gives none). []
+ * when the page has none.
  */
 export function reviewsInPageData(html) {
   const out = [];
@@ -180,8 +182,9 @@ export function reviewsInPageData(html) {
     if (o.type === 'ProductReviewValue') {
       const stars = Number(o.rating);
       const about = (Array.isArray(o.productAttributeList) ? o.productAttributeList : []).map((a) => words(`${a?.name ?? ''} ${a?.value ?? ''}`, 80)).filter(Boolean);
+      const id = words(o.id, 80) || null;
       out.push({
-        id: words(o.id, 80) || null,
+        id,
         name: words(o.author, 120) || null,
         stars: Number.isInteger(stars) && stars >= 1 && stars <= 5 ? stars : null,
         title: words(o.title, 300),
@@ -190,6 +193,7 @@ export function reviewsInPageData(html) {
         city: words(o.location?.city, 80) || null,
         certified: Boolean(o.certifiedBuyer || o.reviewPropertyMap?.VERIFIED_PURCHASE),
         reviewFor: about.join(', ') || null,
+        link: id && typeof o.url === 'string' ? reviewPageLink(o.url, id) : null,
       });
       return;
     }

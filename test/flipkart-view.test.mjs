@@ -973,6 +973,62 @@ test('"Start checking", as on Amazon: the rows checked one by one from the first
   assert.doesNotMatch(textOf(s.page()), /Needs Manual|Not checked yet/, 'no Status cards');
 });
 
+test("a checked row's Status, Type and Note, as on Amazon: in the table (the Status bold in its colour, with when the row was checked and how long it took; the Type a small tag; the Note), large at the top of its page with its reason, and in its Type and Note card; after a reload, and live as soon as its check finishes; \"Checking…\" while it runs; a Status the file already had says so; the Live Flipkart Browser says what it is for", async () => {
+  const LAST = { checkId: 'c20261012123000abcdef', final: 'manual', finalSays: 'A staff member needs to check this transaction because the review is not among the 3 reviews Flipkart shows for the product.', status: 'Needs Manual Staff Checking', type: 'Review not live', typeKey: 'reviewNotLive', note: 'A staff member needs to check this transaction because the review is not among the 3 reviews Flipkart shows for the product. It may not be public yet.', at: '2026-10-12T12:30:00.000Z', seconds: 65 };
+  const checked = { ...SAVED.rows[0], done: true, final: 'manual', finalSays: LAST.finalSays, last: LAST };
+  const fromFile = { ...SAVED.rows[1], prev: { status: 'Pass', type: 'Verified', note: 'Made-up note from the file.' }, prevFinal: 'pass', final: 'pass' };
+  const saved = { ...SAVED, rows: [checked, fromFile, SAVED.rows[2]] };
+  const s = await opened(fakeLocal({ saved }));
+  const cells = (tree, key) => findAll(byId(tree, 'rows-table'), (n) => n.attrs?.['data-cell'] === key);
+  assert.deepEqual(cells(s.page(), 'status').map(textOf), [`Needs Manual Staff Checking${words.ist(LAST.at)}took 1 minute 5 seconds`, 'PassFrom the file', 'Empty']);
+  assert.deepEqual(cells(s.page(), 'status').map((c) => findAll(c, (n) => /\bfk-final\b/.test(n.attrs?.class ?? '')).map((n) => n.attrs.class)), [['fk-final fk-final-manual'], ['fk-final fk-final-pass'], []], 'in its colour, as on Amazon');
+  assert.deepEqual(cells(s.page(), 'type').map(textOf), ['Review not live', 'Verified', 'Empty']);
+  assert.deepEqual(cells(s.page(), 'note').map(textOf), [LAST.note, 'Made-up note from the file.', 'Empty']);
+  // "Checking…" in the table for the row being checked.
+  let release;
+  const gate = new Promise((r) => (release = r));
+  s.local.checking = async (onEvent) => {
+    onEvent({ event: 'started', checkId: LAST.checkId, steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
+    await gate;
+    return { ok: true };
+  };
+  byId(s.page(), 'check-r000000000001').attrs.onclick({ stopPropagation() {} });
+  await settle();
+  assert.deepEqual([textOf(cells(s.page(), 'status')[0]), textOf(cells(s.page(), 'type')[0]), textOf(cells(s.page(), 'note')[0])], ['Checking…', '', '']);
+  release();
+  await settle();
+  // The row's page after a reload: its Status at the top, large, with its reason, then its Type and Note.
+  const KEPT = { ...LAST_CHECK, final: 'manual', status: LAST.status, type: LAST.type, typeKey: LAST.typeKey, note: LAST.note, finalSays: LAST.finalSays };
+  const r = await rowScreen(fakeLocal({ saved, pages: { r000000000001: { row: checked, result: KEPT } } }));
+  assert.deepEqual([byId(r.page(), 'final-banner').attrs.class, textOf(byId(r.page(), 'final-word')), textOf(byId(r.page(), 'final-says'))], ['fk-final-banner fk-final-banner-manual', 'Needs Manual Staff Checking', LAST.finalSays]);
+  assert.deepEqual([textOf(byId(r.page(), 'result-type')), textOf(byId(r.page(), 'result-note'))], ['Review not live', LAST.note]);
+  // Checked again on its page: "Checking…", then the new Status at once, before the table is fetched again.
+  let done;
+  const finish = new Promise((x) => (done = x));
+  const NEW = { ...KEPT, final: 'pass', status: 'Pass', type: 'Verified', typeKey: 'verified', finalSays: 'This transaction passed: made-up reason.', note: 'This transaction passed: made-up reason. More made-up words.', finishedAt: '2026-10-13T09:00:00.000Z' };
+  r.local.checking = async (onEvent) => {
+    onEvent({ event: 'started', checkId: NEW.checkId, steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
+    await finish;
+    onEvent({ event: 'done', result: NEW });
+    return { ok: true };
+  };
+  byId(r.page(), 'check').attrs.onclick();
+  await settle();
+  assert.deepEqual([textOf(byId(r.page(), 'final-word')), textOf(byId(r.page(), 'final-says'))], ['Checking…', 'This row is being checked now.']);
+  done();
+  await settle();
+  assert.deepEqual([byId(r.page(), 'final-banner').attrs.class, textOf(byId(r.page(), 'final-word')), textOf(byId(r.page(), 'final-says')), textOf(byId(r.page(), 'result-type')), textOf(byId(r.page(), 'result-note'))], ['fk-final-banner fk-final-banner-pass', 'Pass', NEW.finalSays, 'Verified', NEW.note]);
+  // A Status the file already had; a row checked before Flipkart rows were given a Status.
+  const file = await rowScreen(fakeLocal({ saved, pages: { r000000000002: { row: fromFile, result: null } } }), 'r000000000002');
+  assert.deepEqual([textOf(byId(file.page(), 'final-word')), textOf(byId(file.page(), 'final-says')), textOf(byId(file.page(), 'card-result'))], ['Pass', 'From the file: the uploaded file already had a Status for this row.', 'Type and NoteVerified From the fileMade-up note from the file.']);
+  const older = { ...SAVED.rows[2], done: true };
+  const before = await rowScreen(fakeLocal({ saved: { ...SAVED, rows: [SAVED.rows[0], SAVED.rows[1], older] }, pages: { r000000000003: { row: older, result: LAST_CHECK } } }), 'r000000000003');
+  assert.deepEqual([textOf(byId(before.page(), 'final-word')), textOf(byId(before.page(), 'final-says'))], [FINAL_NONE, 'This row was checked before Flipkart rows were given a Status. Press "Check again" to give it one.']);
+  // The Live Flipkart Browser: what it is for now.
+  assert.equal(textOf(byId(r.page(), 'live')), `Live Flipkart BrowserThe Chrome window named "Live Flipkart Browser" shows each Flipkart page as it opens. Step 7 opens it to read the reviews of the campaign's product on Flipkart: the product's page, then "See all reviews", newest first, once in a checking run, kept on this computer for every row. The screenshots are read on this computer, without it.${textOf(byId(r.page(), 'current-action'))}No pictures are taken of it. What it read shows in the "Found on Flipkart" box.`);
+  assert.doesNotMatch(textOf(r.page()), /in a later step\.|only open the screenshots/, 'nothing says the steps only open the screenshots');
+});
+
 test('the tabs go to the right screen: Amazon to #/amazon from the Flipkart screen, Flipkart to #/flipkart from the Amazon screen', () => {
   const s = screen(flipkart);
   byId(s.draw(), 'market-amazon').attrs.onclick({ stopPropagation() {} });

@@ -7,7 +7,8 @@
 // one, or to end, delete or read again one), /local/flipkart/account (GET:
 // the Google login, for the top bar), /local/flipkart/rows/… (GET a row's
 // page, with its last check, and its pictures; POST …/check to check it, as on
-// Amazon, the steps streamed as they run) and /local/flipkart/check-all (POST:
+// Amazon, the steps streamed as they run, ending with the row's Status, Type
+// and Note, kept with the row) and /local/flipkart/check-all (POST:
 // "Start checking", later "Carry on checking", or "Check every row again",
 // the rows checked one by one as on Amazon, each row's steps streamed as they
 // run). The file is read on this
@@ -35,7 +36,8 @@ import { openWorkbook, guessColumns, columnProblems, rememberedChoice, sheetRows
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS, ROW_ID } from './store.js';
-import { cellLinks, linkLabel, linksIn, isDriveLink, linkKey } from './links.js';
+import { cellLinks, linkLabel, linksIn, isDriveLink, linkKey, reviewPageLink } from './links.js';
+import { FINAL_WORDS, finalOfFile } from './final.js';
 import { createScreenshots, downloadable } from './screenshots.js';
 import { runCheck, PAUSE_SAYS, keptDay } from './check.js';
 import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct, campaignsFound, campaignsFor, brandIn } from './campaigns.js';
@@ -61,6 +63,10 @@ const KEPT_PART_MS = 24 * 60 * 60 * 1000;
 const wholeReading = (r) => ['date', 'last page', 'limit'].includes(r?.end);
 /** A reading of Flipkart's reviews stopped part way (by Flipkart, a page too slow, the window closed, Stop…) after reading a page or more. */
 const partReading = (r) => Boolean(r?.link && Number.isInteger(r.pages) && r.pages > 0 && Array.isArray(r.reviews) && r.end && r.end !== 'none' && !wholeReading(r));
+/** A copy of Flipkart's reviews with each review's own link (reviews.js); one kept before 14-10-2026 has none, so it is never used, and the reviews are read again once. */
+const withLinks = (r) => (r?.links === true ? r : null);
+/** A reading Flipkart stopped (a robot check, a refused page, an error, a page too slow): the rest of the checking run does not ask Flipkart again, even when no page of reviews was read. */
+const stoppedByFlipkart = (r) => r?.end === 'prevented' || r?.end === 'slow';
 
 /** A row counts as checked once its last check finished: only a finished check is kept with the row (store.js saveCheck). */
 const isChecked = (r) => Boolean(r?.check);
@@ -235,8 +241,22 @@ export function rowView(r) {
     // The file's other columns (such as the reviewer's name), by column number: their words, and where each link goes.
     values: Object.fromEntries(Object.entries(r.values ?? {}).map(([col, v]) => [col, { text: v?.text ?? '', labels: cellLinks(v?.text ?? '', v?.behind ?? '').links.map((link) => ({ link, label: linkLabel(link) })) }])),
     prev: r.prev ?? null,
+    // The Status the uploaded file gave the row, as Pass, Fail or Needs Manual Staff Checking, even after the row is checked (final.js finalOfFile).
+    prevFinal: r.prev ? finalOfFile(r.prev) : null,
+    // The last check's Status, Type and Note, as on Amazon (final: 'pass', 'fail' or 'manual'; finalSays: its reason, the Note's first sentence); null when the row has none.
+    last: r.check?.final ? { checkId: r.check.checkId ?? null, final: r.check.final, finalSays: r.check.finalSays ?? null, status: FINAL_WORDS[r.check.final] ?? '', type: r.check.type ?? '', typeKey: r.check.typeKey ?? null, note: r.check.note ?? '', at: r.check.finishedAt ?? null, seconds: r.check.seconds ?? null } : null,
+    // The Status: the last check's; else the one the file gave (a check made before Flipkart rows had a Status leaves it); else null (not checked yet).
+    final: r.check?.final ?? (r.prev ? finalOfFile(r.prev) : null),
+    finalSays: r.check?.final ? r.check.finalSays ?? null : null,
     done: isChecked(r),
   };
+}
+
+/** A row's last check as its page is given it: a review's link only in the form Flipkart's website opens (a check made before 14-10-2026 kept one that shows Flipkart's error page, so it is left out). */
+export function checkView(check) {
+  const r = check?.found?.review;
+  if (!r?.link || reviewPageLink(r.link, r.id ?? null)) return check ?? null;
+  return { ...check, found: { ...check.found, review: { ...r, link: null } } };
 }
 
 /**
@@ -702,25 +722,30 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
    * and so is one stopped part way in the last day (a robot check, a refusal,
    * an error, a page too slow, Stop), its pages kept. A reading stopped part
    * way serves the rest of the run as it is (a row whose review is found in
-   * it passes; one whose review is not pauses the check), so Flipkart is not
+   * it can pass; for one whose review is not, the Note says Flipkart stopped
+   * the reading, or, after the Live Flipkart Browser was closed or offline,
+   * the check pauses), so Flipkart is not
    * asked again in the same run; it is kept only when it has at least as many
    * reviews as the copy kept before, else only what Flipkart's refused page
-   * showed is added to that copy.
+   * showed is added to that copy. A reading Flipkart stopped before any page
+   * of reviews (its product's page refused, say) serves the rest of the run
+   * too, so Flipkart is not asked again. A copy kept before each review's own
+   * link was kept (14-10-2026) is not used: the reviews are read again, once.
    */
   function reviewsSource() {
     const run = new Map();
     const covers = (r, since) => r.end === 'last page' || r.end === 'limit' || (r.end === 'date' && since !== null && r.since !== null && r.since <= since);
     return async (pid, { rowId = null, day = null, onPage, signal = null } = {}) => {
       const since = oldestDay(await keptRows(), rowId, day);
-      const kept = await store.reviews(pid).catch(() => null);
+      const kept = withLinks(await store.reviews(pid).catch(() => null));
       const age = now().getTime() - Date.parse(kept?.readAt ?? '');
       const prior = run.get(pid) ?? (wholeReading(kept) && age < KEPT_REVIEWS_MS ? kept : null);
-      if (prior && (covers(prior, since) || partReading(prior))) return { ...prior, reused: true };
+      if (prior && (covers(prior, since) || partReading(prior) || stoppedByFlipkart(prior))) return { ...prior, reused: true };
       const from = prior?.end === 'date' ? prior : partReading(kept) && age < KEPT_PART_MS ? kept : null;
       const read = await readReviewsOf(liveBrowser(), pid, { since, now, onPage, signal, from });
       if (read.reviews?.length && (wholeReading(read) || read.reviews.length >= (kept?.reviews?.length ?? 0))) await store.saveReviews(pid, read);
       else if (read.refused && kept) await store.saveReviews(pid, { ...kept, refused: read.refused });
-      if (wholeReading(read) || partReading(read)) run.set(pid, read);
+      if (wholeReading(read) || partReading(read) || stoppedByFlipkart(read)) run.set(pid, read);
       return { ...read, reused: false };
     };
   }
@@ -867,7 +892,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       }
       const row = await store.row(id);
       if (!row) return refuse(res, 404, 'No row has that id.');
-      return sendJson(res, 200, { row: rowView(row), result: row.check ?? null });
+      return sendJson(res, 200, { row: rowView(row), result: checkView(row.check) });
     }
     if (parts.length === 3 && parts[2] === 'check') {
       if (method !== 'POST') {

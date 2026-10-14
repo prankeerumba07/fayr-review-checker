@@ -3,8 +3,9 @@
 // changed for Flipkart; the steps that get the screenshots run, step 2 reads
 // the purchase screenshot and compares it with the sheet, and step 4 reads the
 // delivery screenshot and compares it, in the Amazon words; the comparison
-// table puts the sheet and both screenshots side by side; every other step
-// comes in a later step, and the row gets no Status.
+// table puts the sheet and both screenshots side by side; step 7 searches a
+// pretend reading of Flipkart's reviews, step 8 compares the review found,
+// and step 9 gives the Status, Type and Note (flipkart-status.test.mjs).
 // A screenshot that cannot be had says why in the Amazon words; a pause stops
 // the check at its step. Made-up rows and made-up readings only; nothing is
 // downloaded and no picture is read.
@@ -77,15 +78,17 @@ async function run(row, answers, opts = {}) {
   return { result, events, asked: screenshots.asked, read, readD, readR };
 }
 
-test("a check's steps are the Amazon check's, in the same order, changed for Flipkart: the screenshot steps and steps 2, 4 and 6 run, each shown as it runs; every other step comes in a later step; the row gets no Status", async () => {
+test("a check's steps are the Amazon check's, in the same order, changed for Flipkart, each shown as it runs; with no way to read Flipkart's reviews, step 7 comes in a later step, step 8 is not reached, and step 9 gives the row to a staff member", async () => {
   assert.deepEqual(STEP_NAMES, SCREEN_STEPS, 'the screen names them the same');
   assert.deepEqual([STEP_NAMES[0], STEP_NAMES[1], STEP_NAMES[2], STEP_NAMES[3], STEP_NAMES[8]], [AMAZON_STEPS[1], AMAZON_STEPS[2], AMAZON_STEPS[3], AMAZON_STEPS[4], AMAZON_STEPS[9]], "the screenshots' steps and the last one in the Amazon words");
   const { result, events, asked } = await run(ROW, {});
   assert.deepEqual(asked, ['order', 'delivery', 'reviewShot']);
-  assert.deepEqual(result.steps.map((s) => [s.state, s.detail]), [['pass', 'Opened the purchase screenshot.'], ['pass', 'Order ID: the same. Order date: the same. Amount: the same. Product: the same.'], ['pass', 'Opened the delivery screenshot.'], ['pass', 'It says "Delivered, Thu 23rd Jul". Order ID: the same. Order date: not shown. Amount: not shown. Product: the same.'], ['pass', 'Opened the review screenshot.'], ['pass', 'A written review by "Test Reviewer One": "Keeps water cold all day and the grip is good."'], ['later', null], ['later', null], ['later', null]]);
+  assert.deepEqual(result.steps.map((s) => [s.state, s.detail]), [['pass', 'Opened the purchase screenshot.'], ['pass', 'Order ID: the same. Order date: the same. Amount: the same. Product: the same.'], ['pass', 'Opened the delivery screenshot.'], ['pass', 'It says "Delivered, Thu 23rd Jul". Order ID: the same. Order date: not shown. Amount: not shown. Product: the same.'], ['pass', 'Opened the review screenshot.'], ['pass', 'A written review by "Test Reviewer One": "Keeps water cold all day and the grip is good."'], ['later', null], ['not-reached', 'The review was not found on Flipkart, so there is nothing to compare.'], ['fail', 'Needs Manual Staff Checking: Something else.']]);
   const said = (e) => (e.event === 'step' ? `step ${e.step.n} ${e.step.state}` : e.event === 'action' ? `action ${e.says}` : e.event);
-  assert.deepEqual(events.map(said), ['started', 'step 1 running', 'action Opening the purchase screenshot', 'step 1 pass', 'step 2 running', 'action Reading the purchase screenshot', 'step 2 pass', 'step 3 running', 'action Opening the delivery screenshot', 'step 3 pass', 'step 4 running', 'action Reading the delivery screenshot', 'step 4 pass', 'step 5 running', 'action Opening the review screenshot', 'step 5 pass', 'step 6 running', 'action Reading the review screenshot', 'step 6 pass', 'step 7 later', 'step 8 later', 'step 9 later', 'action Done. The other steps come in a later step, so this row has no Status yet.', 'done']);
-  assert.deepEqual([result.paused, result.stopped, 'status' in result, 'type' in result, 'note' in result], [null, false, false, false, false], 'no Status, Type or Note');
+  assert.deepEqual(events.map(said), ['started', 'step 1 running', 'action Opening the purchase screenshot', 'step 1 pass', 'step 2 running', 'action Reading the purchase screenshot', 'step 2 pass', 'step 3 running', 'action Opening the delivery screenshot', 'step 3 pass', 'step 4 running', 'action Reading the delivery screenshot', 'step 4 pass', 'step 5 running', 'action Opening the review screenshot', 'step 5 pass', 'step 6 running', 'action Reading the review screenshot', 'step 6 pass', 'step 7 later', 'step 8 not-reached', 'step 9 running', 'action Writing the Status, Type and Note', 'step 9 fail', 'action Done: Needs Manual Staff Checking (Something else)', 'done']);
+  assert.deepEqual([result.paused, result.stopped, result.final, result.status, result.typeKey, result.type], [null, false, 'manual', 'Needs Manual Staff Checking', 'somethingElse', 'Something else']);
+  assert.equal(result.note, "A staff member needs to check this transaction because the review was not looked for on Flipkart. Check this row again. The purchase screenshot and the delivery screenshot match the form. There is no campaign for this product's brand, so the product was compared with the product name in the sheet.");
+  assert.equal(result.finalSays, 'A staff member needs to check this transaction because the review was not looked for on Flipkart.');
   assert.match(result.checkId, CHECK_ID);
   assert.match(newCheckId(new Date('2026-10-12T12:30:00Z')), /^c20261012123000[0-9a-f]{6}$/);
   assert.equal((await run(ROW, { order: { files: ['/made-up/a.png', '/made-up/b.png'], problems: [] } })).result.steps[0].detail, 'Opened 2 purchase screenshots.');
@@ -162,7 +165,7 @@ test("step 2, as the Amazon checker's step 3: the purchase screenshot is read on
   // A picture whose words are not clear.
   const unclear = await run(ROW, {}, { read: reading([], { ok: false, problem: 'its words are not clear enough to read', confidence: 30, wordCount: 2 }) });
   assert.deepEqual([unclear.result.steps[1].state, unclear.result.steps[1].detail, unclear.result.order.problem], ['fail', 'It could not be read: its words are not clear enough to read.', 'its words are not clear enough to read']);
-  assert.deepEqual([unclear.result.steps[2].state, unclear.result.steps.at(-1).state], ['pass', 'later'], 'the check goes on; still no Status');
+  assert.deepEqual([unclear.result.steps[2].state, unclear.result.steps.at(-1).state, unclear.result.typeKey], ['pass', 'fail', 'orderNotClear'], 'the check goes on; a staff member looks');
 });
 
 test("step 4, as the Amazon checker's step 5: the delivery screenshot is read on this computer, even when the purchase screenshot has a problem; it must say Delivered, and its order ID, amount and product are each the same, different or not shown, in the Amazon words; a detail it does not show is never different; two different order IDs are both said; then the comparison table puts the sheet and the two screenshots side by side", async () => {
@@ -181,9 +184,11 @@ test("step 4, as the Amazon checker's step 5: the delivery screenshot is read on
   assert.deepEqual([sign.result.steps[3].state, sign.result.steps[3].detail.split('. ')[0]], ['pass', 'It says "Return policy ended", which Flipkart shows only for a delivered order']);
   const to = await run(ROW, {}, { delivery: deliveryReading([`Order #${ID}`, BOTTLE, 'Delivered to Test Person at Home']) });
   assert.deepEqual([to.result.steps[3].detail.split('. ')[0], to.result.delivery.deliveredText], ['It says "Delivered to …"', 'Delivered to …'], 'never the person it was handed to');
-  // A detail it does not show is never different, and it need not show the order ID or the product; an item's price with no total is not the order's amount.
+  // A detail it does not show is never different, and it need not show the order ID when it shows the product; one that shows neither cannot be tied to the order, as on Amazon. An item's price with no total is not the order's amount.
   const bare = await run(ROW, {}, { delivery: deliveryReading(['© Delivered, Thu 23rd Jul']) });
-  assert.deepEqual([bare.result.steps[3].state, bare.result.steps[3].detail], ['pass', 'It says "Delivered, Thu 23rd Jul". Order ID: not shown. Order date: not shown. Amount: not shown. Product: not shown.']);
+  assert.deepEqual([bare.result.steps[3].state, bare.result.steps[3].detail], ['fail', 'It says "Delivered, Thu 23rd Jul". Order ID: not shown. Order date: not shown. Amount: not shown. Product: not shown. The delivery screenshot shows neither the product\'s name nor this order\'s ID, so it cannot be matched to this order.']);
+  const noId = await run(ROW, {}, { delivery: deliveryReading(['© Delivered, Thu 23rd Jul', BOTTLE]) });
+  assert.deepEqual([noId.result.steps[3].state, noId.result.steps[3].detail], ['pass', 'It says "Delivered, Thu 23rd Jul". Order ID: not shown. Order date: not shown. Amount: not shown. Product: the same.'], 'the product ties it to the order');
   const price = await run(ROW, {}, { delivery: deliveryReading(['Delivered, Thu 23rd Jul', `${BOTTLE} ₹329`]) });
   assert.match(price.result.steps[3].detail, / Amount: not shown \(₹329 is an item's price, not the order's total\)\. /);
   const paid = await run(ROW, {}, { delivery: deliveryReading(['Delivered, Thu 23rd Jul', BOTTLE, 'Paid ₹349 by UPI']) });
@@ -211,7 +216,7 @@ test("step 4, as the Amazon checker's step 5: the delivery screenshot is read on
   ]);
   assert.deepEqual([same.result.sheet, same.result.compared, same.result.shotsHad], [{ orderId: ID, orderDate: '20-07-2026', amount: '349', product: 'Test Brand Steel Bottle' }, ['orderId', 'orderDate', 'amount', 'product'], ['order', 'delivery']]);
   assert.deepEqual(ids.result.comparison[0], { field: 'Order ID', sheet: ID, order: `The same: ${ID}`, delivery: `Different: ${other}`, result: 'Different on the delivery screenshot.', ok: false });
-  assert.deepEqual([bare.result.comparison[0], bare.result.comparison[3]].map((r) => [r.field, r.delivery, r.result, r.ok]), [['Order ID', 'Not shown', 'The same on the purchase screenshot; not shown on the delivery screenshot.', true], ['Product', 'Not shown', 'The same on the purchase screenshot; not shown on the delivery screenshot.', null]], 'the delivery screenshot need not show the order ID; whether a product shown on one screenshot only is enough is for the Status, in a later step');
+  assert.deepEqual([bare.result.comparison[0], bare.result.comparison[3]].map((r) => [r.field, r.delivery, r.result, r.ok]), [['Order ID', 'Not shown', 'The same on the purchase screenshot; not shown on the delivery screenshot.', true], ['Product', 'Not shown', 'The same on the purchase screenshot; not shown on the delivery screenshot.', null]], 'the delivery screenshot need not show the order ID; whether a product shown on one screenshot only is enough is judged with the Status');
   assert.deepEqual(quiet.result.comparison.at(-1), { field: 'Delivered', sheet: '', order: '', delivery: 'Not shown', result: 'It does not say Delivered.', ok: false });
   const fewer = await run(ROW, {}, { has: { orderDate: false, amount: false, product: false, deliveryShot: false } });
   assert.deepEqual(fewer.result.comparison, [{ field: 'Order ID', sheet: ID, order: `The same: ${ID}`, delivery: 'Not read', result: 'The same on the purchase screenshot.', ok: true }], 'only the details and the screenshots the file has columns for');
@@ -254,7 +259,7 @@ test("step 6, as the Amazon checker's step 7 reads a review screenshot: the rati
   assert.deepEqual([noColumn.result.steps[5].state, noColumn.result.steps[5].detail], ['not-reached', 'The file has no review screenshot column, so there is nothing to read.']);
 });
 
-test("step 7: Flipkart's reviews of the campaign's product, read once in a checking run (a pretend reading) for every row, searched for the review screenshot's words and name; reviews from the day the order was delivered count, else from the day it was placed, a date with no year being the most recent such day not in the future, and with neither no date is used; a row with nothing to search with reads nothing; a reading stopped by a robot check, a block or a slow page pauses the check, unless the review was found among the pages read", async () => {
+test("step 7: Flipkart's reviews of the campaign's product, read once in a checking run (a pretend reading) for every row, searched for the review screenshot's words and name; reviews from the day the order was delivered count, else from the day it was placed, a date with no year being the most recent such day not in the future, and with neither no date is used; a row with nothing to search with reads nothing; a reading Flipkart stopped (a robot check, a block, a slow page) before the review was found is said, for a staff member, and the Live Flipkart Browser closed pauses the check", async () => {
   const NOW = () => new Date('2026-10-13T05:00:00.000Z');
   const made = (i, date) => ({ id: `made-up-${i}`, name: `Made-up Reviewer ${i}`, stars: 4, title: 'Nice', text: `Made-up review number ${i}.`, dateSaid: '3 days ago', date, dateLatest: date, city: 'Test Town', certified: true, reviewFor: null, page: 1 });
   const READ = { pid: 'TESTPID0000001', link: 'https://www.flipkart.com/test-brand-steel-bottle/product-reviews/itmtestbottle01?pid=TESTPID0000001&marketplace=FLIPKART', readAt: '2026-10-13T05:00:00.000Z', since: null, pages: 3, total: 40, end: 'limit', stoppedAt: null, says: '3 reviews read from 3 pages, the most read at one time; older reviews were not read.', reviews: [made(1, '2026-10-10'), made(2, '2026-08-01'), made(3, '2026-07-15')], product: { pid: 'TESTPID0000001', name: BOTTLE, rating: 4.2, ratings: 100, reviews: 40 } };
@@ -274,7 +279,7 @@ test("step 7: Flipkart's reviews of the campaign's product, read once in a check
   assert.deepEqual(asked.at(-1), { pid: 'TESTPID0000001', rowId: ROW.id, day: '2026-07-23' }, "the product the purchase screenshot shows, and the row's day");
   assert.deepEqual(told.filter((t) => /Flipkart/.test(t)), ["Finding the review among Flipkart's public reviews", "Opening the product's page on Flipkart", "Reading Flipkart's reviews, newest first"]);
   assert.deepEqual([one.result.reviewsFrom, one.result.flipkart], [{ day: '2026-07-23', from: 'delivery', said: 'the day the order was delivered (23-07-2026, on the delivery screenshot)' }, { pid: 'TESTPID0000001', name: BOTTLE, readAt: '2026-10-13T05:00:00.000Z', reused: false, pages: 3, count: 3, total: 40, end: 'limit', since: null, oldest: '2026-07-15', says: READ.says }]);
-  assert.deepEqual([one.result.steps[7].state, one.result.steps[8].state], ['later', 'later']);
+  assert.deepEqual([one.result.steps[7].state, one.result.steps[8].state, one.result.typeKey], ['not-reached', 'fail', 'reviewNotLive']);
   // Read earlier and kept: Flipkart is not opened again.
   const kept = await go({ answer: { ...READ, reused: true } });
   assert.match(kept.result.steps[6].detail, / They were read earlier and kept on this computer, so Flipkart was not opened again\. Reviews posted/);
@@ -304,13 +309,16 @@ test("step 7: Flipkart's reviews of the campaign's product, read once in a check
   assert.equal(stars.result.steps[6].detail, 'The review screenshot shows a star rating only, with no words to search for, and there is no link to one review, so there is nothing to search with.');
   const noCampaign = await go({ campaigns: [] });
   assert.deepEqual([noCampaign.result.steps[6].state, noCampaign.result.steps[6].detail, asked.length], ['not-reached', "The row uses no live campaign with a product read from Flipkart, so there is no product's page to find the review on.", count], 'Flipkart is not opened for any of these');
-  // A reading stopped part way pauses the check at step 7, saying why; nothing is got around.
+  // Flipkart stopping the reading part way before the review was found is said, for a staff member; nothing is got around. The Live Flipkart Browser closed pauses the check at step 7.
   const robot = await go({ answer: { ...READ, end: 'prevented', prevented: 'captcha', pages: 1, reviews: [made(1, '2026-10-10')], says: 'Flipkart prevented this check at page 2 of the reviews: it showed a robot check, which this dashboard never answers. The reviews of page 1 were kept.' } });
-  assert.deepEqual([robot.result.paused, robot.result.steps[6].state, robot.result.steps[6].detail, robot.result.steps[7].state], [{ kind: 'flipkart-captcha', says: PAUSE_SAYS['flipkart-captcha'], step: 7 }, 'fail', 'Flipkart prevented this check at page 2 of the reviews: it showed a robot check, which this dashboard never answers. The reviews of page 1 were kept. The check paused here; nothing was got around.', 'waiting']);
+  assert.deepEqual([robot.result.paused, robot.result.steps[6].state, robot.result.steps[6].detail, robot.result.steps[7].state, robot.result.final, robot.result.typeKey], [null, 'fail', 'Flipkart prevented this check at page 2 of the reviews: it showed a robot check, which this dashboard never answers. The reviews of page 1 were kept. The review was not among the reviews read before that, so whether it is on Flipkart could not be told; nothing was got around.', 'not-reached', 'manual', 'somethingElse']);
+  assert.equal(robot.result.note, 'A staff member needs to check this transaction because Flipkart stopped the reading of its reviews before the review was found, so whether it is live could not be told. Flipkart prevented this check at page 2 of the reviews: it showed a robot check, which this dashboard never answers. The reviews of page 1 were kept. Check this row again later. The purchase screenshot and the delivery screenshot match the form.');
   const slow = await go({ answer: { ...READ, end: 'slow', pages: 0, reviews: [], says: "Flipkart took too long to show the product's page, so no review was read." } });
-  assert.deepEqual([slow.result.paused.kind, slow.result.paused.says], ['flipkart-slow', 'Flipkart is very slow to show its pages just now. Wait a while, then press "Carry on checking".']);
+  assert.deepEqual([slow.result.paused, slow.result.final, slow.result.typeKey], [null, 'manual', 'somethingElse']);
+  const closed = await go({ answer: { ...READ, end: 'closed', pages: 0, reviews: [], says: 'The Live Flipkart Browser was closed, so the reading of the reviews stopped there.' } });
+  assert.deepEqual([closed.result.paused, closed.result.final, closed.result.steps[7].state], [{ kind: 'flipkart-closed', says: PAUSE_SAYS['flipkart-closed'], step: 7 }, null, 'waiting'], 'no Status for a paused check');
   const none = await go({ answer: { ...READ, end: 'none', pages: 0, reviews: [], says: "The product's page on Flipkart showed no way to see all its reviews, so they could not be read." } });
-  assert.deepEqual([none.result.paused, none.result.steps[6].state, none.result.steps[6].detail], [null, 'fail', "The product's page on Flipkart showed no way to see all its reviews, so they could not be read."]);
+  assert.deepEqual([none.result.paused, none.result.steps[6].state, none.result.steps[6].detail, none.result.typeKey], [null, 'fail', "The product's page on Flipkart showed no way to see all its reviews, so they could not be read.", 'reviewNotLive']);
 });
 
 test("step 7's search: found (the words and the name, with Flipkart's stars; for the review being typed or on My Reviews, that it is live), even among the pages read before Flipkart stopped the reading; two that fit, none picked; the words under another name or under \"Flipkart Customer\", never found; not found, saying a review under the name with other words, one posted before the day, or an order older than the oldest review read", async () => {
@@ -321,12 +329,18 @@ test("step 7's search: found (the words and the name, with Flipkart's stars; for
   const go = (reviews, opts = {}) => run(ROW, {}, { reviewer: REVIEWER, campaigns: [CAMPAIGN], now: NOW, reviews: async () => ({ ...READ, ...opts.answer, reviews }), ...opts });
   const step7 = (x) => [x.result.steps[6].state, x.result.steps[6].detail];
   const READING = 'Read 3 reviews of the product from "See all reviews" on Flipkart, newest first (back to 01-07-2026; the rows need reviews back to 23-07-2026). Reviews posted on or after the day the order was delivered (23-07-2026, on the delivery screenshot) can be the user\'s.';
-  // A made-up review ID, in the form Flipkart gives one: the review's own link is made from it.
+  // A made-up review ID and the review's own link, in the forms Flipkart's reviews pages send them: that link is kept, never one made up.
   const MINE_ID = '00000000-0000-4000-8000-000000000003';
-  const mine = made(3, { id: MINE_ID, name: REVIEWER, stars: 5, ...WORDS, dateSaid: '12 days ago', date: '2026-10-01', dateLatest: '2026-10-01', page: 2 });
+  const MINE_LINK = `https://www.flipkart.com/reviews/TESTPID0000001:1725?reviewId=${MINE_ID}`;
+  const mine = made(3, { id: MINE_ID, name: REVIEWER, stars: 5, ...WORDS, dateSaid: '12 days ago', date: '2026-10-01', dateLatest: '2026-10-01', link: MINE_LINK, page: 2 });
   const found = await go([...READ.reviews, mine]);
   assert.deepEqual(step7(found), ['pass', `Found the review among Flipkart's public reviews: its words match the review screenshot's, and it is under the name on the review screenshot. On Flipkart it has 5 stars, and it was posted 12 days ago (01-10-2026). ${READING}`]);
-  assert.deepEqual([found.result.found.how, found.result.found.review, found.result.found.share], ['found', { id: MINE_ID, name: REVIEWER, stars: 5, ...WORDS, dateSaid: '12 days ago', date: '2026-10-01', dateLatest: '2026-10-01', link: `https://www.flipkart.com/reviews/${MINE_ID}` }, 1]);
+  assert.deepEqual([found.result.found.how, found.result.found.review, found.result.found.share], ['found', { id: MINE_ID, name: REVIEWER, stars: 5, ...WORDS, dateSaid: '12 days ago', date: '2026-10-01', dateLatest: '2026-10-01', link: MINE_LINK }, 1]);
+  // A review kept before its own link was kept, or with a link that is not its own, gets no link.
+  const unlinked = await go([...READ.reviews, { ...mine, link: undefined }]);
+  const notItsOwn = await go([...READ.reviews, { ...mine, link: 'https://www.flipkart.com/reviews/TESTPID0000001:1725?reviewId=00000000-0000-4000-8000-000000000009' }]);
+  const idOnly = await go([...READ.reviews, { ...mine, link: `https://www.flipkart.com/reviews/${MINE_ID}` }]);
+  assert.deepEqual([unlinked, notItsOwn, idOnly].map((x) => [x.result.found.how, x.result.found.review.link]), [['found', null], ['found', null], ['found', null]]);
   const live = await go([...READ.reviews, mine], { review: reviewReading(REVIEW, { pending: true }) });
   assert.match(live.result.steps[6].detail, /\(01-10-2026\)\. Finding it among Flipkart's public reviews shows the review is live\. Read 3/);
   // Found before Flipkart stopped the reading: no pause; what Flipkart did is still said.

@@ -11,7 +11,9 @@
 // page's status number, its title and whether it showed any reviews), and so
 // does a page that takes too long; the pages read before it are kept. A
 // reading that stopped, at a date or part way, can go on from the page where
-// it stopped, keeping the pages read before. The reviews are kept only in
+// it stopped, keeping the pages read before. Each review keeps its own link,
+// as the page's data gives it (the one link to one review Flipkart's website
+// opens). The reviews are kept only in
 // data/flipkart/reviews/<product ID>.json, with when they were read: step 7
 // of a row's check searches them (check.js), as the Amazon checker searches
 // Amazon's reviews, read once in a checking run for every row (routes.js).
@@ -71,16 +73,17 @@ function refusedSaid(r) {
  * { page, status, title, reviews }), stoppedAt (the page that stopped it),
  * says (in plain words), loginBox (whether Flipkart's login box showed),
  * wentOn (the page it went on from, when it went on from an earlier
- * reading), opened (how many pages it opened), reviews: [{ id, name, stars,
- * title, text, dateSaid, date, dateLatest, city, certified, reviewFor, page
- * }] }.
+ * reading), opened (how many pages it opened), links (true: each review's
+ * own link was looked for; a copy kept before 14-10-2026 has none), reviews:
+ * [{ id, name, stars, title, text, dateSaid, date, dateLatest, city,
+ * certified, reviewFor, link (its own link on Flipkart, or null), page }] }.
  */
 export async function readReviews(browser, product, { since = null, maxPages = MAX_REVIEW_PAGES, now = () => new Date(), onWait, onPage = () => {}, from = null, signal = null } = {}) {
   const at = now();
   const today = indiaDay(at);
   const until = typeof since === 'string' && DAY.test(since) ? since : null;
   const link = product?.read?.allReviews ?? null;
-  const out = { pid: product?.read?.pid ?? product?.pid ?? null, link, readAt: at.toISOString(), since: until, pages: 0, total: null, end: null, stoppedAt: null, says: null, loginBox: false, wentOn: null, opened: 0, reviews: [] };
+  const out = { pid: product?.read?.pid ?? product?.pid ?? null, link, readAt: at.toISOString(), since: until, pages: 0, total: null, end: null, stoppedAt: null, says: null, loginBox: false, wentOn: null, opened: 0, links: true, reviews: [] };
   const stop = (end, n, says) => Object.assign(out, { end, stoppedAt: n, says: `${says} ${keptSaid(out.reviews.length)}` });
   if (!reviewsPageLink(link, 1)) return Object.assign(out, { end: 'none', says: 'Flipkart shows no reviews for this product, so no page was opened.' });
   // Going on from where an earlier reading of the same link stopped: its reviews are kept, and the page after its last one is next.
@@ -114,7 +117,7 @@ export async function readReviews(browser, product, { since = null, maxPages = M
       if (!u || !isFlipkart(u)) return stop('elsewhere', n, `A page of the reviews led to ${u ? u.hostname : 'another website'}, not to Flipkart, so the reading stopped there.`);
       // The page's own data has each review whole, with its own ID; else the reviews as the page shows them.
       const data = reviewsInPageData(res.html);
-      const found = data.length ? data : (res.facts?.reviews ?? []).map((r) => ({ id: null, ...r }));
+      const found = data.length ? data : (res.facts?.reviews ?? []).map((r) => ({ id: null, ...r, link: null }));
       const page = whatPageIs({ ...res.facts, reviews: found }, res.status);
       if (PREVENTED[page.kind]) {
         const refused = refusedPage(n, res, found);
@@ -131,7 +134,7 @@ export async function readReviews(browser, product, { since = null, maxPages = M
       for (const r of fresh) {
         seen.add(keyOf(r));
         const when = dateFromWords(r.dateSaid, today);
-        out.reviews.push({ id: r.id, name: r.name, stars: r.stars, title: r.title, text: r.text, dateSaid: r.dateSaid, date: when?.date ?? null, dateLatest: when?.latest ?? null, city: r.city, certified: r.certified, reviewFor: r.reviewFor, page: n });
+        out.reviews.push({ id: r.id, name: r.name, stars: r.stars, title: r.title, text: r.text, dateSaid: r.dateSaid, date: when?.date ?? null, dateLatest: when?.latest ?? null, city: r.city, certified: r.certified, reviewFor: r.reviewFor, link: r.link ?? null, page: n });
       }
       if (fresh.length && older(out.reviews.slice(-fresh.length))) {
         out.end = 'date';
@@ -166,7 +169,7 @@ export async function readReviews(browser, product, { since = null, maxPages = M
 export async function readProductReviews(browser, pid, { since = null, maxPages = MAX_REVIEW_PAGES, now = () => new Date(), onWait, onPage = () => {}, from = null, signal = null } = {}) {
   const at = now();
   const until = typeof since === 'string' && DAY.test(since) ? since : null;
-  const out = { pid: ANY_PID.test(String(pid ?? '')) ? pid : null, link: null, readAt: at.toISOString(), since: until, pages: 0, total: null, end: null, stoppedAt: null, says: null, loginBox: false, reviews: [], product: null };
+  const out = { pid: ANY_PID.test(String(pid ?? '')) ? pid : null, link: null, readAt: at.toISOString(), since: until, pages: 0, total: null, end: null, stoppedAt: null, says: null, loginBox: false, links: true, reviews: [], product: null };
   const none = (end, says, extra = {}) => Object.assign(out, { end, says, ...extra });
   if (!out.pid) return none('none', 'The product has no Flipkart product ID, so its reviews could not be read.');
   if (from?.link && from.pid === pid && from.product) return { ...(await readReviews(browser, { read: { pid, allReviews: from.link } }, { since: until, maxPages, now, onWait, onPage, from, signal })), product: from.product };

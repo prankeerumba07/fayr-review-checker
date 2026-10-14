@@ -35,7 +35,7 @@ const now = () => new Date(AT);
 const readOne = (pid, allReviews) => ({ given: pid, pid, read: { pid, allReviews } });
 const visited = () => site.visits.map((v) => v.url);
 
-test("the saved product's reviews, newest first: its two saved pages, then page 3, whose reviews are all older than the given date, so page 4 is never opened; each review's own ID from the page's own data; kept in data/flipkart/reviews/<product ID>.json with when they were read", { timeout: 120_000 }, async () => {
+test("the saved product's reviews, newest first: its two saved pages, then page 3, whose reviews are all older than the given date, so page 4 is never opened; each review's own ID and own link from the page's own data; kept in data/flipkart/reviews/<product ID>.json with when they were read", { timeout: 120_000 }, async () => {
   // Each page as the Live Flipkart Browser gave it, to compare what it shows with its own data.
   const pages = [];
   const watched = {
@@ -51,7 +51,8 @@ test("the saved product's reviews, newest first: its two saved pages, then page 
   assert.deepEqual([out.pid, out.link, out.readAt, out.since, out.pages, out.total, out.end, out.stoppedAt, out.loginBox], [PRODUCT.pid, PRODUCT.allReviews, AT, '2026-04-01', 3, 47, 'date', null, false]);
   assert.equal(out.says, '24 reviews read, newest first, until they were all older than 01-04-2026.');
   assert.deepEqual(out.reviews.map((r) => r.page), [...Array(10).fill(1), ...Array(10).fill(2), 3, 3, 3, 3]);
-  assert.deepEqual(out.reviews[0], { id: '2cbab026-f2f5-4d26-b521-d488e7394a9f', name: 'Flipkart Customer', stars: 5, title: 'Terrific', text: 'Works best when used overnight', dateSaid: '14 days ago', date: '2026-09-28', dateLatest: '2026-09-28', city: 'Rewa', certified: true, reviewFor: 'Quantity 50 ml', page: 1 }, 'the newest review of the saved page 1');
+  assert.deepEqual(out.reviews[0], { id: '2cbab026-f2f5-4d26-b521-d488e7394a9f', name: 'Flipkart Customer', stars: 5, title: 'Terrific', text: 'Works best when used overnight', dateSaid: '14 days ago', date: '2026-09-28', dateLatest: '2026-09-28', city: 'Rewa', certified: true, reviewFor: 'Quantity 50 ml', link: 'https://www.flipkart.com/reviews/FCPHEW7AM9C7RU24:74?reviewId=2cbab026-f2f5-4d26-b521-d488e7394a9f', page: 1 }, 'the newest review of the saved page 1, with its own link as the page sent it');
+  assert.deepEqual([out.links, out.reviews.slice(0, 20).every((r) => r.link === `https://www.flipkart.com/reviews/FCPHEW7AM9C7RU24:${r.link?.split(':')[2]?.split('?')[0]}?reviewId=${r.id}`), out.reviews.slice(20).map((r) => r.link)], [true, true, [null, null, null, null]], "every saved review's own link; none for the made-up page 3, which has no page data");
   assert.deepEqual(out.reviews.slice(0, 20).map((r) => r.dateSaid), ['14 days ago', '15 days ago', '19 days ago', '21 days ago', '1 month ago', '1 month ago', '1 month ago', '1 month ago', '3 months ago', '3 months ago', '4 months ago', '4 months ago', '4 months ago', '5 months ago', '5 months ago', '5 months ago', '5 months ago', '5 months ago', '5 months ago', '6 months ago']);
   assert.deepEqual([out.reviews[19].date, out.reviews[19].dateLatest], ['2026-04-12', '2026-04-27'], 'the oldest on the saved page 2 may still be in April, so page 3 is read');
   assert.equal(out.reviews.slice(0, 20).filter((r) => r.id && r.certified && r.city && r.reviewFor === 'Quantity 50 ml').length, 20, 'every saved review: its own ID, a certified purchase, its city');
@@ -62,8 +63,8 @@ test("the saved product's reviews, newest first: its two saved pages, then page 
     [null, 'Made-up Reviewer C', 3, 'Good', 'Made-up review: it is fine.', 'Mar, 2026', '2026-03-01', '2026-03-31', 'Test Village', true, 'Quantity 50 ml'],
     [null, 'Made-up Reviewer D', 2, 'Not good', 'Made-up review: too sticky for me.', 'Feb, 2026', '2026-02-01', '2026-02-28', null, false, 'Quantity 50 ml'],
   ], 'page 3 has none of the page\'s own data: read as it shows, with no IDs');
-  // What the two saved pages show is what their own data says, only without each review's own ID: a page without its data is read the same way.
-  for (const res of pages.slice(0, 2)) assert.deepEqual(res.facts.reviews, reviewsInPageData(res.html).map(({ id, ...rest }) => rest));
+  // What the two saved pages show is what their own data says, only without each review's own ID and link: a page without its data is read the same way.
+  for (const res of pages.slice(0, 2)) assert.deepEqual(res.facts.reviews, reviewsInPageData(res.html).map(({ id, link, ...rest }) => rest));
   const file = join(dataDir, 'flipkart', 'reviews', `${PRODUCT.pid}.json`);
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), out);
   assert.deepEqual(await store.reviews(PRODUCT.pid), out);

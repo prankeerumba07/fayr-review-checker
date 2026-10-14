@@ -13,7 +13,8 @@
 import { mkdir, readFile, writeFile, rename, rm, readdir } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, join } from 'node:path';
-import { ANY_PID } from './links.js';
+import { ANY_PID, reviewPageLink } from './links.js';
+import { FINAL_WORDS, TYPE_WORDS } from './final.js';
 import { imageType, MAX_PICTURE_BYTES, PICTURE_EXT } from './image-type.js';
 import { DEFAULT_MARKS, checkMarks } from './settings.js';
 
@@ -127,16 +128,7 @@ function keptReading(o) {
   };
 }
 const FOUND_HOW = new Set(['found', 'several', 'otherName', 'noName', 'noNameToCheck', 'notFound', 'noWords']);
-/** A link to a page of Flipkart's own website, as it is; null for anything else. */
-function flipkartLink(v) {
-  try {
-    const u = new URL(String(v ?? ''));
-    return u.protocol === 'https:' && /^(?:www\.)?flipkart\.com$/i.test(u.hostname) ? u.href.slice(0, 1000) : null;
-  } catch {
-    return null;
-  }
-}
-/** What step 7's search found among Flipkart's reviews (review-match.js), as kept with the row's last check: how, and the review it points at, its words cut to length, with its own link on Flipkart. */
+/** What step 7's search found among Flipkart's reviews (review-match.js), as kept with the row's last check: how, and the review it points at, its words cut to length, with its own link on Flipkart, only in the form Flipkart's website opens (links.js reviewPageLink). */
 function keptFound(o) {
   if (!o || typeof o !== 'object' || !FOUND_HOW.has(o.how)) return null;
   const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
@@ -151,7 +143,7 @@ function keptFound(o) {
     before: count(o.before),
     share: share(o.share),
     rareShare: share(o.rareShare),
-    review: r ? { id: r.id ? cleanText(r.id, 100) : null, name: r.name ? cleanText(r.name, 100) : null, stars: Number.isInteger(r.stars) && r.stars >= 1 && r.stars <= 5 ? r.stars : null, title: r.title ? cleanText(r.title, 300) : null, text: r.text ? cleanText(r.text, 3000) : null, dateSaid: r.dateSaid ? cleanText(r.dateSaid, 60) : null, date: DAY.test(String(r.date ?? '')) ? r.date : null, dateLatest: DAY.test(String(r.dateLatest ?? '')) ? r.dateLatest : null, link: flipkartLink(r.link) } : null,
+    review: r ? { id: r.id ? cleanText(r.id, 100) : null, name: r.name ? cleanText(r.name, 100) : null, stars: Number.isInteger(r.stars) && r.stars >= 1 && r.stars <= 5 ? r.stars : null, title: r.title ? cleanText(r.title, 300) : null, text: r.text ? cleanText(r.text, 3000) : null, dateSaid: r.dateSaid ? cleanText(r.dateSaid, 60) : null, date: DAY.test(String(r.date ?? '')) ? r.date : null, dateLatest: DAY.test(String(r.dateLatest ?? '')) ? r.dateLatest : null, link: reviewPageLink(r.link, r.id ?? null) } : null,
   };
 }
 
@@ -433,9 +425,11 @@ export function createFlipkartStore(dataDir) {
      * reviewsFrom, flipkart, shotsHad, comparison } (order, delivery and
      * review: what the purchase, the delivery and the review screenshots say,
      * as read; reviewsFrom: from which day a review can be the user's;
-     * flipkart: what step 7 read of Flipkart's reviews; comparison: the sheet
-     * and the two side by side, for the screenshots the file has). The check
-     * before goes.
+     * flipkart: what step 7 read of Flipkart's reviews; found: what its search
+     * found; comparison: the sheet and the two side by side, for the
+     * screenshots the file has), and step 9's Status (final: 'pass', 'fail' or
+     * 'manual'; status: its words), Type (typeKey, and type: its words), Note
+     * and the Status's reason (finalSays). The check before goes.
      */
     saveCheck(id, result) {
       return locked(async () => {
@@ -456,6 +450,12 @@ export function createFlipkartStore(dataDir) {
           found: keptFound(result?.found),
           shotsHad: (Array.isArray(result?.shotsHad) ? result.shotsHad : []).filter((w) => w === 'order' || w === 'delivery'),
           comparison: keptComparison(result?.comparison),
+          final: Object.hasOwn(FINAL_WORDS, String(result?.final)) ? result.final : null,
+          status: Object.hasOwn(FINAL_WORDS, String(result?.final)) ? FINAL_WORDS[result.final] : null,
+          typeKey: Object.hasOwn(TYPE_WORDS, String(result?.typeKey)) ? result.typeKey : null,
+          type: Object.hasOwn(TYPE_WORDS, String(result?.typeKey)) ? TYPE_WORDS[result.typeKey] : null,
+          note: result?.note ? cleanText(result.note, 4000) : null,
+          finalSays: result?.finalSays ? cleanText(result.finalSays, 1000) : null,
         };
         await writeWhole(rowsFile, JSON.stringify(d));
         return row;

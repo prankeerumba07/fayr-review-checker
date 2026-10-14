@@ -87,6 +87,16 @@
 /* Notes wrap neatly in a column of fixed width. */
 .fk-note-cell { width: 340px; min-width: 340px; max-width: 340px; white-space: pre-line; }
 .fk-cell-words { margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+/* A Status, as on Amazon: bold, in its colour, with its icon. */
+.fk-final { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; padding: 2px 8px 2px 6px; border: 1px solid; border-radius: var(--radius-sm); font-size: 12px; font-weight: 600; line-height: 1.4; }
+.fk-final .icon { width: 14px; height: 14px; }
+.fk-final-pass { background: var(--good-bg); border-color: var(--good-line); color: var(--good); }
+.fk-final-pass .icon { color: var(--good-mark); }
+.fk-final-fail { background: var(--bad-bg); border-color: var(--bad-line); color: var(--bad); }
+.fk-final-fail .icon { color: var(--bad-mark); }
+.fk-final-manual { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn); }
+.fk-final-manual .icon { color: var(--warn-mark); }
+.fk-final-checking { background: var(--info-bg); border-color: var(--info-line); color: var(--info); font-weight: 500; }
 .fk-link-cell { min-width: 8rem; }
 .fk-other-cell { min-width: 7rem; max-width: 16rem; }
 .fk-link-label { display: inline-flex; align-items: center; gap: 4px; margin: 0 4px 4px 0; padding: 0 8px 0 6px; border-radius: 6px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--text); font-size: 12px; line-height: 22px; text-decoration: none; white-space: nowrap; transition: background-color .12s, border-color .12s; }
@@ -143,6 +153,12 @@
 .fk-final-banner { display: grid; gap: 4px; margin: 0 0 16px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
 .fk-final-big { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 24px; font-weight: 600; line-height: 1.25; letter-spacing: -0.01em; }
 .fk-final-big .icon { width: 24px; height: 24px; }
+.fk-final-banner-pass { background: var(--good-bg); border-color: var(--good-line); }
+.fk-final-banner-fail { background: var(--bad-bg); border-color: var(--bad-line); }
+.fk-final-banner-manual { background: var(--warn-bg); border-color: var(--warn-line); }
+.fk-final-banner-pass .fk-final-big { color: var(--good); }
+.fk-final-banner-fail .fk-final-big { color: var(--bad); }
+.fk-final-banner-manual .fk-final-big { color: var(--warn); }
 .fk-final-banner-none .fk-final-big { color: var(--muted); }
 .fk-final-says { margin: 0; max-width: 90ch; font-size: 14px; }
 .fk-page { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 16px; align-items: start; }

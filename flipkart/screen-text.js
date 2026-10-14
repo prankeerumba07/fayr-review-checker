@@ -501,6 +501,28 @@ export function nameStartShown(lines, name, { lead = 1 } = {}) {
 }
 
 /**
+ * True when two lines show the same start of a product's name, as two
+ * screenshots cut it short the same way ("2. Test Brand Steel Bot..." and
+ * "Test Brand Steel Bot..."): stray marks before the name and the cut ends
+ * aside, the words of the shorter are the words of the longer, in order,
+ * small reading mistakes allowed, the last word of either as the start of
+ * the other's. Copied from the Amazon checker (amazon/screen-text.js).
+ */
+export function sameStart(a, b) {
+  const strip = (t) => {
+    const ws = nameWords(String(t ?? '').replace(CUT_SHORT, ''));
+    let i = 0;
+    while (i < ws.length - 1 && ([...ws[i]].length <= 2 || /^\d/.test(ws[i]))) i++;
+    return ws.slice(i);
+  };
+  const x = strip(a);
+  const y = strip(b);
+  if (!x.length || !y.length) return false;
+  const [s, l] = x.length <= y.length ? [x, y] : [y, x];
+  return s.every((w, i) => (i === s.length - 1 ? closeWords(w, l[i]) || l[i].startsWith(w) || w.startsWith(l[i]) : closeWords(w, l[i])));
+}
+
+/**
  * True when a start shown is enough to name the product: its whole name, or
  * two of its words or more after the brand's (`lead`, the words of the brand
  * the name starts with), the first of them whole.

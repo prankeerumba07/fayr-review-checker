@@ -15,7 +15,7 @@ import { join, relative } from 'node:path';
 import { readReviews, readAndKeepReviews, readProductReviews, MAX_REVIEW_PAGES, REVIEW_PAGE_GAP_MS } from '../flipkart/reviews.js';
 import { createGate } from '../flipkart/browser.js';
 import { dateFromWords, indiaDay, reviewsPageLink, reviewsInPageData, pageData, reviewsLinkInPage, plainText } from '../flipkart/review-page.js';
-import { pageForPid, reviewLink, linkLabel } from '../flipkart/links.js';
+import { pageForPid, reviewPageLink, linkLabel } from '../flipkart/links.js';
 import { whatPageIs } from '../flipkart/page-read.js';
 import { createFlipkartStore } from '../flipkart/store.js';
 
@@ -79,13 +79,14 @@ test('the address of each page of reviews, newest first, from the "All reviews" 
   for (const link of ['https://www.flipkart.com/test-glow-face-mask/p/itmtestglow0001?pid=FCPTESTGLOW00001', 'https://www.example.com/test-glow-face-mask/product-reviews/itmtestglow0001', 'not a link', null]) assert.equal(reviewsPageLink(link, 1), null, String(link));
 });
 
-test("the reviews in a page's own data, as Flipkart sent the page: each one's own ID, name, stars, title, whole text, date words, city, certified purchase or not, and what it is a review for", () => {
-  const review = (id, extra) => ({ value: { type: 'ProductReviewValue', id, author: 'Made-up Reviewer 1', rating: 5, title: 'Terrific', text: 'Made-up text, \n on two lines. ', created: '3 days ago', certifiedBuyer: true, location: { city: 'Test Town', state: 'Test State' }, productAttributeList: [{ name: 'Quantity', value: '50 ml' }], ...extra } });
+test("the reviews in a page's own data, as Flipkart sent the page: each one's own ID, name, stars, title, whole text, date words, city, certified purchase or not, what it is a review for, and its own link", () => {
+  const ONE = '0a1b2c3d-0000-4000-8000-000000000001';
+  const review = (id, extra) => ({ value: { type: 'ProductReviewValue', id, author: 'Made-up Reviewer 1', rating: 5, title: 'Terrific', text: 'Made-up text, \n on two lines. ', created: '3 days ago', certifiedBuyer: true, location: { city: 'Test Town', state: 'Test State' }, productAttributeList: [{ name: 'Quantity', value: '50 ml' }], url: `/reviews/${PID}:74?reviewId=${id}`, ...extra } });
   const state = {
     multiWidgetState: {
       widgetsData: {
         slots: {
-          3: { slotData: { widget: { data: { renderableComponents: [review('made-up-review-1')] } } } },
+          3: { slotData: { widget: { data: { renderableComponents: [review(ONE)] } } } },
           4: { slotData: { widget: { data: { renderableComponents: [review('made-up-review-2', { author: 'Flipkart Customer', rating: 9, certifiedBuyer: false, reviewPropertyMap: { VERIFIED_PURCHASE: true }, location: null, productAttributeList: [], title: 'Fair {not} "the end"' })] } } } },
           5: { slotData: { widget: { data: { title: 'Similar products', renderableComponents: [{ value: { type: 'ProductSummaryValue', title: 'Not a review' } }] } } } },
         },
@@ -94,9 +95,15 @@ test("the reviews in a page's own data, as Flipkart sent the page: each one's ow
   };
   const html = `<html><body><div>Reviews</div><script id="is_script">window.__INITIAL_STATE__ = ${JSON.stringify(state)};</script><script>window.after = {};</script></body></html>`;
   assert.deepEqual(reviewsInPageData(html), [
-    { id: 'made-up-review-1', name: 'Made-up Reviewer 1', stars: 5, title: 'Terrific', text: 'Made-up text,\non two lines.', dateSaid: '3 days ago', city: 'Test Town', certified: true, reviewFor: 'Quantity 50 ml' },
-    { id: 'made-up-review-2', name: 'Flipkart Customer', stars: null, title: 'Fair {not} "the end"', text: 'Made-up text,\non two lines.', dateSaid: '3 days ago', city: null, certified: true, reviewFor: null },
-  ], 'the stars are 1 to 5; braces and quotes inside the words are no end of the data');
+    { id: ONE, name: 'Made-up Reviewer 1', stars: 5, title: 'Terrific', text: 'Made-up text,\non two lines.', dateSaid: '3 days ago', city: 'Test Town', certified: true, reviewFor: 'Quantity 50 ml', link: `https://www.flipkart.com/reviews/${PID}:74?reviewId=${ONE}` },
+    { id: 'made-up-review-2', name: 'Flipkart Customer', stars: null, title: 'Fair {not} "the end"', text: 'Made-up text,\non two lines.', dateSaid: '3 days ago', city: null, certified: true, reviewFor: null, link: null },
+  ], 'the stars are 1 to 5; braces and quotes inside the words are no end of the data; a link is kept only in the form that opens the review');
+  // The two real pages saved on 12-10-2026: every review comes with its own link, /reviews/<product ID>:<number>?reviewId=<its own ID>.
+  for (const name of ['reviews-page-1.html', 'reviews-page-2.html']) {
+    const real = reviewsInPageData(readFileSync(new URL(`./fixtures/flipkart/${name}`, import.meta.url), 'utf8'));
+    assert.equal(real.length, 10, name);
+    assert.ok(real.every((r) => r.link === `https://www.flipkart.com/reviews/FCPHEW7AM9C7RU24:${r.link?.match(/:(\d+)\?/)?.[1]}?reviewId=${r.id}`), `${name}: each review's own link`);
+  }
   assert.deepEqual(pageData(html), state);
   for (const none of ['<html><body>No data</body></html>', '<script>window.__INITIAL_STATE__ = {"broken": </script>', '', null]) assert.deepEqual(reviewsInPageData(none), [], String(none));
 });
@@ -108,7 +115,8 @@ test('newest first, page after page: it stops after the first page whose reviews
   assert.deepEqual(pages.opened, [pageUrl(1), pageUrl(2), pageUrl(3)], 'page 3 is all older than 1 April 2026: page 4 is never opened');
   assert.deepEqual([out.pid, out.link, out.since, out.pages, out.end, out.stoppedAt, out.reviews.length], [PID, GLOW, '2026-04-01', 3, 'date', null, 6]);
   assert.equal(out.says, '6 reviews read, newest first, until they were all older than 01-04-2026.');
-  assert.deepEqual(out.reviews[2], { id: null, name: 'Made-up Reviewer 2-0', stars: 4, title: 'Nice product', text: 'Made-up review number 2-0.', dateSaid: '1 month ago', date: '2026-09-12', dateLatest: '2026-09-27', city: 'Test Town', certified: true, reviewFor: null, page: 2 });
+  assert.deepEqual(out.reviews[2], { id: null, name: 'Made-up Reviewer 2-0', stars: 4, title: 'Nice product', text: 'Made-up review number 2-0.', dateSaid: '1 month ago', date: '2026-09-12', dateLatest: '2026-09-27', city: 'Test Town', certified: true, reviewFor: null, link: null, page: 2 }, "a review read only from the page's words has no own link");
+  assert.equal(out.links, true, "each review's own link was looked for: a copy kept before that has none, and is read again");
   // "6 months ago" may still be in April: page 2 does not stop it. Words not known never count as older.
   const unknown = fakeBrowser((n, url) => reviewPage(url, n === 1 ? [shown(1, 'Feb, 2026'), shown(2, 'recently')] : []));
   assert.deepEqual([(await readReviews(unknown, product, { since: '2026-04-01', now })).end, unknown.opened.length], ['last page', 2]);
@@ -284,11 +292,15 @@ test('tried again after Flipkart stopped the reading: it goes on from the page w
   assert.deepEqual(waits, [8000, 3000]);
 });
 
-test("a review's own link, from its own ID, as Flipkart's \"Share\" gives it (the single-review links in the sheet): it opens the review itself on Flipkart; anything else makes no link. A review's words as a person reads them, without the page's HTML codes", () => {
-  const ID = '0A1B2C3D-0000-4000-8000-00000000000E';
-  assert.equal(reviewLink(ID), 'https://www.flipkart.com/reviews/0a1b2c3d-0000-4000-8000-00000000000e');
-  assert.equal(linkLabel(reviewLink(ID)), 'Flipkart review');
-  assert.deepEqual([reviewLink('made-up-1'), reviewLink(''), reviewLink(null), reviewLink('../reviews')], [null, null, null, null]);
+test("a review's own link, as Flipkart's reviews pages send it (/reviews/<product ID>:<number>?reviewId=<review ID>), the only form Flipkart's website opens; a link with only the review's ID, another review's link or anything else makes none. A review's words as a person reads them, without the page's HTML codes", () => {
+  const ID = '0a1b2c3d-0000-4000-8000-00000000000e';
+  const OWN = `https://www.flipkart.com/reviews/${PID}:1725?reviewId=${ID}`;
+  assert.equal(reviewPageLink(`/reviews/${PID}:1725?reviewId=${ID}`, ID), OWN, 'as the page data gives it');
+  assert.deepEqual([reviewPageLink(OWN), reviewPageLink(OWN, ID.toUpperCase()), reviewPageLink(`https://flipkart.com/reviews/${PID}:1725/?reviewId=${ID}`)], [OWN, OWN, OWN]);
+  assert.equal(linkLabel(OWN), 'Flipkart review');
+  const none = [`https://www.flipkart.com/reviews/${ID}`, `https://www.flipkart.com/reviews/${PID}?reviewId=${ID}`, `https://www.flipkart.com/reviews/${PID}:12?reviewId=made-up`, `https://www.example.com/reviews/${PID}:12?reviewId=${ID}`, '', null];
+  assert.deepEqual(none.map((l) => reviewPageLink(l)), none.map(() => null));
+  assert.equal(reviewPageLink(OWN, '0a1b2c3d-0000-4000-8000-000000000001'), null, "another review's link");
   assert.equal(plainText('It&rsquo;s &amp; &#39;fine&#x27; &ldquo;quite&rdquo; good&hellip; &unknown;'), 'It’s & \'fine\' “quite” good… &unknown;');
   const html = `<script>window.__INITIAL_STATE__ = {"r":{"type":"ProductReviewValue","id":"${ID}","author":"Made-up O&#39;Reviewer","rating":4,"title":"Nice &amp; handy","text":"It&rsquo;s light.","created":"Today"}};</script>`;
   assert.deepEqual(reviewsInPageData(html).map((r) => [r.name, r.title, r.text]), [["Made-up O'Reviewer", 'Nice & handy', 'It’s light.']]);

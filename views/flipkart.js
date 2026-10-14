@@ -25,19 +25,21 @@
 // in a table like the Amazon one: every column of the file in its order, with
 // its letter, the rows numbered from 1, each link as a small label saying
 // where it goes ("Google Drive"), a picture in a cell as "Picture in the
-// cell", and Status, Type and Note at the end, empty until rows are checked.
-// Each row has a Check button at its end ("Check again" once it is checked),
-// and clicking a row opens its page,
-// as on Amazon: the row's details, with its screenshots as small pictures
-// that open large when clicked (or why one could not be had, in the Amazon
-// words), and a check's steps, shown live as each one runs and still shown
-// after a reload. For now a check gets the screenshots and reads the purchase
-// screenshot on this computer, comparing it with the sheet, and the row's
-// page shows what it says (the Amazon screen's "Read from the purchase
-// screenshot" card); every other step comes in a later step, and no row gets
-// a Status yet: a row counts as checked once its last check finished. No Status cards yet. The local server
-// reads and keeps the file and the campaigns, and runs the checks and the
-// Google login; this screen only shows them.
+// cell", and Status, Type and Note at the end, as on Amazon: the Status bold
+// and in its colour (green Pass, red Fail, orange Needs Manual Staff
+// Checking), with when the row was checked and how long it took, or "From the
+// file" for one the uploaded file already had, the Type as a small tag, and
+// the Note; "Checking…" for the row being checked. Each row has a Check
+// button at its end ("Check again" once it is checked), and clicking a row
+// opens its page, as on Amazon: its Status at the top, large, with its
+// reason, the Type and the Note, the row's details, with its screenshots as
+// small pictures that open large when clicked (or why one could not be had,
+// in the Amazon words), what was read from each screenshot and found on
+// Flipkart, and a check's nine steps, shown live as each one runs and still
+// shown after a reload. A row's Status shows in the table and on its page as
+// soon as its check finishes. No Status cards and no Download button yet. The
+// local server reads and keeps the file and the campaigns, and runs the
+// checks and the Google login; this screen only shows them.
 
 const BASE = '/local/flipkart';
 const ROWS = `${BASE}/rows`;
@@ -92,8 +94,10 @@ export const MARKS = {
   waiting: { mark: '·', label: 'waiting', tone: 'quiet' },
   later: { mark: '–', label: 'comes in a later step', tone: 'quiet' },
 };
-/** A row with no Status, as on Amazon: no Flipkart row has one yet. */
+/** The three Statuses, as on Amazon, with their icons; a row with none is "Not checked yet". */
+export const FINAL_WORDS = { pass: 'Pass', fail: 'Fail', manual: 'Needs Manual Staff Checking' };
 export const FINAL_NONE = 'Not checked yet';
+const FINAL_ICON = { pass: 'pass', fail: 'fail', manual: 'manual', none: 'clock' };
 const PICTURE_KEYS = ['order', 'delivery', 'review', 'reviewShot'];
 const WHAT = { order: 'Purchase screenshot', delivery: 'Delivery screenshot', review: 'Review screenshot', reviewShot: 'Review screenshot' };
 /** The file's column each picture cell is. */
@@ -640,15 +644,67 @@ function linkCell(ctx, r, which) {
   return h('td', { key: which, class: 'fk-link-cell', 'data-cell': which }, parts.length ? parts : emptyCell(h));
 }
 
-/** Status, Type and Note: empty until rows are checked, and no Flipkart row is checked yet; a Status, Type or Note the file already has shows as it is. */
-function resultCells(ctx, r) {
-  const { h } = ctx;
+/** "took 12 seconds", "took 1 minute 5 seconds": how long a check took, as on Amazon. */
+export function tookWords(seconds) {
+  const n = Math.max(0, Math.round(Number(seconds) || 0));
+  if (n < 1) return 'took less than a second';
+  const part = (x, one) => `${x} ${one}${x === 1 ? '' : 's'}`;
+  if (n < 60) return `took ${part(n, 'second')}`;
+  return `took ${part(Math.floor(n / 60), 'minute')}${n % 60 ? ` ${part(n % 60, 'second')}` : ''}`;
+}
+
+/**
+ * What a row shows, as on Amazon: its last check's Status, Type and Note;
+ * else the ones already in the file ("From the file"); else nothing. final is
+ * the Status's key: 'pass', 'fail', 'manual' or null; status is its word:
+ * Pass, Fail or Needs Manual Staff Checking.
+ */
+function resultOf(r, state) {
+  if (state && r?.id && rowBeingChecked(state) === r.id) return { status: 'Checking…', type: '', note: '', from: 'now', final: null };
+  if (r?.last && FINAL_WORDS[r.last.final]) return { status: FINAL_WORDS[r.last.final], type: r.last.type ?? '', note: r.last.note ?? '', from: 'check', final: r.last.final, finalSays: r.last.finalSays ?? null };
   const p = obj(r?.prev);
-  return {
-    status: h('td', { key: 'status', class: 'fk-status-cell', 'data-cell': 'status' }, p.status ? [h('span', { key: 's' }, p.status), h('div', { key: 'f', class: 'fk-cell-words' }, 'From the file')] : emptyCell(h)),
-    type: h('td', { key: 'type', class: 'fk-type-cell', 'data-cell': 'type' }, p.type ? h('span', { class: 'tag' }, p.type) : emptyCell(h)),
-    note: h('td', { key: 'note', class: 'fk-note-cell', 'data-cell': 'note' }, p.note || emptyCell(h)),
-  };
+  const f = FINAL_WORDS[r?.prevFinal] ? r.prevFinal : null;
+  if (p.status || p.type || p.note) return { status: FINAL_WORDS[f] ?? '', type: p.type ?? '', note: p.note ?? '', from: 'file', final: f };
+  return { status: '', type: '', note: '', from: null, final: null };
+}
+
+/** A Status as a bold label in its colour, with its icon and its word, as on Amazon: green Pass, red Fail, orange Needs Manual Staff Checking. */
+function finalPill(h, final, id) {
+  return FINAL_WORDS[final] ? h('span', { class: `fk-final fk-final-${final}`, 'data-id': id }, icon(h, FINAL_ICON[final]), FINAL_WORDS[final]) : null;
+}
+
+/** The label of a row being checked at this moment. */
+const checkingLabel = (h) => h('span', { class: 'fk-final fk-final-checking' }, icon(h, 'spinner', 'icon-spin'), 'Checking…');
+
+/**
+ * Status, Type and Note, as on Amazon. The Status is the clearest thing in
+ * the row: Pass, Fail or Needs Manual Staff Checking, bold and in its colour,
+ * with when it was checked and how long it took, or "From the file" for a
+ * Status the uploaded file already had. The Type is a small soft tag.
+ */
+function resultCells(ctx, r) {
+  const { h, words, state } = ctx;
+  const res = resultOf(r, state);
+  const tag = (type) => (type ? h('span', { class: 'tag' }, type) : emptyCell(h));
+  const cells = (status, type, note) => ({
+    status: h('td', { key: 'status', class: 'fk-status-cell', 'data-cell': 'status' }, status),
+    type: h('td', { key: 'type', class: 'fk-type-cell', 'data-cell': 'type' }, type),
+    note: h('td', { key: 'note', class: 'fk-note-cell', 'data-cell': 'note' }, note),
+  });
+  if (res.from === 'now') return cells(checkingLabel(h), null, null);
+  if (res.from === 'check') {
+    return cells(
+      [
+        finalPill(h, res.final, `final-${r.id}`),
+        r?.last?.at ? h('div', { key: 'at', class: 'fk-cell-words' }, words.ist(r.last.at)) : null,
+        Number.isFinite(r?.last?.seconds) ? h('div', { key: 'took', class: 'fk-cell-words', 'data-id': `took-${r.id}` }, tookWords(r.last.seconds)) : null,
+      ],
+      tag(res.type),
+      res.note || emptyCell(h),
+    );
+  }
+  // A Status, Type or Note the file already has.
+  return cells(res.from === 'file' && FINAL_WORDS[res.final] ? [finalPill(h, res.final, `final-${r.id}`), h('div', { key: 'f', class: 'fk-cell-words' }, 'From the file')] : emptyCell(h), tag(res.type), res.note || emptyCell(h));
 }
 
 /** A cell of one of the file's other columns (such as the reviewer's name), as it is in the file: its words, and where each link goes. */
@@ -1426,39 +1482,58 @@ function comparisonCard(ctx, res) {
   );
 }
 
-/** The Type and the Note: none yet for a Flipkart row (the Status comes in a later step), but those the file already had. */
-function resultCard(ctx, r) {
-  const { h } = ctx;
+/** The row's Type and Note, as on Amazon: those of the check that just finished, else of its last check, else those the file already had. Its Status is not said again here: it is at the top of the page, large, with its reason. */
+function resultCard(ctx, r, res) {
+  const { h, words } = ctx;
+  const shown = res?.type ? { type: res.type, note: res.note, at: res.finishedAt } : r?.last ? { type: r.last.type, note: r.last.note, at: r.last.at } : null;
   return h(
     'section',
     { class: 'card fk-result-card', 'data-id': 'card-result' },
     h('h3', null, 'Type and Note'),
-    r?.prev ? h('div', null, h('p', { class: 'fk-row-status' }, h('span', { class: 'tag' }, r.prev.type || 'No Type'), ' ', h('span', { class: 'muted small' }, 'From the file')), h('p', { class: 'fk-note-text' }, r.prev.note)) : h('p', { class: 'muted' }, 'Not checked yet.'),
+    shown
+      ? h('div', null, h('p', { class: 'fk-row-status' }, h('span', { class: 'tag', 'data-id': 'result-type' }, shown.type), ' ', shown.at ? h('span', { class: 'muted small' }, words.ist(shown.at)) : null), h('p', { class: 'fk-note-text', 'data-id': 'result-note' }, shown.note))
+      : r?.prev
+        ? h('div', null, h('p', { class: 'fk-row-status' }, h('span', { class: 'tag' }, r.prev.type || 'No Type'), ' ', h('span', { class: 'muted small' }, 'From the file')), h('p', { class: 'fk-note-text' }, r.prev.note))
+        : h('p', { class: 'muted' }, 'Not checked yet.'),
   );
 }
 
-/** At the top of a row's page: its Status, large, and the reason; a Flipkart row has none yet. live: the check running for this row, by its own button or one by one. */
-function finalBanner(ctx, live) {
-  const { h } = ctx;
+/**
+ * At the top of a row's page, as on Amazon: its Status, large, in its colour
+ * and with its icon, and the reason; at once when a check of the row has just
+ * finished here. live: the check running for this row, or just finished, by
+ * its own button or one by one; listed: the row as the table has it.
+ */
+function finalBanner(ctx, live, listed) {
+  const { h, state } = ctx;
   const now = Boolean(live?.running);
+  const just = !now && FINAL_WORDS[live?.result?.final] ? live.result : null;
+  const res = now ? { from: 'now', final: null } : just ? { from: 'check', final: just.final, finalSays: just.finalSays } : resultOf(listed, state);
+  const key = res.from !== 'now' && FINAL_WORDS[res.final] ? res.final : null;
+  let says;
+  if (res.from === 'now') says = 'This row is being checked now.';
+  else if (key && res.from === 'check') says = res.finalSays || 'This row was checked before the dashboard kept a reason for its Status. Press "Check again" to see the reason.';
+  else if (key && res.from === 'file') says = 'From the file: the uploaded file already had a Status for this row.';
+  else if (isDone(listed)) says = 'This row was checked before Flipkart rows were given a Status. Press "Check again" to give it one.';
+  else says = 'Not checked yet.';
   return h(
     'section',
-    { class: 'fk-final-banner fk-final-banner-none', key: 'final', 'data-id': 'final-banner' },
-    h('p', { class: 'fk-final-big', 'data-id': 'final-word' }, now ? icon(h, 'spinner', 'icon-spin') : icon(h, 'clock'), now ? 'Checking…' : FINAL_NONE),
-    h('p', { class: 'fk-final-says', 'data-id': 'final-says' }, now ? 'This row is being checked now.' : 'Not checked yet.'),
+    { class: `fk-final-banner fk-final-banner-${key ?? 'none'}`, key: 'final', 'data-id': 'final-banner' },
+    h('p', { class: 'fk-final-big', 'data-id': 'final-word' }, res.from === 'now' ? icon(h, 'spinner', 'icon-spin') : icon(h, FINAL_ICON[key ?? 'none']), key ? FINAL_WORDS[key] : res.from === 'now' ? 'Checking…' : FINAL_NONE),
+    h('p', { class: 'fk-final-says', 'data-id': 'final-says' }, says),
   );
 }
 
-/** What the check is doing now. The Live Flipkart Browser is not used by the steps that run now: they only open the screenshots. flat: drawn inside the live checking area, without a card of its own, as on Amazon. */
+/** What the check is doing now, and what the Live Flipkart Browser is for: step 7 opens it to read Flipkart's reviews of the campaign's product. No picture of it is taken. flat: drawn inside the live checking area, without a card of its own, as on Amazon. */
 function liveCard(ctx, view, { flat = false } = {}) {
   const { h } = ctx;
   return h(
     'section',
     { class: flat ? 'fk-live fk-live-flat' : 'card fk-live', key: 'live', 'data-id': 'live' },
     h('h3', null, icon(h, 'browser'), 'Live Flipkart Browser'),
-    flat ? null : h('p', { class: 'card-sub' }, 'The Chrome window named "Live Flipkart Browser" shows each Flipkart page as it opens. The steps that run now only open the screenshots, so it is not used yet.'),
+    flat ? null : h('p', { class: 'card-sub' }, 'The Chrome window named "Live Flipkart Browser" shows each Flipkart page as it opens. Step 7 opens it to read the reviews of the campaign\'s product on Flipkart: the product\'s page, then "See all reviews", newest first, once in a checking run, kept on this computer for every row. The screenshots are read on this computer, without it.'),
     h('p', { class: 'fk-action', role: 'status', 'aria-live': 'polite', 'data-id': 'current-action' }, view.action ?? (view.running ? 'Working…' : 'Not running.')),
-    h('p', { class: 'fk-live-empty' }, icon(h, 'image'), 'No picture yet. Flipkart pages open in a later step.'),
+    h('p', { class: 'fk-live-empty' }, icon(h, 'image'), 'No pictures are taken of it. What it read shows in the "Found on Flipkart" box.'),
   );
 }
 
@@ -1517,9 +1592,9 @@ function rowPage(ctx) {
         single?.running ? h('button', { type: 'button', class: 'btn btn-danger', onclick: () => stopCheck(ctx), 'data-id': 'stop' }, icon(h, 'stop'), 'Stop') : null,
       ),
     ),
-    finalBanner(ctx, liveView),
+    finalBanner(ctx, liveView, listed),
     single?.notice ? words.notice(h, single.notice.tone, single.notice.text) : null,
-    h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, r), detailsCard(ctx, r), readCards(ctx, res)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
+    h('div', { class: 'fk-page', key: 'page' }, h('div', { class: 'fk-left' }, resultCard(ctx, listed, res), detailsCard(ctx, r), readCards(ctx, res)), h('div', { class: 'fk-right' }, liveCard(ctx, view), activityCard(ctx, view))),
     comparisonCard(ctx, res),
     bigPicture(ctx),
   );

@@ -121,13 +121,23 @@ export function isDriveLink(raw) {
 const REVIEW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * The link that opens one review on Flipkart, from its own ID, as Flipkart's
- * "Share" gives it (www.flipkart.com/reviews/<ID>, the single-review links in
- * the sheet); null for anything that is not a review's ID.
+ * A review's own link, as Flipkart's reviews pages send it with each review
+ * (its "url": /reviews/<product ID>:<number>?reviewId=<review ID>), the only
+ * form of link to one review that Flipkart's website opens; the number is
+ * Flipkart's own and can never be made up, and a link with only the review's
+ * ID (www.flipkart.com/reviews/<ID>) shows Flipkart's error page. ->
+ * https://www.flipkart.com/reviews/<product ID>:<number>?reviewId=<review ID>,
+ * or null when it is not one; with id, also when it is not that review's.
  */
-export function reviewLink(id) {
-  const v = String(id ?? '').trim();
-  return REVIEW_ID.test(v) ? `${FLIPKART_ORIGIN}/reviews/${v.toLowerCase()}` : null;
+export function reviewPageLink(raw, id = null) {
+  const text = String(raw ?? '').trim();
+  const u = urlOf(text.startsWith('/') ? `${FLIPKART_ORIGIN}${text}` : text);
+  if (!u || !isFlipkart(u)) return null;
+  const m = flipkartPath(u).match(/^\/reviews\/([A-Z0-9]{10,20}):(\d{1,9})\/?$/i);
+  const rid = String(u.searchParams.get('reviewId') ?? '').trim();
+  if (!m || !REVIEW_ID.test(rid)) return null;
+  if (id !== null && rid.toLowerCase() !== String(id).trim().toLowerCase()) return null;
+  return `${FLIPKART_ORIGIN}/reviews/${m[1]}:${m[2]}?reviewId=${rid}`;
 }
 
 /** The review ID in a link to one Flipkart review (/reviews/<product ID>:<n>?reviewId=…), in small letters, or null. */

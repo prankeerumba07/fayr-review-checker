@@ -5,50 +5,62 @@
 // delivery screenshot, the review screenshot (the main proof on Flipkart,
 // where many rows have no review link), finding the review among Flipkart's
 // public reviews, comparing the reviewer's name and the review's words, and
-// the Status, Type and Note. For now these steps run: the steps that get the
-// screenshots (screenshots.js), each one's pictures downloaded or kept with
-// the reason they could not be had, said in the Amazon checker's words; step
-// 2, which reads the purchase screenshot on this computer (shot-read.js) and
-// compares it with the sheet, as the Amazon checker's step 3 does: the order
-// ID, the order date (only when the file has that column), the amount and the
-// product are each the same, different or not shown; and step 4, which reads
-// the delivery screenshot the same way, as the Amazon checker's step 5 does:
-// it must say Delivered, and when the two screenshots show different order
-// IDs, it says both (FLIPKART-PLAN.md point 6); and step 6, which reads the
-// review screenshot (review-read.js), as the Amazon checker's step 7 reads
-// one: the rating, the review's title and words, the reviewer's name and the
-// date, or Flipkart's message that the review was not accepted or that only a
-// rating was given; of several reviews, only the user's; and the first part
-// of step 7, finding the review among Flipkart's public reviews: the campaign
-// product's own page on Flipkart, then "See all reviews", newest first, read
-// once in a checking run and kept on this computer for every row (routes.js,
-// reviews.js), with the day from which a review can be the user's (the
-// delivery day, else the order day). The product is compared by
-// its name with the products of the live campaigns the row uses, by their
-// real names read from Flipkart, or, with no live campaign, with its product
-// name in the sheet. A detail that is not shown, or could not be read, is
-// never called different and never passes. Both screenshots are read, even
-// when the first has a problem; then the comparison table puts the sheet and
-// the two screenshots side by side. Every other step, and searching the
-// reviews read, says it comes in a later step, and the row gets no Status: it
-// stays "Not checked yet". No one
-// logged in to Google, a login using the Live Amazon Browser,
-// Google's login page, or Flipkart's robot check, a block or a page too slow
-// pauses the check, as on Amazon: the row gets no result, nothing is got
-// around, and the row can be checked again later.
+// the Status, Type and Note. The steps that get the screenshots
+// (screenshots.js) download each one's pictures, or keep the reason they
+// could not be had, said in the Amazon checker's words; step 2 reads the
+// purchase screenshot on this computer (shot-read.js) and compares it with
+// the sheet, as the Amazon checker's step 3 does: the order ID, the order date
+// (only when the file has that column), the amount and the product are each
+// the same, different or not shown; step 4 reads the delivery screenshot the
+// same way, as the Amazon checker's step 5 does: it must say Delivered, and
+// when the two screenshots show different order IDs, it says both
+// (FLIPKART-PLAN.md point 6); step 6 reads the review screenshot
+// (review-read.js), as the Amazon checker's step 7 reads one: the rating, the
+// review's title and words, the reviewer's name and the date, or Flipkart's
+// message that the review was not accepted or that only a rating was given;
+// of several reviews, only the user's; step 7 finds the review among
+// Flipkart's public reviews: the campaign product's own page on Flipkart,
+// then "See all reviews", newest first, read once in a checking run and kept
+// on this computer for every row (routes.js, reviews.js), searched for the
+// review screenshot's words and name, from the day a review can be the
+// user's (the delivery day, else the order day); step 8 compares the review
+// found with the review screenshot, as the Amazon checker compares a review
+// with its screenshot and with the Reviewer Name column: the name, the words,
+// the stars and the day it was posted; and step 9 gives the row its Status
+// (Pass, Fail or Needs Manual Staff Checking), its Type and its Note, with
+// the Amazon checker's words and rules (final.js): the screenshots' problems
+// first, in the Amazon order, then the review's. It passes only when both
+// screenshots match the sheet and the review is live on Flipkart under the
+// user's name with the review screenshot's words, posted on or after the
+// delivery day, or, as on Amazon, when the review screenshot shows a star
+// rating only; a review that is not found, or cannot be told to be the
+// user's, is for a staff member, never a Fail. The product is compared by its
+// name with the products of the live campaigns the row uses, by their real
+// names read from Flipkart, or, with no live campaign, with its product name
+// in the sheet. A detail that is not shown, or could not be read, is never
+// called different and never passes. Every step runs, even after a problem;
+// then the comparison table puts the sheet and the two screenshots side by
+// side. No one logged in to Google, a login using the Live Amazon Browser,
+// Google's login page, or the Live Flipkart Browser closed, offline or led
+// to another website pauses the check, as on Amazon: the row gets no result,
+// nothing is got around, and the row can be checked again later. Flipkart
+// stopping the reading of its reviews (a robot check, a refused page, an
+// error, a page too slow) before the review was found is said in the Note,
+// for a staff member, and nothing is got around.
 
 import { randomBytes } from 'node:crypto';
 import { downloadable } from './screenshots.js';
 import { readOrderShot, readDeliveryShot } from './shot-read.js';
 import { NOT_DELIVERED_WORDS, parseDelivery } from './delivery-read.js';
-import { readReviewShot } from './review-read.js';
-import { matchReview } from './review-match.js';
+import { readReviewShot, nameFits } from './review-read.js';
+import { matchReview, shotWords } from './review-match.js';
 import { indiaDay, plainText } from './review-page.js';
-import { linkLabel, isShortLink, reviewLink } from './links.js';
+import { linkLabel, isShortLink, reviewPageLink } from './links.js';
 import { DEFAULT_MARKS } from './settings.js';
 import { shortName } from './campaigns.js';
-import { wordsOf, productWords } from './text.js';
-import { sameDay, amountMatch, totalRead, totalShown, priceDetailsShown, partialOrderId, rupees, productShown, holdsWord, dayFirst, nameStartShown, enoughOfName, nameLineStarting, brandWordsAtStart, nameCouldBe, datesOnce, nameAsShown, productNames } from './screen-text.js';
+import { wordsOf, productWords, overlapScore } from './text.js';
+import { FINAL_WORDS, TYPE_FINAL, typeWord, finalSentence, lowerFirst, oneDigitOff, dateOneDigitOff, amountOneDigitOff } from './final.js';
+import { sameDay, amountMatch, totalRead, totalShown, priceDetailsShown, partialOrderId, rupees, productShown, holdsWord, dayFirst, nameStartShown, enoughOfName, nameLineStarting, brandWordsAtStart, nameCouldBe, datesOnce, nameAsShown, productNames, sameStart } from './screen-text.js';
 
 export const STEP_NAMES = [
   'Opening the purchase screenshot',
@@ -61,7 +73,7 @@ export const STEP_NAMES = [
   "Comparing the reviewer's name and the review's words",
   'Status, Type and Note',
 ];
-/** The steps that open a screenshot, with its cell, and the steps that read one; every other step comes in a later step. */
+/** The steps that open a screenshot, with its cell, and the steps that read one; steps 6 to 9 are the review's and the Status's own. */
 const OPENS = { 1: 'order', 3: 'delivery', 5: 'reviewShot' };
 const READS = { 2: 'order', 4: 'delivery' };
 /** What each step was doing, for "Something went wrong on this computer while …". */
@@ -88,6 +100,20 @@ const WHAT = { order: 'purchase screenshot', delivery: 'delivery screenshot', re
 const SHOT_COLUMN = { order: 'orderShot', delivery: 'deliveryShot', review: 'reviewLink', reviewShot: 'reviewShot' };
 /** The two screenshots compared with the sheet. */
 const SHOTS = ['order', 'delivery'];
+/**
+ * When the screenshots have several problems, the Type is the first one in
+ * this order, as on Amazon: a different order ID, a different product, not
+ * delivered, a screenshot that is missing or cannot be opened, a different
+ * order date or amount, then a detail that is not shown (that screenshot "not
+ * clear").
+ */
+const RANK = { orderId: 1, product: 2, delivered: 3, open: 4, details: 5, shown: 6 };
+/** A sentence of the Note when both screenshots passed but the review did not, in the Amazon checker's words. */
+const SHOTS_MATCH = 'The purchase screenshot and the delivery screenshot match the form.';
+/** How Flipkart stops a reading of its reviews (reviews.js): a robot check, a refused page or an error, or a page too slow. The check goes on, and its Note says so. */
+const FLIPKART_STOPPED = new Set(['prevented', 'slow']);
+/** What a link in the review link cell opens when it is not one review, in the Amazon checker's words for the same pages. */
+const NOT_A_REVIEW = { 'Flipkart product page': 'a product page on Flipkart', "Flipkart product's reviews": "a product's list of reviews on Flipkart", 'App store': "an app store's page" };
 
 // Copied from the Amazon checker's Notes (amazon/notes.js): words from the sheet are quoted, and never carry a word this dashboard must not show.
 const HIDDEN = ['ZmF5cg==', 'cmVmdW5k', 'Y2FzaGJhY2s=', 'cmV3YXJk'].map((b) => Buffer.from(b, 'base64').toString('utf8'));
@@ -99,6 +125,24 @@ function excerpt(text, n = 160) {
 }
 const oneSentence = (text) => String(text ?? '').replace(/([.!?])+\s+(?=\S)/g, '; ');
 const quoted = (text, n) => `"${oneSentence(excerpt(text, n))}"`;
+/** "a", "a and b", "a, b and c". */
+function joinAnd(list) {
+  const l = list.filter(Boolean);
+  if (l.length <= 1) return l[0] ?? '';
+  return `${l.slice(0, -1).join(', ')} and ${l[l.length - 1]}`;
+}
+/** A Note from its sentences, in one paragraph, each ending with a full stop, cleaned. */
+function noteOf(sentences) {
+  return clean(
+    sentences
+      .filter(Boolean)
+      .map((t) => {
+        const x = String(t).replace(/\s+/g, ' ').trim();
+        return /[.!?]$/.test(x) ? x : `${x}.`;
+      })
+      .join(' '),
+  );
+}
 
 // ---- reading the purchase screenshot (copied from amazon/check.js, its step 3, and changed for Flipkart) ----
 
@@ -163,16 +207,6 @@ export function keptDay(check, now = new Date()) {
 }
 /** A product's name cut short on the screen: "Test Brand Steel Bottle 1 L Bla...". */
 const cutShort = (t) => /\.\.\.|…/.test(String(t ?? ''));
-// Copied from amazon/final.js: two numbers one digit apart (one digit different, or one left out or read in), as a reading slip makes them.
-function oneDigitOff(a, b) {
-  const x = String(a ?? '').replace(/\D/g, '');
-  const y = String(b ?? '').replace(/\D/g, '');
-  if (!x || !y || x === y || Math.abs(x.length - y.length) > 1) return false;
-  if (x.length === y.length) return [...x].filter((c, i) => c !== y[i]).length === 1;
-  const [short, long] = x.length < y.length ? [x, y] : [y, x];
-  return [...long].some((_, i) => long.slice(0, i) + long.slice(i + 1) === short);
-}
-const amountOneDigitOff = (v, sheetAmount) => Number.isFinite(v) && Number.isFinite(sheetAmount) && oneDigitOff(Math.round(v), Math.round(sheetAmount));
 
 /** A check's id, as the Amazon checker makes them (amazon/store.js): when it started, and six letters and digits. */
 export function newCheckId(date = new Date()) {
@@ -191,6 +225,29 @@ function problemLine(which, p) {
   if (p.kind === 'allowed') return `The ${what} is on ${p.site}, but ${p.says}.`;
   if (p.kind === 'sheet') return `The ${what} is a picture in the sheet, but ${p.says}.`;
   return `The ${what} is on ${p.site ?? 'a website'}, but ${p.says}.`;
+}
+
+/**
+ * A cell's picture problem, in the Amazon checker's words and with its Types
+ * (amazon/check.js pictureProblem): its Type, the sentence that says what
+ * happened, the reason, and what to do next. `says` follows "but".
+ */
+function pictureProblem(which, p) {
+  const what = WHAT[which];
+  const notClear = `${which === 'reviewShot' ? 'review' : which}NotClear`;
+  if (p.kind === 'drive') {
+    // "Need Google Drive Access" only when Google said the logged-in account has no access to the file.
+    if (p.noAccess || /no access to|could not find the file|asking for access/.test(p.says)) {
+      return { type: 'needDriveAccess', line: `The ${what} is on Google Drive, but ${p.says}.`, because: 'the dashboard can only open a Drive file that the Google account logged in to it can open', then: 'Check that the file is shared with the Google account shown in the top bar, then check this row again.' };
+    }
+    if (/could not be reached|did not answer|was stopped|not downloaded yet|could not be opened/.test(p.says)) return { type: 'somethingElse', line: `The ${what} is on Google Drive, but ${p.says}.`, because: `the dashboard could not download the ${what} just now`, then: 'Check this row again later.' };
+    return { type: notClear, line: `The ${what} is on Google Drive, but ${p.says}.`, because: `the dashboard could not read the ${what}`, then: 'Ask for the screenshot as a picture (PNG or JPG), then check this row again.' };
+  }
+  if (p.kind === 'file') return { type: notClear, line: `The ${what} is on ${p.site ?? 'a website'}, but ${p.says}.`, because: `the dashboard could not read the ${what}`, then: 'Ask for the screenshot as a picture (PNG or JPG), then check this row again.' };
+  if (p.kind === 'allowed') return { type: 'needAccess', line: `The ${what} is on ${p.site}, but ${p.says}.`, because: 'the dashboard only opens pictures from the websites on its list', then: 'The website can be added to that list, then check this row again.' };
+  if (p.kind === 'busy') return { type: 'somethingElse', line: `The ${what} is on Google Drive, but ${p.says}.`, because: `the dashboard could not download the ${what} just now`, then: 'Check this row again later.' };
+  if (p.kind === 'sheet') return { type: notClear, line: `The ${what} is a picture in the sheet, but ${p.says}.`, because: `the dashboard could not read the ${what}`, then: 'Put a clearer picture in the sheet, then check this row again.' };
+  return { type: 'needAccess', line: `The ${what} is on ${p.site ?? 'a website'}, but ${p.says}.`, because: `the dashboard could not open the ${what}`, then: 'Open it by hand, or ask for a working link, then check this row again.' };
 }
 
 /** The review screenshot's cell, the main proof on Flipkart; the review link's cell instead when only that one holds a picture. */
@@ -220,10 +277,10 @@ class Paused extends Error {
  *   readOrder(files, { want }) — what the purchase screenshot says (shot-read.js readOrderShot)
  *   readDelivery(files, { want }) — what the delivery screenshot says (shot-read.js readDeliveryShot)
  *   readReview(files, { reviewer, productIs }) — what the review screenshot says (review-read.js readReviewShot)
- *   reviewer — the reviewer named in the sheet, which finds the user's review among several on the review screenshot
+ *   reviewer — the reviewer named in the sheet (null when the file has no Reviewer Name column, or the cell is empty), which finds the user's review among several on the review screenshot, and is compared with the name on Flipkart (step 8)
  *   reviews(pid, { rowId, day, onPage, signal }) — Flipkart's public reviews of a campaign's product, read once in a checking run and kept on this computer (routes.js, reviews.js readProductReviews); day is the oldest day this row needs
  *   emit(event) — started, action, step and done lines for the screen; a step's line carries what was read so far (partial)
- * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, steps, sheet, order, delivery, review, reviewsFrom, flipkart, found, compared, shotsHad, comparison, paused, stopped }
+ * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, status, type, typeKey, note, final, finalSays, steps, sheet, order, delivery, review, reviewsFrom, flipkart, found, compared, shotsHad, comparison, paused, stopped }
  */
 export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_MARKS, campaigns = [], readOrder = readOrderShot, readDelivery = readDeliveryShot, readReview = readReviewShot, reviewer = null, reviews = null, emit = () => {}, signal = null, checkId = newCheckId(), now = () => new Date() }) {
   const had = { orderDate: true, amount: true, product: true, orderShot: true, deliveryShot: true, reviewShot: true, reviewLink: true, ...Object.fromEntries(Object.entries(has ?? {}).map(([k, v]) => [k, v !== false])) };
@@ -243,6 +300,13 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     startedAt: now().toISOString(),
     finishedAt: null,
     seconds: null,
+    // Step 9: the Status (final: 'pass', 'fail' or 'manual'; status: its word), the Type (typeKey, and its words), the Note, and the Status's reason (finalSays, the Note's first sentence). None for a check that paused or was stopped.
+    status: null,
+    type: null,
+    typeKey: null,
+    note: null,
+    final: null,
+    finalSays: null,
     steps: STEP_NAMES.map((name, i) => ({ n: i + 1, name, state: 'waiting', detail: null })),
     // What the sheet says of the details compared, as it is written there, for the comparison table.
     sheet: { orderId: row.orderId?.text ?? '', orderDate: row.orderDate?.text ?? '', amount: row.amount?.text ?? '', product: label },
@@ -281,7 +345,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     // What was read so far for the row's page; what step 7 read and found once it has.
     emit({ event: 'step', step: { ...s }, partial: { order: result.order, delivery: result.delivery, review: result.review, ...(result.flipkart ? { flipkart: result.flipkart } : {}), ...(result.found ? { found: result.found } : {}) } });
   }
-  /** A step that is not part of the check yet: it says it comes in a later step. */
+  /** A step that cannot run in this check (step 7 with no way to read Flipkart's reviews): it says it comes in a later step. */
   function later(n) {
     checkStop();
     finish(n, 'later', null);
@@ -292,17 +356,31 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     finish(n, 'fail', detail);
     throw new Paused(kind);
   }
+  /** Something that went wrong on this computer at a step: { n, says, then }, for a staff member. */
+  let trouble = null;
   async function step(n, fn) {
     try {
       await fn();
     } catch (err) {
       if (err instanceof Stopped || err instanceof Paused) throw err;
-      finish(n, 'fail', `Something went wrong on this computer while ${STEP_DOING[n - 1]}. Check this row again.`);
+      const says = `Something went wrong on this computer while ${STEP_DOING[n - 1]}.`;
+      trouble ??= { n, says, then: 'Check this row again.' };
+      finish(n, 'fail', `${says} Check this row again.`);
     }
   }
 
-  /** Each screenshot's cell as its opening step left it: 'no column', 'missing', 'unopened' or 'opened', with its pictures. */
+  /**
+   * Each screenshot's cell as its steps left it, as on Amazon: 'no column',
+   * 'missing' (with the cell's words), 'words' (a delivery cell saying the
+   * order was not delivered), 'unopened' (with its picture problem),
+   * 'opened' (with its pictures), then, once read, 'unreadable' or 'read'
+   * (with what each detail is, and whether it says Delivered).
+   */
   const shot = {};
+  /** What each screenshot read, as the reader gave it, for a detail one digit away from the sheet's (a possible reading mistake). */
+  const reads = {};
+  /** Sentences near the end of the Note that are not a Type: a screenshot of several that could not be opened. */
+  const warnings = [];
   /** The days steps 2 and 4 read: { order: the purchase screenshot's dates that can be the order's, delivery: the Delivered line's date }. */
   const daysRead = {};
   /** A cell's pictures, downloading again any that could not be had; a download that cannot be made just now pauses the check here. */
@@ -325,14 +403,21 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     }
     const s = row.shots?.[which] ?? {};
     if (!s.links?.length && !s.picture) {
-      shot[which] = { state: 'missing' };
+      // A delivery cell that says the order was not delivered ("Cancelled"), as on Amazon.
+      if (which === 'delivery' && s.text && holdsWord(s.text, NOT_DELIVERED_WORDS)) {
+        shot[which] = { state: 'words', text: s.text };
+        return finish(n, 'fail', `The cell says ${quoted(s.text, 60)}, so the order was not delivered.`);
+      }
+      shot[which] = { state: 'missing', text: s.text ?? '' };
       return finish(n, 'fail', s.text ? `The cell says ${quoted(s.text, 60)} instead of holding a screenshot.` : 'The cell is empty.');
     }
     const g = await fetchCell(n, which);
     if (!g.files.length) {
-      shot[which] = { state: 'unopened' };
-      return finish(n, 'fail', problemLine(which, g.problems[0] ?? { kind: 'access', site: null, says: 'it could not be opened' }));
+      const p = g.problems[0] ?? { kind: 'access', site: null, says: 'it could not be opened' };
+      shot[which] = { state: 'unopened', picture: pictureProblem(which, p) };
+      return finish(n, 'fail', problemLine(which, p));
     }
+    if (g.problems.length) warnings.push(`${g.problems.length} of the ${g.problems.length + g.files.length} ${WHAT[which]}s could not be opened.`);
     shot[which] = { state: 'opened', files: g.files };
     return finish(n, 'pass', `Opened ${g.files.length === 1 ? `the ${WHAT[which]}` : `${g.files.length} ${WHAT[which]}s`}.`);
   }
@@ -506,7 +591,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
   async function readShot(n, which) {
     const was = shot[which]?.state;
     if (was !== 'opened') {
-      const why = was === 'no column' ? `The file has no ${WHAT[which]} column, so there is nothing to read.` : was === 'missing' ? `There is no ${WHAT[which]} to read.` : `The ${WHAT[which]} could not be opened, so it was not read.`;
+      const why = was === 'no column' ? `The file has no ${WHAT[which]} column, so there is nothing to read.` : was === 'missing' ? `There is no ${WHAT[which]} to read.` : was === 'words' ? 'The cell holds words, not a screenshot, so there is nothing to read.' : `The ${WHAT[which]} could not be opened, so it was not read.`;
       return finish(n, 'not-reached', why);
     }
     start(n, `Reading the ${WHAT[which]}`);
@@ -547,9 +632,15 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const unread = Boolean(r.deliveredDateUnread);
     if (which === 'delivery') Object.assign(record, { delivered: Boolean(r.delivered), deliveredText: r.deliveredText ? `${clean(r.deliveredText)}${unread ? ' (its date could not be read)' : ''}` : null, notDelivered: notWord });
     result[which] = record;
-    if (!r.ok) return finish(n, 'fail', `It could not be read: ${r.problem ?? 'its words are not clear enough to read'}.`);
+    if (!r.ok) {
+      shot[which] = { ...shot[which], state: 'unreadable', problem: r.problem ?? 'its words are not clear enough to read' };
+      return finish(n, 'fail', `It could not be read: ${shot[which].problem}.`);
+    }
     const details = detailsOf(which, r);
     record.details = details;
+    reads[which] = r;
+    // The purchase screenshot may say Delivered too (it may be the delivered order's page): the judging uses it when the delivery screenshot does not, as on Amazon.
+    shot[which] = { ...shot[which], state: 'read', details, delivered: which === 'delivery' ? Boolean(r.delivered) : parseDelivery((r.texts ?? []).map(String)).delivered, notDelivered: notWord };
     record.product = details.product.shown ?? details.product.part ?? null;
     record.productShare = details.product.share ?? null;
     let said = detailWords(details);
@@ -613,7 +704,11 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     if (v.kind === 'refused') return finish(n, 'fail', `It shows a message from Flipkart that the review was not accepted: ${quoted(v.message, 200)}.`);
     // What the screen shows or does not show ("My Reviews": its Published tab, else it lists pending reviews too; the review being written is not posted) ends the line.
     const note = v.note ? ` ${v.note}` : '';
-    if (v.kind === 'rating') return finish(n, 'pass', `${v.stars} stars and no written words.${note}`);
+    if (v.kind === 'rating') {
+      // A star rating with no words passes as Rating Only, as on Amazon: there are no words to look for on Flipkart.
+      ratingOnly = true;
+      return finish(n, 'pass', `${v.stars} stars and no written words.${note}`);
+    }
     const among = v.others ? `, one of ${v.others + 1} reviews it shows` : '';
     // As the Amazon checker says it: the review's own words, quoted, end its line (then the note, as a sentence of its own).
     const said = quoted(v.body ?? v.title, 100);
@@ -622,6 +717,9 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     if (v.kind === 'written') return finish(n, 'pass', `A written review${v.name && !/flipkart\s+customer/i.test(v.name) ? ` by ${quoted(v.name, 40)}` : ''}${among}: ${words}`);
     return finish(n, 'fail', `It does not clearly show a written review, a star rating only or a message from Flipkart, because ${v.why}.${note}`);
   }
+
+  /** True when the review screenshot shows a star rating with no words (step 6): Rating Only, as on Amazon. */
+  let ratingOnly = false;
 
   // ---- step 7: finding the review among Flipkart's public reviews (FLIPKART-PLAN.md point 4) ----
 
@@ -677,15 +775,29 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
    * page that takes too long pauses the check, as on Amazon, and nothing is
    * got around; but a review found among the pages read before it is found.
    */
+  /** What step 7 did, for the Status: why it searched nothing (skip: 'later', 'nothing', 'noCampaign' or 'noProduct'), what it read (got) and found (m), and whether Flipkart stopped the reading before the review was found (stopped). */
+  const seven = { skip: null, got: null, m: null, stopped: false };
   async function findReviewStep(n) {
-    if (!reviews) return later(n);
+    if (!reviews) {
+      seven.skip = 'later';
+      return later(n);
+    }
     start(n, "Finding the review among Flipkart's public reviews");
     result.reviewsFrom = reviewsFrom();
     const nothing = nothingToSearch();
-    if (nothing) return finish(n, 'not-reached', `${nothing}, so there is nothing to search with.`);
-    if (!byCampaign) return finish(n, 'not-reached', "The row uses no live campaign with a product read from Flipkart, so there is no product's page to find the review on.");
+    if (nothing) {
+      seven.skip = 'nothing';
+      return finish(n, 'not-reached', `${nothing}, so there is nothing to search with.`);
+    }
+    if (!byCampaign) {
+      seven.skip = 'noCampaign';
+      return finish(n, 'not-reached', "The row uses no live campaign with a product read from Flipkart, so there is no product's page to find the review on.");
+    }
     const product = boughtProduct();
-    if (!product) return finish(n, 'not-reached', "Which of the campaign's products was bought could not be told from the purchase screenshot, so it is not known whose reviews to search.");
+    if (!product) {
+      seven.skip = 'noProduct';
+      return finish(n, 'not-reached', "Which of the campaign's products was bought could not be told from the purchase screenshot, so it is not known whose reviews to search.");
+    }
     const got = await reviews(product.pid, {
       rowId: row.id,
       signal,
@@ -702,9 +814,18 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     // Each review's words as a person reads them (a copy kept earlier may still hold the page's HTML codes).
     const list = (got.reviews ?? []).map((r) => ({ ...r, name: r.name ? plainText(r.name) : r.name, title: r.title ? plainText(r.title) : r.title, text: r.text ? plainText(r.text) : r.text }));
     const m = kept && got.end !== 'none' ? matchReview({ shot: result.review, sheetName: reviewer, reviews: list, day, avoid: [product.name ?? '', got.product?.name ?? ''] }) : null;
-    // The review is kept with its own link, which opens it on Flipkart; never its place in the list, which Flipkart's website does not show.
-    result.found = m ? { how: m.how, count: m.count, nameFrom: m.name.from, counted: m.counted, nameOnly: m.nameOnly, before: m.before, share: m.share, rareShare: m.rareShare, review: m.review ? { id: m.review.id ?? null, name: m.review.name ?? null, stars: m.review.stars ?? null, title: m.review.title ?? null, text: m.review.text ?? null, dateSaid: m.review.dateSaid ?? null, date: m.review.date ?? null, dateLatest: m.review.dateLatest ?? null, link: reviewLink(m.review.id) } : null } : null;
-    if (pause && m?.how !== 'found') pauseAt(n, pause, PAUSE_SAYS[pause], `${got.says} The check paused here; nothing was got around.`);
+    // The review is kept with its own link as Flipkart's reviews pages sent it, which opens it on Flipkart (none when they sent none, never one made up); never its place in the list, which Flipkart's website does not show.
+    result.found = m ? { how: m.how, count: m.count, nameFrom: m.name.from, counted: m.counted, nameOnly: m.nameOnly, before: m.before, share: m.share, rareShare: m.rareShare, review: m.review ? { id: m.review.id ?? null, name: m.review.name ?? null, stars: m.review.stars ?? null, title: m.review.title ?? null, text: m.review.text ?? null, dateSaid: m.review.dateSaid ?? null, date: m.review.date ?? null, dateLatest: m.review.dateLatest ?? null, link: reviewPageLink(m.review.link, m.review.id) } : null } : null;
+    seven.got = got;
+    seven.m = m;
+    // Flipkart stopping the reading (a robot check, a refused page, an error, a page too slow) before the review was found is said, for a staff
+    // member, and nothing is got around; the Live Flipkart Browser closed, offline or led to another website pauses the check, as on Amazon.
+    const byFlipkart = FLIPKART_STOPPED.has(got.end);
+    if (pause && m?.how !== 'found' && !byFlipkart) pauseAt(n, pause, PAUSE_SAYS[pause], `${got.says} The check paused here; nothing was got around.`);
+    if (byFlipkart && m?.how !== 'found') {
+      seven.stopped = true;
+      return finish(n, 'fail', `${got.says} The review was not among the reviews read before that, so whether it is on Flipkart could not be told; nothing was got around.`);
+    }
     if (got.end === 'none' || !kept) return finish(n, 'fail', got.says ?? "Flipkart's reviews could not be read.");
     const how = got.reused || (got.wentOn && !got.opened) ? ' They were read earlier and kept on this computer, so Flipkart was not opened again.' : got.wentOn ? ' The reading went on from where it had stopped, keeping the reviews read before.' : '';
     // "1 month ago" is a day only roughly: the oldest review read, about then.
@@ -748,6 +869,472 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     return ['fail', `Not found among Flipkart's reviews: ${none}.${notes.length ? ` ${notes.join(' ')}` : ''}`];
   }
 
+  // ---- step 8: comparing the reviewer's name and the review's words (amazon/check.js reviewShotCheck and reviewerCheck) ----
+
+  /** Problems step 8 finds that a staff member must look at: { type, says, then }. They never fail the transaction. */
+  const flags = [];
+  const flag = (type, says, then) => flags.push({ type, says, then });
+  /** Step 8's sentences for the Note when what it compared matches. */
+  const reviewNotes = [];
+  /** Two names written the same, but for small and capital letters, spaces and marks. */
+  const sameName = (a, b) => {
+    const norm = (t) => String(t ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    return Boolean(norm(a)) && norm(a) === norm(b);
+  };
+  const starsWord = (k) => `${k} ${k === 1 ? 'star' : 'stars'}`;
+
+  /**
+   * Step 8: the review found on Flipkart (step 7) against the review
+   * screenshot, as the Amazon checker compares a review with the review
+   * screenshot and with the Reviewer Name column: the name on the review
+   * screenshot (else the reviewer's name in the sheet) against the name on
+   * Flipkart (review-read.js nameFits), and the name in the Reviewer Name
+   * column too; the screenshot's words against the review's words (the
+   * screenshot may show only part of them); the stars, when both show them;
+   * and the day it was posted against the day the order was delivered (else
+   * placed). Anything that does not match is for a staff member, never a Fail.
+   */
+  function compareStep(n) {
+    checkStop();
+    const f = result.found;
+    if (ratingOnly) return finish(n, 'not-needed', 'A rating only needs no comparison.');
+    if (f?.how !== 'found' || !f.review) return finish(n, 'not-reached', 'The review was not found on Flipkart, so there is nothing to compare.');
+    start(n, "Comparing the reviewer's name and the review's words");
+    const v = result.review ?? {};
+    const r = f.review;
+    const said = [];
+    // The name the review was found under: the one on the review screenshot, else the reviewer's name in the sheet.
+    const mine = f.nameFrom === 'screenshot' ? v.name : String(reviewer ?? '').trim();
+    const from = f.nameFrom === 'screenshot' ? 'on the review screenshot' : 'in the Reviewer Name column';
+    said.push(sameName(mine, r.name) ? `The reviewer's name on Flipkart, ${quoted(r.name, 40)}, is the name ${from}.` : `The reviewer's name on Flipkart, ${quoted(r.name, 40)}, fits the name ${from}, ${quoted(mine, 40)}.`);
+    // The Reviewer Name column, when the name came from the review screenshot.
+    if (f.nameFrom === 'screenshot' && reviewer !== null && reviewer !== undefined) {
+      const column = String(reviewer).replace(/\s+/g, ' ').trim();
+      if (!column) said.push('The Reviewer Name cell is empty, so the name on Flipkart was not compared with it.');
+      else if (nameFits(column, r.name)) said.push(sameName(column, r.name) ? 'It is the name in the Reviewer Name column too.' : `It fits the name in the Reviewer Name column, ${quoted(column, 40)}, too.`);
+      else flag('reviewerNotMatching', `The reviewer's name on Flipkart, ${quoted(r.name, 40)}, is not the name in the Reviewer Name column, ${quoted(column, 40)}.`, 'A staff member must check whose review it is.');
+    }
+    // The words: the screenshot's are in the review (step 7 found them there); it may show only part of the review's.
+    const ofFlipkart = overlapScore(r.text || r.title || '', shotWords(v)) ?? 0;
+    said.push(ofFlipkart < 0.85 ? "The review screenshot shows part of the review's words on Flipkart." : 'The review screenshot shows the same words as the review on Flipkart.');
+    // The stars, when both show them.
+    if (Number.isInteger(v.stars) && Number.isInteger(r.stars)) {
+      if (v.stars === r.stars) said.push(`Both show ${starsWord(r.stars)}.`);
+      else flag('reviewShotNotMatching', `The review screenshot shows ${starsWord(v.stars)}, but the review on Flipkart has ${starsWord(r.stars)}.`, "A staff member must check which review is the user's.");
+    } else said.push(`The stars were not compared, because ${Number.isInteger(v.stars) ? 'Flipkart shows none for the review' : 'the review screenshot shows none that could be read'}.`);
+    // The day it was posted: on or after the day the order was delivered (else placed).
+    const day = result.reviewsFrom?.day ?? null;
+    const what = result.reviewsFrom?.from === 'order' ? 'placed' : 'delivered';
+    if (!day) flag('somethingElse', 'Neither the delivery screenshot nor the purchase screenshot shows a day, so whether the review was posted after the order was delivered could not be checked.', 'Check the dates by hand.');
+    else if (!r.dateLatest) flag('somethingElse', 'The day the review was posted could not be read on Flipkart, so whether it was posted after the order was delivered could not be checked.', 'Check the dates by hand.');
+    else if (r.date && r.date >= day) said.push(`It was posted ${r.date === r.dateLatest ? `on ${dayFirst(r.date)}` : `${r.dateSaid ?? ''} (on ${dayFirst(r.date)} or later)`.trim()}, on or after ${dayFirst(day)}, the day the order was ${what}.`);
+    else said.push(`Flipkart says it was posted ${quoted(r.dateSaid ?? '', 30)}, which can be on or after ${dayFirst(day)}, the day the order was ${what}.`);
+    reviewNotes.push(...said);
+    return finish(n, flags.length ? 'fail' : 'pass', [...said, ...flags.map((x) => x.says)].join(' '));
+  }
+
+  // ---- step 9: Status, Type and Note (amazon/check.js, its step 10, with its words and rules) ----
+
+  /** The campaigns named in a sentence: "the campaign "Test Brand Bottles"", or "the campaigns "A" and "B"". */
+  const named = campaigns.filter((c) => c.products?.length);
+  const theCampaign = `the campaign${named.length > 1 ? 's' : ''} ${joinAnd(named.map((c) => `"${clean(c.name)}"`))}`;
+  /** What the sheet gives for each detail, for a detail the form lacks. */
+  const formHas = { orderId: Boolean(sheetId), orderDate: Boolean(sheetDay), amount: sheetAmount !== null, product: Boolean(label) };
+  /** True when a detail that is different on a screenshot is one digit away from the sheet there: it may be a reading mistake. */
+  function oneDigitOn(which, k) {
+    const r = reads[which] ?? {};
+    if (k === 'orderId') return (r.orderIds ?? []).some((id) => oneDigitOff(id, sheetId));
+    if (k === 'orderDate') return orderDates(which, r.dates).some((d) => dateOneDigitOff(d, sheetDay));
+    if (k === 'amount') return usableAmounts(r.amounts).some((a) => amountOneDigitOff(a.value, sheetAmount) || (a.alts ?? []).some((x) => amountOneDigitOff(x, sheetAmount)));
+    return false;
+  }
+  /** Sentences the judging adds to the Note: how a screenshot was tied to the order when a detail was read in part. */
+  const judgeNotes = [];
+  /** The screenshots' problems (judge), once both are read. */
+  let problems = [];
+  /**
+   * Every problem the two screenshots have, in the order that decides the
+   * Type (RANK), as the Amazon checker judges them: [{ rank, type, kind,
+   * detail, which, final }]. final is 'fail' for a problem that fails the
+   * transaction, 'manual' for one a staff member must look at (a detail one
+   * digit away from the sheet may only be a reading mistake). Empty when both
+   * pass: the order ID and the product shown and the same on both, the order
+   * date and the amount shown on at least one and the same wherever shown, and
+   * the delivery screenshot says Delivered.
+   */
+  function judge() {
+    const out = [];
+    judgeNotes.length = 0;
+    const add = (r, type, p) => out.push({ rank: r, type, at: out.length, final: 'fail', ...p });
+    const read = SHOTS.filter((w) => shot[w]?.state === 'read');
+    const st = (w, k) => shot[w].details[k].state;
+    /** A different order ID, order date or amount that is one digit away from the sheet on every screenshot where it is different. */
+    const misread = (k) => read.filter((w) => st(w, k) === 'different').every((w) => oneDigitOn(w, k));
+    const different = (k) => ({ kind: 'different', detail: k, misread: misread(k), final: misread(k) ? 'manual' : 'fail' });
+    // The order ID read one digit off on one screenshot, and whole and exactly on the other: a reading slip, not a problem.
+    const idSlip = read.filter((w) => st(w, 'orderId') === 'different');
+    const idExact = read.filter((w) => st(w, 'orderId') === 'same' && !shot[w].details.orderId.part);
+    const idFixed = idSlip.length === 1 && idExact.length === 1 && oneDigitOn(idSlip[0], 'orderId');
+    if (idFixed) judgeNotes.push(`The order ID on the ${WHAT[idSlip[0]]} was read one digit off, but the ${WHAT[idExact[0]]} shows it exactly, so it was taken as a reading slip.`);
+    if (!idFixed && read.some((w) => st(w, 'orderId') === 'different')) add(RANK.orderId, 'orderIdNotMatching', different('orderId'));
+    if (read.some((w) => st(w, 'product') === 'different')) add(RANK.product, 'productNotMatching', { kind: 'different', detail: 'product' });
+    // Each screenshot shows one of the campaign's products, but not the same one: the delivery screenshot is not this order's product.
+    const oProd = shot.order?.state === 'read' ? shot.order.details.product : null;
+    const dProd = shot.delivery?.state === 'read' ? shot.delivery.details.product : null;
+    const shared = (a, b) => (a.all ?? [a.product?.pid]).some((x) => x && (b.all ?? [b.product?.pid]).includes(x));
+    if (byCampaign && oProd?.state === 'same' && dProd?.state === 'same' && oProd.product?.pid && dProd.product?.pid && !shared(oProd, dProd)) add(RANK.product, 'productNotMatching', { kind: 'mismatch', detail: 'product', which: ['delivery'] });
+    // A picture in the delivery cell that says neither "Delivered" nor that the order was not delivered, and shows no detail of an order
+    // (no order ID, amount or order date: a photo of the product), is not an order page, so it cannot be tied to this order.
+    const dDet = shot.delivery?.state === 'read' ? shot.delivery.details : null;
+    const noOrderDetail = Boolean(dDet) && !['orderId', 'amount', 'orderDate'].some((k) => ['same', 'different', 'shown'].includes(dDet[k]?.state));
+    const notOrderPage = noOrderDetail && !shot.delivery.delivered && !shot.delivery.notDelivered;
+    // "Delivered" on the purchase screenshot of this order (the two screenshots given the other way round) is this order delivered.
+    const deliveredOnOrder = Boolean(shot.order?.state === 'read' && shot.order.delivered && st('order', 'orderId') === 'same');
+    if (shot.delivery?.state === 'words') add(RANK.delivered, 'notDelivered', { kind: 'words' });
+    // No "Delivered" fails only when the screenshot clearly says it was not delivered; else it may be a reading mistake.
+    else if (shot.delivery?.state === 'read' && !shot.delivery.delivered && !notOrderPage) {
+      if (!shot.delivery.notDelivered && deliveredOnOrder) judgeNotes.push('The delivery screenshot does not say Delivered, but the purchase screenshot shows this order delivered.');
+      else add(RANK.delivered, 'notDelivered', { kind: 'not delivered', final: shot.delivery.notDelivered ? 'fail' : 'manual' });
+    }
+    for (const w of SHOTS) {
+      if (shot[w]?.state === 'missing') add(RANK.open, w === 'order' ? 'orderShotMissing' : 'deliveryShotMissing', { kind: 'missing', which: [w] });
+      else if (shot[w]?.state === 'no column') add(RANK.open, w === 'order' ? 'orderShotMissing' : 'deliveryShotMissing', { kind: 'no column', which: [w], final: 'manual' });
+      else if (shot[w]?.state === 'unopened') add(RANK.open, shot[w].picture.type, { kind: 'unopened', which: [w], final: 'manual' });
+    }
+    // An amount read one digit away from the sheet on one screenshot, while the other screenshot of the same order (both show its order ID)
+    // shows the sheet's: the amount is the sheet's, as with an order ID's slip.
+    const amountFixed = read.length === 2 && read.every((w) => st(w, 'orderId') === 'same') && read.some((w) => st(w, 'amount') === 'same') && read.some((w) => st(w, 'amount') === 'different' && oneDigitOn(w, 'amount'));
+    if (amountFixed) {
+      const off = read.find((w) => st(w, 'amount') === 'different');
+      const on = read.find((w) => st(w, 'amount') === 'same');
+      judgeNotes.push(`The amount on the ${WHAT[off]} was read as ${shot[off].details.amount.shown}, but the ${WHAT[on]} of the same order shows ${shot[on].details.amount.shown}, the amount the user gave.`);
+    }
+    for (const k of ['orderDate', 'amount']) if (read.some((w) => st(w, k) === 'different') && !(k === 'amount' && amountFixed)) add(RANK.details, 'orderDetailsNotMatching', different(k));
+    for (const k of compared) if (!formHas[k]) add(RANK.details, 'orderDetailsNotMatching', { kind: 'form', detail: k, final: 'manual' });
+    for (const w of SHOTS) if (shot[w]?.state === 'unreadable') add(RANK.shown, `${w}NotClear`, { kind: 'unreadable', which: [w], final: 'manual' });
+    // The order ID: the purchase screenshot must show it; the delivery screenshot need not (its product ties it to the order, below).
+    if (compared.includes('orderId') && formHas.orderId) {
+      const hidden = read.filter((w) => st(w, 'orderId') === NOT_SHOWN);
+      if (hidden.length === 2) add(RANK.shown, 'orderNotClear', { kind: 'not shown', detail: 'orderId', which: hidden, final: 'manual' });
+      else if (hidden.includes('order')) add(RANK.shown, 'orderNotClear', { kind: 'not shown', detail: 'orderId', which: ['order'], final: 'manual' });
+    }
+    // The product, the way staff read it: the purchase screenshot shows the product's name, or the start of it; the delivery screenshot shows the
+    // same product, or is this order's by its order ID. A start cut short counts when both screenshots show the same start of the product ordered.
+    if (compared.includes('product') && formHas.product) {
+      const o = shot.order?.state === 'read' ? shot.order.details : null;
+      const d = shot.delivery?.state === 'read' ? shot.delivery.details : null;
+      const oP = o?.product;
+      const dP = d?.product;
+      const idOn = (det) => det?.orderId?.state === 'same';
+      const samePart = Boolean(oP?.part && dP?.part && sameStart(oP.part, dP.part));
+      // With a campaign, the product's real name from Flipkart (and its brand's words); without one, the product name in the sheet, of which three words or more (or all of a shorter name) must show.
+      const leadOf = (name) => campaignProducts.find((c) => c.name === name)?.lead ?? 1;
+      const startOf = (part, prod) => {
+        if (!part) return false;
+        if (prod?.name) return Boolean(nameStartShown([part], prod.name, { lead: leadOf(prod.name) }));
+        if (!label) return false;
+        const hit = nameStartShown([part], label);
+        return Boolean(hit && (hit.whole || hit.full + (hit.cut ? 1 : 0) >= Math.min(productWords(label).length, 3)));
+      };
+      // Only a product not shown is judged here; a different product is a problem of its own, above.
+      const orderOk = !o || oP.state !== NOT_SHOWN || samePart || (dP?.state === 'same' && (startOf(oP.part, dP.product) || (!oP.part && idOn(o) && idOn(d))));
+      const deliveryOk = !d || dP.state !== NOT_SHOWN || samePart || (oP?.state === 'same' && startOf(dP.part, oP.product)) || (!dP.part && idOn(d));
+      if (o && orderOk && oP.state === NOT_SHOWN) judgeNotes.push(samePart ? `The purchase screenshot shows only the start of the product's name, ${quoted(oP.part, 60)}, and the delivery screenshot shows the same start.` : oP.part ? `The purchase screenshot shows only the start of the product's name, ${quoted(oP.part, 60)}, which the delivery screenshot shows in full.` : "The product's name is not on the purchase screenshot, but the delivery screenshot shows it, with the same order ID.");
+      if (d && deliveryOk && dP.state === NOT_SHOWN && !samePart) judgeNotes.push(dP.part ? `The delivery screenshot shows only the start of the product's name, ${quoted(dP.part, 60)}, which the purchase screenshot shows in full.` : "The delivery screenshot does not show the product's name, but it shows this order's ID.");
+      // A picture in the delivery cell that is not an order page is a problem of its own (below), whatever product it shows.
+      const hidden = [o && !orderOk ? 'order' : null, d && !deliveryOk && !notOrderPage ? 'delivery' : null].filter(Boolean);
+      if (hidden.length === 2 && !hidden.some((w) => shot[w].details.product.part)) add(RANK.shown, 'orderNotClear', { kind: 'not shown', detail: 'product', which: hidden, final: 'manual' });
+      else for (const w of hidden) add(RANK.shown, `${w}NotClear`, { kind: 'not shown', detail: 'product', which: [w], final: 'manual', noId: w === 'delivery' && !idOn(d) });
+    }
+    if (notOrderPage) add(RANK.shown, 'deliveryNotClear', { kind: 'no details', which: ['delivery'], final: 'manual' });
+    if (read.length === 2) for (const k of ['orderDate', 'amount']) if (compared.includes(k) && formHas[k] && read.every((w) => st(w, k) === NOT_SHOWN)) add(RANK.shown, 'orderNotClear', { kind: 'not shown', detail: k, which: read, final: 'manual' });
+    // Within a rank, the purchase screenshot's problem comes first.
+    const first = (p) => (p.which ? (p.which.includes('order') ? 0 : 1) : 0);
+    return out.sort((a, b) => a.rank - b.rank || first(a) - first(b) || a.at - b.at);
+  }
+  /** Once both screenshots are read: their problems, and each screenshot's step line says what the judging found that it did not, as on Amazon. */
+  function judgeShots() {
+    problems = judge();
+    const neither = problems.filter((p) => p.kind === 'not shown' && p.which.length === 2).map((p) => `Neither screenshot shows ${p.detail === 'orderId' ? 'an order ID' : `the ${NOUN[p.detail]}`}.`);
+    const s4 = result.steps[3];
+    if (neither.length && s4.state !== 'not-reached') finish(4, 'fail', `${s4.detail ?? ''} ${neither.join(' ')}`.trim());
+    for (const p of problems.filter((x) => (x.kind === 'not shown' || x.kind === 'no details' || x.kind === 'mismatch') && x.which.length === 1)) {
+      const k = p.which[0] === 'order' ? 2 : 4;
+      const s = result.steps[k - 1];
+      if (s.state === 'pass') finish(k, 'fail', `${s.detail ?? ''} ${cap(notShownClause(p))}.`.trim());
+    }
+  }
+
+  // The Note's sentences for the screenshots' problems, in the Amazon checker's words.
+  /** What the user gave in the form: "order ID OD…", "the order date 20-07-2026", "the amount ₹349", "the product "…"". */
+  const given = { orderId: () => `order ID ${sheetId}`, orderDate: () => `the order date ${dayFirst(sheetDay)}`, amount: () => `the amount ${rupees(sheetAmount)}`, product: () => `the product ${quoted(label, 80)}` };
+  /** The same, without what it is: for "the user gave ₹349, but …". */
+  const givenValue = { orderId: () => sheetId, orderDate: () => dayFirst(sheetDay), amount: () => rupees(sheetAmount), product: () => quoted(label, 80) };
+  /** How a screenshot's value is said: an order ID or a date as it is, an amount with what it is, a product in quotes (a campaign's by the start of its real name). */
+  const valueSaid = (k, v) => (k === 'product' ? quoted(v.campaign ? shortName(v.product?.short ?? v.shown) : v.shown, 80) : k === 'amount' && v.label ? `${v.shown} as ${v.label}` : v.shown);
+  const readShots = () => SHOTS.filter((w) => shot[w]?.state === 'read');
+  const withState = (k, state) => readShots().filter((w) => shot[w].details[k].state === state);
+  /** "the delivery screenshot shows ₹399", or both screenshots' values. */
+  function shownOn(k, list) {
+    const vals = list.map((w) => valueSaid(k, shot[w].details[k]));
+    if (list.length === 2 && vals[0] === vals[1]) return `both screenshots show ${k === 'orderId' ? `order ID ${vals[0]}` : vals[0]}`;
+    return list.map((w, i) => `the ${WHAT[w]} shows ${k === 'orderId' ? `order ID ${vals[i]}` : vals[i]}`).join(' and ');
+  }
+  /** "the delivery screenshot", or "both screenshots": where a detail is different. */
+  const differentOn = (k) => {
+    const diff = withState(k, 'different');
+    return diff.length === 2 ? 'both screenshots' : `the ${WHAT[diff[0]]}`;
+  };
+  function notShownClause(p) {
+    if (p.kind === 'no details') return `the ${WHAT[p.which[0]]} does not show any order details to match`;
+    if (p.kind === 'mismatch') return `the ${WHAT[p.which[0]]} shows another of the campaign's products, ${quoted(shortName(shot.delivery.details.product.product?.short ?? ''), 60)}, than the purchase screenshot, ${quoted(shortName(shot.order.details.product.product?.short ?? ''), 60)}`;
+    const k = p.detail;
+    const thing = k === 'orderId' ? 'an order ID' : `the ${NOUN[k]}`;
+    if (p.which.length === 2) return `neither screenshot shows ${thing}, so it cannot be matched to this order`;
+    const w = p.which[0];
+    const part = shot[w].details[k].part;
+    if (part && k === 'product') return `the ${WHAT[w]} shows only the start of the product's name, ${quoted(part, 80)}, which could be more than one product, so it cannot be matched to this order`;
+    if (p.noId) return `the ${WHAT[w]} shows neither the product's name nor this order's ID, so it cannot be matched to this order`;
+    return `the ${WHAT[w]} does not show ${thing}, so it cannot be matched to this order`;
+  }
+  function formSaid(k) {
+    const text = { orderId: row.orderId?.text, orderDate: row.orderDate?.text, amount: row.amount?.text, product: label }[k];
+    const isNot = { orderId: 'an order ID', orderDate: 'a date', amount: 'a number' }[k];
+    if (text && isNot) return `The ${NOUN[k]} in the form, ${quoted(text, 30)}, is not ${isNot}, so the screenshots cannot be compared with it.`;
+    return `The user did not give ${k === 'orderId' ? 'an order ID' : k === 'amount' ? 'an amount' : `a ${NOUN[k]}`} in the form, so the screenshots cannot be compared with it.`;
+  }
+  /** The problem that gives the Status, as its reason: words that follow "because". */
+  function reasonOf(p) {
+    const w = p.which?.[0];
+    switch (p.kind) {
+      case 'different': {
+        const k = p.detail;
+        if (k === 'product') return byCampaign ? `the product on ${differentOn(k)} is not one of the products of ${theCampaign}` : `the product on ${differentOn(k)} does not match the product the user gave`;
+        return p.misread ? `the ${NOUN[k]} on ${differentOn(k)} is one digit away from the ${NOUN[k]} the user gave, which may be a reading mistake` : `the ${NOUN[k]} on ${differentOn(k)} does not match the ${NOUN[k]} the user gave`;
+      }
+      case 'words':
+        return `the user wrote ${quoted(shot.delivery.text, 60)} in the form instead of giving a delivery screenshot, so the order was not delivered`;
+      case 'not delivered':
+        return shot.delivery.notDelivered ? `the delivery screenshot says "${shot.delivery.notDelivered}", so the order was not delivered` : 'the word "Delivered" could not be found on the delivery screenshot';
+      case 'missing':
+        return shot[w].text ? `the user wrote ${quoted(shot[w].text, 60)} in the form instead of giving a ${WHAT[w]}` : `the user did not give a ${WHAT[w]}`;
+      case 'no column':
+        return `the file has no ${WHAT[w]} column, so the ${w === 'order' ? 'purchase' : 'delivery'} cannot be seen`;
+      case 'unopened':
+        return lowerFirst(shot[w].picture.line);
+      case 'form':
+        return lowerFirst(formSaid(p.detail));
+      case 'unreadable':
+        return `the ${WHAT[w]} could not be read: ${shot[w].problem}`;
+      default:
+        return notShownClause(p);
+    }
+  }
+  /** What the Note says next about the problem that gives the Status: the values, or what to do. */
+  function detailOf(p) {
+    const k = p.detail;
+    if (p.kind === 'different') return k === 'product' && byCampaign ? [`${cap(shownOn(k, withState(k, 'different')))}.`] : [`The user gave ${given[k]()}, and ${shownOn(k, withState(k, 'different'))}.`];
+    if (p.kind === 'unopened') return [`${cap(shot[p.which[0]].picture.because)}.`, shot[p.which[0]].picture.then];
+    if (p.kind === 'unreadable') return ['Ask for a clearer screenshot, then check this row again.'];
+    return [];
+  }
+  /** Every other problem, in one sentence. */
+  function problemSaid(p) {
+    const w = p.which?.[0];
+    const k = p.detail;
+    switch (p.kind) {
+      case 'different':
+        if (k === 'product' && byCampaign) return `The product is also not one of the products of ${theCampaign}: ${shownOn(k, withState(k, 'different'))}.`;
+        return `The ${NOUN[k]} is ${p.misread ? 'one digit away from the form, which may be a reading mistake' : 'also different'}: the user gave ${givenValue[k]()}, but ${shownOn(k, withState(k, 'different'))}.`;
+      case 'words':
+      case 'not delivered':
+      case 'missing':
+      case 'no column':
+      case 'unreadable':
+        return `${cap(reasonOf(p))}.`;
+      case 'unopened':
+        return shot[w].picture.line;
+      case 'form':
+        return formSaid(k);
+      default:
+        return `${cap(notShownClause(p))}.`;
+    }
+  }
+
+  /** "The user did not give a review screenshot or a review link…", when the row has neither, in the Amazon checker's words. */
+  function reviewMissingSaid() {
+    const shotCell = row.shots?.reviewShot ?? {};
+    const linkCell = row.shots?.review ?? {};
+    if (had.reviewShot && shotCell.text) return `The user wrote ${quoted(shotCell.text, 60)} in the form instead of giving a review screenshot.`;
+    if (had.reviewLink && linkCell.text) return `The user wrote ${quoted(linkCell.text, 60)} in the form instead of giving a review link.`;
+    if (!had.reviewLink) return 'The user did not give a review screenshot in the form.';
+    if (!had.reviewShot) return 'The user did not give a review link in the form.';
+    return 'The user did not give a review link or a review screenshot in the form.';
+  }
+  /** "the 150 reviews Flipkart shows for the product": the reviews step 7 read, in a few words. */
+  function reviewsReadSaid(got) {
+    const k = (got.reviews ?? []).length;
+    const reviewsSaid = k === 1 ? 'the 1 review' : `the ${k} reviews`;
+    if (got.end === 'last page') return `${reviewsSaid} Flipkart shows for the product`;
+    if (got.end === 'date' && got.since) return `${reviewsSaid} read on Flipkart, newest first, back to ${dayFirst(got.since)}`;
+    return `${reviewsSaid} read on Flipkart, newest first`;
+  }
+
+  /**
+   * What stops the review from passing, as the Amazon checker says the same
+   * problem: { type, says (sentences; the first is the reason), then }; null
+   * when the review passes its steps (found on Flipkart, or a star rating
+   * only). After the screenshots' problems, it gives the Status. A review that
+   * is not among the reviews Flipkart shows, or that cannot be told to be the
+   * user's, is for a staff member, never a Fail.
+   */
+  function reviewProblem() {
+    const rw = reviewCell(row, had);
+    const st = shot[rw]?.state;
+    const v = result.review;
+    const linked = reviewLinked();
+    if (!st || st === 'no column' || st === 'missing') {
+      // No review screenshot: a link to one review is not opened by the dashboard yet; a link that is not one fails, as on Amazon; none at all fails.
+      if (linked) return { type: 'somethingElse', says: ['There is no review screenshot, and the review link, a link to one review on Flipkart, is not opened by the dashboard yet.'], then: 'Open the review link by hand.' };
+      // A link to another website is a picture to download (screenshots.js downloadable), so what is left here is one of Flipkart's own pages.
+      const links = had.reviewLink ? row.shots?.review?.links ?? [] : [];
+      const label = links.length ? linkLabel(links[0]) : null;
+      if (NOT_A_REVIEW[label]) return { type: 'wrongReviewLink', says: [`The review link opens ${NOT_A_REVIEW[label]}, not a review.`] };
+      if (links.length) return { type: 'somethingElse', says: ['There is no review screenshot, and the review link opens a page on Flipkart that the dashboard does not open yet.'], then: 'Open the review link by hand.' };
+      return { type: 'reviewLinkMissing', says: [reviewMissingSaid()] };
+    }
+    if (st === 'unopened') {
+      const p = shot[rw].picture;
+      return { type: p.type, says: [p.line, `${cap(p.because)}.`], then: p.then };
+    }
+    if (!v) return { type: 'somethingElse', says: ['The review screenshot was not read.'], then: 'Check this row again.' };
+    if (!v.ok) return { type: 'reviewNotClear', says: [`The review screenshot could not be read: ${v.problem ?? 'its words are not clear enough to read'}.`], then: 'Ask for a clearer screenshot, then check this row again.' };
+    if (v.kind === 'refused') return { type: 'cannotAddReviews', says: [`The review screenshot shows a message from Flipkart that the review was not accepted: ${quoted(String(v.message ?? '').replace(/[.!?]+\s*$/, ''), 200)}.`] };
+    if (v.kind === 'rating') return null;
+    if (v.kind !== 'written' || !(v.body || v.title)) return { type: 'somethingElse', says: [`The review screenshot does not clearly show a written review, a star rating only or a message from Flipkart, because ${v.why ?? 'none could be read'}.`, linked ? 'The review link is not opened by the dashboard yet.' : null].filter(Boolean), then: 'Open it by hand.' };
+    // A written review: what step 7 found among Flipkart's reviews.
+    const g = seven.got;
+    const m = seven.m;
+    if (seven.skip === 'noCampaign') return { type: 'reviewLinkNeeded', says: ['The review screenshot shows a written review, but the row uses no live campaign with a product read from Flipkart, so the review could not be looked for on Flipkart.'], then: "Add a campaign for this brand with its products, or ask the user for the review's link, then check this row again." };
+    if (seven.skip === 'noProduct') return { type: 'somethingElse', says: ["Which of the campaign's products was bought could not be told from the purchase screenshot, so the review could not be looked for on Flipkart."], then: 'Check the screenshots by hand.' };
+    if (seven.skip || !g) return { type: 'somethingElse', says: ['The review was not looked for on Flipkart.'], then: 'Check this row again.' };
+    if (seven.stopped) return { type: 'somethingElse', says: ['Flipkart stopped the reading of its reviews before the review was found, so whether it is live could not be told.', g.says], then: 'Check this row again later.' };
+    if (!m) return { type: 'reviewNotLive', says: ['The review is not among the reviews Flipkart shows for the product.', g.says], then: 'It may not be public yet.' };
+    if (m.how === 'found') return null;
+    const many = (k, one, more) => (k === 1 ? one : more);
+    const whose = m.name.from === 'screenshot' ? 'the name on the review screenshot' : m.name.from === 'sheet' ? "the reviewer's name in the sheet" : 'the user\'s name';
+    const whoseCheck = 'A staff member must check whose review it is.';
+    if (m.how === 'several') return { type: 'reviewLinkNeeded', says: [`${m.count} reviews on Flipkart under ${whose} have the review screenshot's words, so which one is the user's could not be told.`], then: "Ask the user for the review's link, or check by hand which review is the user's." };
+    if (m.how === 'otherName') return { type: 'reviewerNotMatching', says: [`The review screenshot's words match ${many(m.count, 'a review', `${m.count} reviews`)} on Flipkart under another name, ${quoted(m.review?.name ?? '', 40)}, not under ${whose}, ${quoted(m.name.name ?? '', 40)}.`], then: whoseCheck };
+    if (m.how === 'noName') return { type: 'reviewerNotMatching', says: [`The review screenshot's words match ${many(m.count, 'a review', `${m.count} reviews`)} on Flipkart that ${many(m.count, 'shows', 'show')} no name ("Flipkart Customer"), so whose review it is could not be checked.`], then: whoseCheck };
+    if (m.how === 'noNameToCheck') return { type: 'reviewerNotMatching', says: [`The review screenshot's words match ${many(m.count, 'a review', `${m.count} reviews`)} on Flipkart, but there is no reviewer's name on the review screenshot or in the sheet to check ${many(m.count, 'it', 'them')} with.`], then: whoseCheck };
+    if (m.how === 'noWords') return { type: 'somethingElse', says: ['The review screenshot shows no words to look for on Flipkart.'], then: 'Open it by hand.' };
+    // Not found: the most telling reason first.
+    const day = result.reviewsFrom?.day ?? null;
+    const what = result.reviewsFrom?.from === 'order' ? 'placed' : 'delivered';
+    const hidden = g.end === 'last page' && Number.isInteger(g.total) && g.total > (g.reviews ?? []).length;
+    const oldest = result.flipkart?.oldest ?? null;
+    const among = reviewsReadSaid(g);
+    // The order is older than the oldest review read: the review may be among older ones, which Flipkart does not show, or which were not read.
+    const isOlder = Boolean(oldest && day && day < oldest && (g.end !== 'last page' || hidden));
+    const maybe = hidden ? 'the review may be among the older ones Flipkart does not show' : 'the review may be among older reviews not read yet';
+    const reasons = [
+      m.before ? `${m.before === 1 ? 'The only review' : `The ${m.before} reviews`} on Flipkart with the review screenshot's words under ${whose} ${many(m.before, 'was', 'were')} posted before ${dayFirst(day)}, the day the order was ${what}, so ${many(m.before, 'it does', 'they do')} not count for this order.` : null,
+      v.tab === 'published' ? `The review screenshot shows the review on the Published tab of My Reviews, yet it is not among ${among}.` : null,
+      v.form ? `The review screenshot shows the review being written, and it is not among ${among}, so it may not have been posted.` : null,
+      isOlder ? `The review is not among ${among}, and the order was ${what} on ${dayFirst(day)}, before the oldest of them, so ${maybe}.` : null,
+      `The review is not among ${among}.`,
+    ].filter(Boolean);
+    const first = reasons[0];
+    const notes = [
+      isOlder && !first.includes(maybe) ? `The order was ${what} on ${dayFirst(day)}, before the oldest of ${among}, so ${maybe}.` : null,
+      m.nameOnly ? `${many(m.nameOnly, 'A review', `${m.nameOnly} reviews`)} under ${whose} ${many(m.nameOnly, 'is', 'are')} there, but ${many(m.nameOnly, 'its', 'their')} words do not match.` : null,
+    ];
+    return { type: 'reviewNotLive', says: [first, ...notes].filter(Boolean), then: m.before ? 'A staff member must check whether that review is for this order.' : 'It may not be public yet.' };
+  }
+
+  /** Writes the row's Status, Type and Note: the Note starts with the Status and its reason, then says the rest once. */
+  function writeResult(final, typeKey, reason, rest) {
+    result.final = final;
+    result.typeKey = typeKey;
+    result.type = typeWord(typeKey);
+    result.status = FINAL_WORDS[final];
+    result.finalSays = clean(finalSentence(final, reason));
+    result.note = noteOf([...new Set([result.finalSays, ...rest].filter(Boolean))]);
+  }
+
+  /**
+   * Step 9: the Status, Type and Note, with the Amazon checker's words and
+   * rules: the screenshots' problems first, in the Amazon order (the first
+   * that fails the transaction gives the Status, else the first of all), then
+   * the review's own failing problem (none given, a wrong link, Flipkart not
+   * accepting it), then what the review's steps found for a staff member; one
+   * sentence for each other problem. Pass only when nothing stopped it.
+   */
+  function statusStep(n) {
+    start(n, 'Writing the Status, Type and Note');
+    // Something that went wrong on this computer while the screenshots were read is said first; in a later step, it is the review's problem.
+    const early = trouble && trouble.n <= 4 ? trouble : null;
+    const review = trouble && trouble.n > 4 ? { type: 'somethingElse', says: [trouble.says], then: trouble.then } : reviewProblem();
+    const failing = problems.find((p) => p.final === 'fail');
+    const reviewFails = Boolean(review && TYPE_FINAL[review.type] === 'fail');
+    /** The review's problems, one sentence each, said after a screenshot's; not that the product bought could not be told, which only follows from the screenshot's. */
+    const reviewSaid = [seven.skip === 'noProduct' ? null : review?.says[0], ...flags.map((f) => f.says)];
+    let final;
+    let typeKey;
+    let reason;
+    let rest;
+    // What step 8 found that matches is said only when the Status comes from the review, or for a Pass: after a screenshot's problem, only problems are said.
+    let reviewTold = false;
+    if (failing) {
+      final = 'fail';
+      typeKey = failing.type;
+      reason = reasonOf(failing);
+      rest = [...detailOf(failing), ...problems.filter((p) => p !== failing).map(problemSaid), early?.says, ...reviewSaid];
+    } else if (reviewFails) {
+      final = 'fail';
+      typeKey = review.type;
+      reason = lowerFirst(review.says[0]);
+      rest = [...review.says.slice(1), ...problems.map(problemSaid), early?.says];
+    } else if (early) {
+      final = 'manual';
+      typeKey = 'somethingElse';
+      reason = lowerFirst(early.says);
+      rest = [early.then, ...problems.map(problemSaid), ...reviewSaid];
+    } else if (problems.length) {
+      const main = problems[0];
+      final = 'manual';
+      typeKey = main.type;
+      reason = reasonOf(main);
+      rest = [...detailOf(main), ...problems.slice(1).map(problemSaid), ...reviewSaid];
+    } else if (review) {
+      final = TYPE_FINAL[review.type] ?? 'manual';
+      typeKey = review.type;
+      reason = lowerFirst(review.says[0]);
+      rest = [...review.says.slice(1), review.then, ...flags.map((f) => f.says), SHOTS_MATCH];
+      reviewTold = true;
+    } else if (flags.length) {
+      final = 'manual';
+      typeKey = flags[0].type;
+      reason = lowerFirst(flags[0].says);
+      rest = [flags[0].then, ...flags.slice(1).map((f) => f.says), SHOTS_MATCH];
+      reviewTold = true;
+    } else {
+      reviewTold = true;
+      final = 'pass';
+      typeKey = ratingOnly ? 'ratingOnly' : 'verified';
+      reason = ratingOnly ? 'the purchase screenshot and the delivery screenshot match the form, and the review screenshot shows a star rating with no written words' : `the purchase screenshot and the delivery screenshot match the form, and the review is live on Flipkart under the user's name, with the review screenshot's words, posted on or after the day the order was ${result.reviewsFrom?.from === 'order' ? 'placed' : 'delivered'}`;
+      rest = [];
+    }
+    // A row with no campaign for its brand was compared with its product name in the sheet, and its Note says so, as on Amazon.
+    const bySheetName = had.product && !byCampaign && SHOTS.some((w) => shot[w]?.state === 'read');
+    const saidNoCampaign = [reason, ...rest].some((t) => /no (?:live )?campaign/.test(String(t ?? '')));
+    const sheetNameSaid = !bySheetName ? null : campaigns.length ? `${cap(joinAnd(campaigns.map((c) => `the campaign "${clean(c.name)}"`)))} ${campaigns.length > 1 ? 'have' : 'has'} no product read from Flipkart, so the product was compared with the product name in the sheet.` : saidNoCampaign ? 'The product was compared with the product name in the sheet.' : "There is no campaign for this product's brand, so the product was compared with the product name in the sheet.";
+    const flagged = new Set(flags.map((f) => f.says));
+    writeResult(final, typeKey, reason, [...rest, ...judgeNotes, ...(reviewTold ? reviewNotes.filter((t) => !flagged.has(t)) : []), ...warnings, sheetNameSaid]);
+    return finish(n, final === 'pass' ? 'pass' : 'fail', `${result.status}: ${result.type}.`);
+  }
+
   emit({ event: 'started', checkId, steps: STEP_NAMES, rowId: row.id, row: row.row ?? null, name: result.name });
   try {
     for (let n = 1; n <= STEP_NAMES.length; n++) {
@@ -756,18 +1343,23 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       else if (READS[n]) await step(n, () => readShot(n, READS[n]));
       else if (n === 6) await step(n, () => readReviewStep(n, reviewCell(row, had)));
       else if (n === 7) await step(n, () => findReviewStep(n));
-      else later(n);
+      else if (n === 8) await step(n, () => compareStep(n));
+      else await step(n, () => statusStep(n));
+      // Both screenshots read: their problems are judged at once, as on Amazon, and their steps say what the judging found.
+      if (n === 4) await step(4, () => judgeShots());
     }
   } catch (err) {
     if (err instanceof Stopped) result.stopped = true;
     else if (!(err instanceof Paused)) throw err;
   }
+  // A Status even when writing it went wrong on this computer: a staff member looks.
+  if (!result.paused && !result.stopped && !result.final) writeResult('manual', 'somethingElse', lowerFirst(trouble?.says ?? `Something went wrong on this computer while ${STEP_DOING[8]}`), [trouble?.then ?? 'Check this row again.']);
   // The sheet and the two screenshots side by side, as the Amazon checker's comparison table shows them.
   result.comparison = buildComparison(result);
   result.finishedAt = now().toISOString();
   result.seconds = Math.max(0, Math.round((Date.now() - began) / 1000));
   if (result.paused) say(`Paused: ${result.paused.says}`);
-  else if (!result.stopped) say('Done. The other steps come in a later step, so this row has no Status yet.');
+  else if (!result.stopped) say(`Done: ${result.status} (${result.type})`);
   emit({ event: 'done', result });
   return result;
 }
