@@ -6,7 +6,9 @@
 // row (pictures/), Flipkart's own settings with the columns chosen last and
 // the passing marks (settings.json), the campaigns with what was read from their products'
 // Flipkart pages (campaigns.json), and each product's public reviews
-// (reviews/<product ID>.json). Nothing here writes anywhere else in data/.
+// (reviews/<product ID>.json), with every review since its campaign's start
+// date kept from all its readings (reviews/<product ID>-kept.json). Nothing
+// here writes anywhere else in data/.
 // Copied from the Amazon store's way of writing (amazon/store.js): a file is
 // written whole under another name, then renamed, readable only by this
 // computer's user.
@@ -115,11 +117,12 @@ function keptFrom(o) {
   if (!o || typeof o !== 'object') return null;
   return { day: DAY.test(String(o.day ?? '')) ? o.day : null, from: o.from === 'delivery' || o.from === 'order' ? o.from : null, said: o.said ? cleanText(o.said, 300) : null };
 }
-/** What step 7 read of Flipkart's reviews for the row, as kept with its last check: how many, how far back, never the reviews themselves (they are kept in reviews/<product ID>.json). */
+/** What step 7 read of Flipkart's reviews for the row, as kept with its last check: how many, how far back, and with a campaign's start date, that day and how many reviews kept from earlier readings were searched too; never the reviews themselves (they are kept in reviews/<product ID>.json and reviews/<product ID>-kept.json). */
 function keptReading(o) {
   if (!o || typeof o !== 'object') return null;
   const count = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
   return {
+    ...(DAY.test(String(o.start ?? '')) ? { start: o.start, kept: count(o.kept) ?? 0 } : {}),
     pid: ANY_PID.test(String(o.pid ?? '')) ? o.pid : null,
     name: o.name ? cleanText(o.name, 500) : null,
     readAt: timeOrNull(o.readAt),
@@ -133,8 +136,8 @@ function keptReading(o) {
     says: o.says ? cleanText(o.says, 500) : null,
   };
 }
-const FOUND_HOW = new Set(['found', 'several', 'otherName', 'noName', 'noNameToCheck', 'notFound', 'noWords']);
-/** What step 7's search found among Flipkart's reviews (review-match.js), as kept with the row's last check: how, and the review it points at, its words cut to length, with its own link on Flipkart, only in the form Flipkart's website opens (links.js reviewPageLink). */
+const FOUND_HOW = new Set(['found', 'gone', 'several', 'otherName', 'noName', 'noNameToCheck', 'notFound', 'noWords']);
+/** What step 7's search found among Flipkart's reviews (review-match.js), as kept with the row's last check: how ('gone': found only among the reviews kept from earlier readings, though today's reading reaches back to its day), and the review it points at, its words cut to length, with its own link on Flipkart, only in the form Flipkart's website opens (links.js reviewPageLink), and, for one kept from an earlier reading, the last day it was seen on Flipkart. */
 function keptFound(o) {
   if (!o || typeof o !== 'object' || !FOUND_HOW.has(o.how)) return null;
   const count = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
@@ -150,7 +153,15 @@ function keptFound(o) {
     share: share(o.share),
     rareShare: share(o.rareShare),
     review: r ? { id: r.id ? cleanText(r.id, 100) : null, name: r.name ? cleanText(r.name, 100) : null, stars: Number.isInteger(r.stars) && r.stars >= 1 && r.stars <= 5 ? r.stars : null, title: r.title ? cleanText(r.title, 300) : null, text: r.text ? cleanText(r.text, 3000) : null, dateSaid: r.dateSaid ? cleanText(r.dateSaid, 60) : null, date: DAY.test(String(r.date ?? '')) ? r.date : null, dateLatest: DAY.test(String(r.dateLatest ?? '')) ? r.dateLatest : null, link: reviewPageLink(r.link, r.id ?? null) } : null,
+    ...(o.kept === true && DAY.test(String(o.lastSeen ?? '')) ? { kept: true, lastSeen: o.lastSeen } : {}),
   };
+}
+/** What came before the campaign's start date (check.js misuseOf), as kept with the row's last check: the start date, and the day the order was placed and delivered, and when the review was posted, each only when it came before it. */
+function keptMisuse(o) {
+  if (!o || typeof o !== 'object' || !DAY.test(String(o.start ?? ''))) return null;
+  const day = (v) => (DAY.test(String(v ?? '')) ? v : null);
+  const p = o.posted && typeof o.posted === 'object' ? o.posted : null;
+  return { start: o.start, placed: day(o.placed), delivered: day(o.delivered), posted: p && day(p.dateLatest) ? { date: day(p.date), dateLatest: p.dateLatest, dateSaid: p.dateSaid ? cleanText(p.dateSaid, 60) : null } : null };
 }
 
 /** The comparison table (check.js buildComparison), as kept with the row's last check: its words cut to length. */
@@ -187,12 +198,13 @@ function keptRow(r) {
 
 /**
  * Puts a campaign, new or changed, in the list of campaigns (in place) as it
- * is kept: its typed words cleaned and cut to length, and when it was made
- * and last changed. Answers it as kept.
+ * is kept: its typed words cleaned and cut to length, its start date
+ * (YYYY-MM-DD, or null), and when it was made and last changed. Answers it as
+ * kept.
  */
 export function putCampaign(list, campaign, at = new Date().toISOString()) {
   const i = list.findIndex((c) => c.key === campaign.key);
-  const kept = { ...campaign, brand: cleanText(campaign.brand, 60), name: cleanText(campaign.name, 80), live: Boolean(campaign.live), createdAt: i >= 0 ? list[i].createdAt : at, updatedAt: at };
+  const kept = { ...campaign, brand: cleanText(campaign.brand, 60), name: cleanText(campaign.name, 80), live: Boolean(campaign.live), startDate: DAY.test(String(campaign.startDate ?? '')) ? campaign.startDate : null, createdAt: i >= 0 ? list[i].createdAt : at, updatedAt: at };
   if (i >= 0) list[i] = kept;
   else list.push(kept);
   return kept;
@@ -324,6 +336,19 @@ export function createFlipkartStore(dataDir) {
         return read;
       });
     },
+    /** Every review of a product since its campaign's start date, kept from all its readings (kept-reviews.js), or null when none were kept. */
+    async keptReviews(pid) {
+      return ANY_PID.test(String(pid ?? '')) ? readJson(join(dir, 'reviews', `${pid}-kept.json`), null) : null;
+    },
+    /** Keeps them in data/flipkart/reviews/<product ID>-kept.json, in place of the ones kept before. */
+    saveKeptReviews(pid, kept) {
+      if (!ANY_PID.test(String(pid ?? ''))) return Promise.reject(new Error('Not a Flipkart product ID.'));
+      return locked(async () => {
+        await mkdir(join(dir, 'reviews'), { recursive: true, mode: 0o700 });
+        await writeWhole(join(dir, 'reviews', `${pid}-kept.json`), JSON.stringify(kept, null, 2));
+        return kept;
+      });
+    },
     /**
      * The saved file: { sheet: { fileName, kind, tab, headerRow, headers,
      * lastCol, mapping, file, uploadedAt }, rows }, the rows as made from it;
@@ -443,7 +468,8 @@ export function createFlipkartStore(dataDir) {
      * review: what the purchase, the delivery and the review screenshots say,
      * as read; reviewsFrom: from which day a review can be the user's;
      * flipkart: what step 7 read of Flipkart's reviews; found: what its search
-     * found; comparison: the sheet and the two side by side, for the
+     * found; misuse: what came before the campaign's start date, or null;
+     * comparison: the sheet and the two side by side, for the
      * screenshots the file has), and step 9's Status (final: 'pass', 'fail' or
      * 'manual'; status: its words), Type (typeKey, and type: its words), Note
      * and the Status's reason (finalSays). The check before goes.
@@ -465,6 +491,7 @@ export function createFlipkartStore(dataDir) {
           reviewsFrom: keptFrom(result?.reviewsFrom),
           flipkart: keptReading(result?.flipkart),
           found: keptFound(result?.found),
+          misuse: keptMisuse(result?.misuse),
           shotsHad: (Array.isArray(result?.shotsHad) ? result.shotsHad : []).filter((w) => w === 'order' || w === 'delivery'),
           comparison: keptComparison(result?.comparison),
           final: Object.hasOwn(FINAL_WORDS, String(result?.final)) ? result.final : null,

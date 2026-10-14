@@ -49,6 +49,7 @@ export const EMAIL_KEYS = [
   'reviewerNotMatching',
   'reviewShotNotMatching',
   'cannotAddReviews',
+  'possibleMisuse',
   'somethingElse',
 ];
 
@@ -58,7 +59,7 @@ const checked = (what) => `We checked ${what} for your Flipkart order {order ID}
 const LOOKED = 'We looked for your review of {product} on Flipkart, for your order {order ID}. {what is wrong}';
 const ORDER_STEPS = 'How to find it:\n1. Open the Flipkart app and tap Account.\n2. Tap Orders, then tap this order.\n3. Take a screenshot that shows the order ID, the product and the amount.';
 const DELIVERY_STEPS = 'How to find it:\n1. Open the Flipkart app and tap Account.\n2. Tap Orders, then tap this order.\n3. Take a screenshot that shows "Delivered", the date and the product.';
-const REVIEW_STEPS = '1. Open the Flipkart app and tap Account.\n2. Tap My Reviews (scroll down if needed).\n3. Open the Published tab.\n4. Find your review of this product.\n5. Take a screenshot that shows your name, the product and your review.';
+const REVIEW_STEPS = '1. Open the Flipkart app and tap Account.\n2. Tap My Reviews (scroll down if needed).\n3. Open the Published tab.\n4. Find your review of this product.\n5. Take a screenshot that shows the product and your review.';
 const REVIEW_HOW = `How to find it:\n${REVIEW_STEPS}`;
 const LINK_HOW = 'How to get the link, on a computer (links from the Flipkart app do not open on a computer):\n1. Go to flipkart.com and log in.\n2. Open My Reviews in your account.\n3. Click Share under your review of this product.\n4. Copy the link and paste it into your reply.';
 const REVIEW_ASK = 'Please send a screenshot of your review from the Published tab of My Reviews.';
@@ -139,7 +140,7 @@ export const EMAILS = {
     },
     reviewerNotMatching: {
       subject: 'Order {order ID}: names do not match',
-      message: message(HELLO, 'We checked your review of {product} on Flipkart, for your order {order ID}.', '{what is wrong}', 'So we cannot confirm that the review was written from your own Flipkart account.', `Please send a screenshot of the review from your own account:\n${REVIEW_STEPS}`, 'If someone else wrote the review from your account, please tell us.'),
+      message: message(HELLO, 'We checked your review of {product} on Flipkart, for your order {order ID}.', '{what is wrong}', 'We cannot confirm the review was written from your own Flipkart account.', `Please send a screenshot of the review from your own account:\n${REVIEW_STEPS}`, "If your Flipkart account uses a different name, or the review was written from someone else's account, please tell us."),
     },
     reviewShotNotMatching: {
       subject: 'Order {order ID}: review screenshot does not match',
@@ -148,6 +149,10 @@ export const EMAILS = {
     cannotAddReviews: {
       subject: 'Order {order ID}: review not accepted by Flipkart',
       message: message(HELLO, checked('the review screenshot you sent'), 'If Flipkart publishes a review from you for this product later, please send a screenshot of it from the Published tab of My Reviews.', REVIEW_HOW),
+    },
+    possibleMisuse: {
+      subject: 'Order {order ID}: dates before the offer started',
+      message: message(HELLO, checked('the dates'), 'If you think a date here is wrong, please reply and tell us.'),
     },
     somethingElse: {
       subject: 'Order {order ID}: please send two screenshots',
@@ -342,6 +347,7 @@ export function whatIsWrong(key, { row = null, result = null, reviewer = null } 
       const day = result?.reviewsFrom?.day ?? null;
       const oldest = result?.flipkart?.oldest ?? null;
       const among = `it is not among the reviews Flipkart shows for this product${oldest ? `, which we checked back to ${dayFirst(oldest)}` : ''}.`;
+      if (f?.how === 'gone' && f.lastSeen) return `We last saw your review on Flipkart on ${dayFirst(f.lastSeen)}, but it is no longer among the reviews Flipkart shows for this product.`;
       if (v?.tab === 'pending') return 'Your review screenshot shows it on the Pending tab of My Reviews, so Flipkart had not published it yet.';
       if (f?.before && day) return `We found ${f.before === 1 ? 'a review' : `${f.before} reviews`} with the same words, but ${f.before === 1 ? 'it was' : 'they were'} posted before your order was ${result.reviewsFrom.from === 'order' ? 'placed' : 'delivered'} on ${dayFirst(day)}, so ${f.before === 1 ? 'it does' : 'they do'} not count for this order.`;
       if (v?.tab === 'published') return `Your review screenshot shows it on the Published tab, but ${among}`;
@@ -375,6 +381,18 @@ export function whatIsWrong(key, { row = null, result = null, reviewer = null } 
       return 'It does not open your review.';
     case 'cannotAddReviews':
       return 'It shows a message from Flipkart that your review was not accepted.';
+    case 'possibleMisuse': {
+      // Only what came before the day the offer started, with the dates.
+      const x = result?.misuse;
+      const p = x?.posted;
+      const parts = [
+        x?.placed ? `your purchase screenshot shows the order was placed on ${dayFirst(x.placed)}` : null,
+        x?.delivered ? `your delivery screenshot shows ${x.placed ? 'it' : 'the order'} was delivered on ${dayFirst(x.delivered)}` : null,
+        p?.dateLatest ? `your review of this product on Flipkart was posted ${p.date === p.dateLatest ? 'on' : 'by'} ${dayFirst(p.dateLatest)}` : null,
+      ].filter(Boolean);
+      if (!x?.start || !parts.length) return 'Some dates for this order are before the day this offer started.';
+      return `This offer started on ${dayFirst(x.start)}. ${cap(joinAnd(parts))}, ${['', 'before that day', 'both before that day', 'all before that day'][parts.length]}.`;
+    }
     case 'somethingElse':
       return 'Some of it was not clear enough for us to finish.';
     default:

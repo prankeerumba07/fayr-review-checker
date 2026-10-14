@@ -1,7 +1,7 @@
 // The Flipkart screen's Campaigns box, drawn the way app.js draws it, with a
 // fake ctx and a fake client shaped like the local server's answers: the
 // same box as on Amazon, each campaign with its name, live or ended, and
-// brand, and under each product what was read from Flipkart (its name, its
+// brand, with the day it started (Flipkart's own), and under each product what was read from Flipkart (its name, its
 // brand, its other colours and sizes, and when) or why it is not used; a
 // campaign saved before campaigns had a brand; adding, changing, ending,
 // deleting and reading again; and following the reading every 2 seconds. No
@@ -51,6 +51,7 @@ const CAMPAIGNS = [
     brand: 'Test Glow',
     name: 'Test Glow Clean',
     live: true,
+    startDate: '2026-10-01',
     updatedAt: AT,
     products: [
       product(GLOW, 'used', { name: 'Test Glow Face Mask', brand: 'Test Glow', variants: ['100 ml', '200 ml'], variantCount: 3, at: AT }),
@@ -64,6 +65,7 @@ const CAMPAIGNS = [
     brand: '',
     name: 'FK-TEST-0',
     live: false,
+    startDate: null,
     updatedAt: AT,
     products: [product('FCPTESTMISS00001', 'not used', { at: AT, says: ADD_LINK }), product('FCPTESTJAR000002', 'used', { name: 'Test Jar', at: AT })],
   },
@@ -88,7 +90,7 @@ function fakeLocal() {
       if (method === 'POST' && /^\/local\/flipkart\/campaigns(\/f[0-9a-f]{12})?$/.test(path)) {
         if (local.save) throw local.save;
         const key = path.split('/')[4] ?? 'f0000000000c3';
-        const campaign = { key, brand: body.brand, name: body.name, live: body.live, updatedAt: AT, products: body.products.split('\n').map((given) => product(given, 'waiting')) };
+        const campaign = { key, brand: body.brand, name: body.name, live: body.live, startDate: body.startDate ? body.startDate.split('-').reverse().join('-') : null, updatedAt: AT, products: body.products.split('\n').map((given) => product(given, 'waiting')) };
         local.list = [...local.list.filter((c) => c.key !== key), campaign];
         local.reading = true;
         return structuredClone({ campaign, campaigns: local.list, reading: true });
@@ -159,7 +161,7 @@ test('the Campaigns box, the same as on Amazon: each campaign with its name, liv
   assert.equal(textOf(tagged(box, 'summary')[0]), 'Campaigns1 live, 1 ended');
   assert.equal(textOf(withClass(box, 'card-sub')[0]), "The Flipkart products users may buy for a brand. A row uses every live campaign whose brand is in its product name, the file's name or the tab's name; a campaign marked Ended is never used.");
   const a = byId(box, `campaign-${KA}`);
-  assert.equal(textOf(tagged(a, 'h3')[0]), 'Test Glow Clean Live Brand: Test Glow');
+  assert.equal(textOf(tagged(a, 'h3')[0]), 'Test Glow Clean Live Brand: Test Glow Started on 01-10-2026', 'with the day it started, the day first');
   assert.deepEqual(tagged(a, 'li').map(textOf), [
     `${GLOW}Test Glow Face Mask Brand: Test Glow. Other colours and sizes: 100 ml, 200 ml, and 1 more. Read on 12-10-2026 at 10:30.`,
     `${CLAY}Test Clay Face Mask Brand: Test Clay. ${OTHER_BRAND}`,
@@ -172,30 +174,35 @@ test('the Campaigns box, the same as on Amazon: each campaign with its name, liv
   assert.deepEqual(tagged(a, 'button').map(textOf), ['Change', 'End campaign', 'Read the products again', 'Delete']);
   const b = byId(box, `campaign-${KB}`);
   assert.match(b.attrs.class, /\bfk-campaign-ended\b/);
-  assert.equal(textOf(tagged(b, 'h3')[0]), 'FK-TEST-0 Ended', 'no brand, none shown');
+  assert.equal(textOf(tagged(b, 'h3')[0]), 'FK-TEST-0 Ended No start date', 'no brand, none shown; no start date, said');
   assert.deepEqual(withClass(b, 'notice-warn').map(textOf), ['Add the brand: press Change.'], 'saved before campaigns had a brand');
   assert.deepEqual(tagged(b, 'li').map(textOf), [`FCPTESTMISS00001 ${ADD_LINK}`, 'FCPTESTJAR000002Test Jar Brand: not shown. No other colours or sizes listed. Read on 12-10-2026 at 10:30.']);
   assert.deepEqual(tagged(b, 'button').map(textOf), ['Change', 'Read the products again', 'Delete'], 'an ended campaign is not ended again');
   assert.doesNotMatch(textOf(s.page()), /log ?in|Google|account|captcha|Campaign ID|—/i, 'no login lines, no Campaign ID, and plain words');
 });
 
-test('adding a campaign: the same form as on Amazon (a brand, a campaign name, live or ended, and products one per line); a refusal keeps the form; Change fills the form with the campaign', async () => {
+test('adding a campaign: the same form as on Amazon (a brand, a campaign name, live or ended, and products one per line), with the day it started, day first; a refusal keeps the form; Change fills the form with the campaign, its start date day first', async () => {
   const s = await opened();
   await s.click('add-campaign');
   const form = byId(s.page(), 'campaign-form');
   assert.equal(s.box().attrs.open, true, 'the box opens while a campaign is added');
   assert.equal(textOf(tagged(form, 'h3')[0]), 'Add a campaign');
-  assert.deepEqual(tagged(form, 'label').map(textOf), ['Brand', 'Campaign name', 'Live or ended', 'Products']);
-  assert.deepEqual(['campaign-brand', 'campaign-name', 'campaign-products'].map((id) => byId(form, id).attrs.placeholder), ['For example: Koparo', 'For example: Koparo Clean', 'One Flipkart link or Flipkart product ID on each line']);
+  assert.deepEqual(tagged(form, 'label').map(textOf), ['Brand', 'Campaign name', 'Start date', 'Live or ended', 'Products']);
+  assert.deepEqual(['campaign-brand', 'campaign-name', 'campaign-startDate', 'campaign-products'].map((id) => byId(form, id).attrs.placeholder), ['For example: Koparo', 'For example: Koparo Clean', 'For example: 01-10-2026', 'One Flipkart link or Flipkart product ID on each line']);
   assert.deepEqual(tagged(byId(form, 'campaign-live'), 'option').map(textOf), ['Live', 'Ended']);
-  assert.equal(textOf(withClass(form, 'fk-note')[0]), 'A Flipkart link, or a Flipkart product ID (the 16 letters and digits Flipkart gives each product, after "pid=" in a link), one on each line. Users may buy any one of them.');
+  assert.deepEqual(withClass(form, 'fk-note').map(textOf), [
+    "The day the campaign started, the day first. Flipkart's reviews are read back to it, and an order or a review from before it is for a staff member. Leave it empty if you do not know it.",
+    'A Flipkart link, or a Flipkart product ID (the 16 letters and digits Flipkart gives each product, after "pid=" in a link), one on each line. Users may buy any one of them.',
+  ]);
   byId(s.page(), 'campaign-brand').attrs.oninput({ target: { value: 'Test Clay' } });
   byId(s.page(), 'campaign-name').attrs.oninput({ target: { value: 'Test Clay Mask' } });
+  byId(s.page(), 'campaign-startDate').attrs.oninput({ target: { value: '05-10-2026' } });
   byId(s.page(), 'campaign-live').attrs.onchange({ target: { value: 'ended' } });
   byId(s.page(), 'campaign-products').attrs.oninput({ target: { value: `${GLOW}\nFCPTESTCLAY00001` } });
   await s.click('save-campaign');
   const post = s.local.calls.find((c) => c.method === 'POST');
-  assert.deepEqual([post.path, post.body], ['/local/flipkart/campaigns', { brand: 'Test Clay', name: 'Test Clay Mask', live: false, products: `${GLOW}\nFCPTESTCLAY00001` }]);
+  assert.deepEqual([post.path, post.body], ['/local/flipkart/campaigns', { brand: 'Test Clay', name: 'Test Clay Mask', live: false, startDate: '05-10-2026', products: `${GLOW}\nFCPTESTCLAY00001` }]);
+  assert.equal(textOf(tagged(byId(s.box(), 'campaign-f0000000000c3'), 'h3')[0]), 'Test Clay Mask Ended Brand: Test Clay Started on 05-10-2026');
   assert.equal(byId(s.page(), 'campaign-form'), null, 'the form closes');
   assert.equal(goodNotice(s), 'The campaign was saved. Its products are being read from Flipkart in the Live Flipkart Browser, one page at a time.');
   assert.equal(textOf(tagged(s.box(), 'summary')[0]), 'Campaigns1 live, 2 ended, reading products from Flipkart…');
@@ -213,7 +220,7 @@ test('adding a campaign: the same form as on Amazon (a brand, a campaign name, l
   await r.click(`change-${KA}`);
   const change = byId(r.page(), 'campaign-form');
   assert.equal(textOf(tagged(change, 'h3')[0]), 'Change the campaign');
-  assert.deepEqual([byId(change, 'campaign-brand').attrs.value, byId(change, 'campaign-name').attrs.value, byId(change, 'campaign-live').attrs.value, byId(change, 'campaign-products').attrs.value], ['Test Glow', 'Test Glow Clean', 'live', [GLOW, CLAY, 'FCPTESTCLAY00002', JAR].join('\n')]);
+  assert.deepEqual([byId(change, 'campaign-brand').attrs.value, byId(change, 'campaign-name').attrs.value, byId(change, 'campaign-startDate').attrs.value, byId(change, 'campaign-live').attrs.value, byId(change, 'campaign-products').attrs.value], ['Test Glow', 'Test Glow Clean', '01-10-2026', 'live', [GLOW, CLAY, 'FCPTESTCLAY00002', JAR].join('\n')]);
   await r.click('save-campaign');
   assert.equal(r.local.calls.filter((c) => c.method === 'POST').at(-1).path, `/local/flipkart/campaigns/${KA}`);
 });
@@ -289,7 +296,7 @@ test('the box while the campaigns are on their way, when they cannot be had, and
   failing.look = null;
   f.timers[0].fn();
   await settle();
-  assert.deepEqual(tagged(f.box(), 'h3').map(textOf), ['Test Glow Clean Live Brand: Test Glow', 'FK-TEST-0 Ended'], 'asked again, and shown');
+  assert.deepEqual(tagged(f.box(), 'h3').map(textOf), ['Test Glow Clean Live Brand: Test Glow Started on 01-10-2026', 'FK-TEST-0 Ended No start date'], 'asked again, and shown');
   // The first campaign: the box stays open after Save, and its "being read" notice goes when the reading ends.
   const empty = fakeLocal();
   empty.list = [];

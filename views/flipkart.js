@@ -15,7 +15,9 @@
 // columns are used for checking, which are only shown, what the file does
 // not have, and which campaign the rows use (the line changes as soon as a
 // campaign is saved, ended or deleted). Under the upload area, the Campaigns box, the same as the Amazon
-// one: each campaign's name, live or ended, and brand, and under each of its
+// one: each campaign's name, live or ended, and brand, with the day it started
+// (Flipkart's own: asked for, day first, when a campaign is added or
+// changed), and under each of its
 // Flipkart products what was read from Flipkart (its name, its brand, its
 // other colours and sizes, and when), or why it is not used. Then, as on
 // Amazon, "Start checking" (later "Carry on checking"), which checks the rows
@@ -133,7 +135,9 @@ const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 const icon = (h, name, extra = '') => h('span', { class: `icon icon-${name}${extra ? ` ${extra}` : ''}`, 'aria-hidden': 'true' });
 const pill = (h, text, tone) => h('span', { class: `pill pill-${tone}` }, text);
 const rowsWord = (n) => (n === 1 ? '1 row' : `${n} rows`);
-const blankCampaign = () => ({ brand: '', name: '', live: true, products: '' });
+const blankCampaign = () => ({ brand: '', name: '', live: true, startDate: '', products: '' });
+/** A day as the dashboard writes it, the day first: 01-10-2026. */
+const dayFirst = (iso) => (/^\d{4}-\d{2}-\d{2}$/.test(String(iso ?? '')) ? String(iso).split('-').reverse().join('-') : '');
 const freshColumns = () => ({ need: null, mapping: null, error: null });
 
 function initial() {
@@ -305,7 +309,7 @@ function pollCampaigns(ctx) {
 function editCampaign(ctx, key) {
   const c = key ? arr(ctx.state.campaigns.list).find((x) => x?.key === key) : null;
   ctx.update((st) => {
-    Object.assign(st.campaigns, { editing: c ? c.key : 'new', values: c ? { brand: c.brand ?? '', name: c.name ?? '', live: c.live !== false, products: arr(c.products).map((p) => p.given).join('\n') } : blankCampaign(), error: null, notice: null });
+    Object.assign(st.campaigns, { editing: c ? c.key : 'new', values: c ? { brand: c.brand ?? '', name: c.name ?? '', live: c.live !== false, startDate: dayFirst(c.startDate), products: arr(c.products).map((p) => p.given).join('\n') } : blankCampaign(), error: null, notice: null });
   });
 }
 
@@ -993,7 +997,7 @@ function campaignBlock(ctx, x, locked) {
     h(
       'div',
       { class: 'card-head' },
-      h('h3', null, `${x.name} `, pill(h, x.live ? 'Live' : 'Ended', x.live ? 'good' : 'quiet'), x.brand ? h('span', { class: 'fk-campaign-brand' }, ` Brand: ${x.brand}`) : null),
+      h('h3', null, `${x.name} `, pill(h, x.live ? 'Live' : 'Ended', x.live ? 'good' : 'quiet'), x.brand ? h('span', { class: 'fk-campaign-brand' }, ` Brand: ${x.brand}`) : null, h('span', { class: 'fk-campaign-brand', 'data-id': `start-${x.key}` }, x.startDate ? ` Started on ${dayFirst(x.startDate)}` : ' No start date')),
       h(
         'div',
         { class: 'actions' },
@@ -1013,8 +1017,8 @@ function campaignForm(ctx, checking) {
   const { h, state } = ctx;
   const c = state.campaigns;
   const v = c.values;
-  const text = (key, label, placeholder) =>
-    h('div', { class: 'fk-form-field', key }, h('label', { class: 'label', for: `fk-campaign-${key}` }, label), h('input', { id: `fk-campaign-${key}`, type: 'text', autocomplete: 'off', placeholder, value: v[key], disabled: c.busy, 'data-id': `campaign-${key}`, oninput: (e) => (v[key] = e.target.value) }));
+  const text = (key, label, placeholder, note = null) =>
+    h('div', { class: 'fk-form-field', key }, h('label', { class: 'label', for: `fk-campaign-${key}` }, label), h('input', { id: `fk-campaign-${key}`, type: 'text', autocomplete: 'off', placeholder, value: v[key], disabled: c.busy, 'data-id': `campaign-${key}`, oninput: (e) => (v[key] = e.target.value) }), note ? h('p', { class: 'fk-note', 'data-id': `campaign-${key}-note` }, note) : null);
   return h(
     'div',
     { class: 'fk-campaign-form', 'data-id': 'campaign-form' },
@@ -1024,6 +1028,7 @@ function campaignForm(ctx, checking) {
       { class: 'fk-form-grid' },
       text('brand', 'Brand', 'For example: Koparo'),
       text('name', 'Campaign name', 'For example: Koparo Clean'),
+      text('startDate', 'Start date', 'For example: 01-10-2026', "The day the campaign started, the day first. Flipkart's reviews are read back to it, and an order or a review from before it is for a staff member. Leave it empty if you do not know it."),
       h(
         'div',
         { class: 'fk-form-field', key: 'live' },
@@ -1816,7 +1821,10 @@ function foundWords(ctx, f) {
   const { h, words } = ctx;
   const r = f?.review;
   const reviews = (n) => (n === 1 ? 'a review' : `${n} reviews`);
+  // Kept from an earlier reading, older than today's reading reaches: found, as last seen.
+  if (f?.how === 'found' && f.kept) return [`Yes, among the reviews kept from earlier readings: last seen on Flipkart on ${dayFirst(f.lastSeen)}.`, r?.link ? [' ', words.link(h, r.link, 'Open the review on Flipkart')] : null];
   if (f?.how === 'found') return r?.link ? words.link(h, r.link, 'Yes. Open the review on Flipkart') : 'Yes';
+  if (f?.how === 'gone') return `No: it was last seen on Flipkart on ${dayFirst(f.lastSeen)}, but it is not among the reviews read today, though they reach back to its day, so it may have been removed`;
   if (f?.how === 'otherName') return `No: the words match ${reviews(f.count)} under another name`;
   if (f?.how === 'noName') return 'No: the words match a review Flipkart shows as "Flipkart Customer", so the name could not be checked';
   if (f?.how === 'noNameToCheck') return 'No: there is no name to check the review with';
@@ -1831,8 +1839,9 @@ function foundCard(ctx, res) {
   const f = res?.found;
   const k = res?.flipkart;
   const r = f?.review;
-  const shown = r && ['found', 'otherName', 'noName', 'noNameToCheck'].includes(f.how) ? r : null;
+  const shown = r && ['found', 'gone', 'otherName', 'noName', 'noNameToCheck'].includes(f.how) ? r : null;
   const notCounted = {
+    gone: `This review was on Flipkart when it was last seen there, on ${dayFirst(f?.lastSeen)}, but it is not among the reviews read today, though they reach back to the day it was posted, so it may have been removed.`,
     otherName: 'The words match this review, but it is under another name, so it is not counted as found.',
     noName: 'The words match this review, but Flipkart shows no name for it ("Flipkart Customer"), so the name could not be checked; it is not counted as found.',
     noNameToCheck: 'The words match this review, but there is no name on the review screenshot or in the sheet to check it with; it is not counted as found.',
@@ -1840,7 +1849,7 @@ function foundCard(ctx, res) {
   const day = (d) => String(d).split('-').reverse().join('-');
   const when = shown?.dateSaid ? `${shown.dateSaid}${shown.date && shown.date === shown.dateLatest ? ` (${day(shown.date)})` : ''}` : null;
   const none = !k ? 'Nothing read from Flipkart yet. Flipkart is opened only to look for the review shown on the review screenshot.' : f?.how === 'several' ? 'Two or more reviews fit, so none is shown.' : f?.how === 'noWords' ? 'Not searched: the review screenshot shows no words to search for.' : 'Not found among the reviews read.';
-  const read = k ? `${words.plural(k.count ?? 0, 'review')}, newest first${k.end === 'last page' ? ', all that Flipkart shows' : ''}${k.readAt ? `, ${words.ist(k.readAt)}` : ''}` : null;
+  const read = k ? `${words.plural(k.count ?? 0, 'review')}, newest first${k.end === 'last page' ? ', all that Flipkart shows' : ''}${k.readAt ? `, ${words.ist(k.readAt)}` : ''}${k.kept ? `; and ${words.plural(k.kept, 'more review')} posted since the campaign started on ${dayFirst(k.start)}, kept on this computer from earlier readings` : ''}` : null;
   return h(
     'section',
     { class: 'card', key: 'card-flipkart', 'data-id': 'card-flipkart' },

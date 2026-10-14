@@ -376,6 +376,53 @@ test("step 7's search: found (the words and the name, with Flipkart's stars; for
   assert.match(step7(all)[1], /under the name on the review screenshot\. Read 2 reviews of the product from "See all reviews" on Flipkart, newest first \(all the reviews Flipkart shows, back to about 13-09-2026\)\. Reviews posted/);
 });
 
+test("step 7 with the campaign's start date: the reviews are read back to it, and the reviews since it kept from earlier readings are searched too; one of those counts as found, as last seen, only when today's reading does not reach back to its day; when it does and the review is not there, it may have been removed (Review not live); Flipkart's list ending before the start date is said, with both days; a campaign with no start date, as before", async () => {
+  const NOW = () => new Date('2026-10-13T05:00:00.000Z');
+  const START = '2026-07-15';
+  const WORDS = { title: 'Terrific purchase', text: 'Keeps water cold all day and the grip is good.' };
+  const made = (i, date, over = {}) => ({ id: `made-up-${i}`, name: `Made-up Reviewer ${i}`, stars: 4, title: 'Nice', text: `Made-up review number ${i}.`, dateSaid: '3 days ago', date, dateLatest: date, city: 'Test Town', certified: true, reviewFor: null, link: null, page: 1, ...over });
+  // The user's review, kept from a reading on 05-08-2026: newer reviews have pushed it out of the 150 Flipkart shows.
+  const MINE = made('mine', '2026-08-01', { name: REVIEWER, stars: 5, ...WORDS, dateSaid: '1 Aug, 2026', lastSeen: '2026-08-05' });
+  // Today's reading: all Flipkart shows, newest first, back to 10-09-2026, after the start date.
+  const READ = { pid: 'TESTPID0000001', link: 'https://www.flipkart.com/test-brand-steel-bottle/product-reviews/itmtestbottle01?pid=TESTPID0000001&marketplace=FLIPKART', readAt: '2026-10-13T05:00:00.000Z', since: START, pages: 1, total: 1519, end: 'last page', stoppedAt: null, says: 'Made-up.', reviews: [made(1, '2026-10-10'), made(2, '2026-09-10')], product: { pid: 'TESTPID0000001', name: BOTTLE, rating: 4.2, ratings: 100, reviews: 1519 } };
+  const asked = [];
+  const go = (answer = {}, opts = {}) => run(ROW, {}, { reviewer: REVIEWER, campaigns: [{ ...CAMPAIGN, startDate: START }], now: NOW, reviews: async (pid, o) => (asked.push({ pid, day: o.day, start: o.start }), { ...READ, ...answer }), ...opts });
+  const step7 = (x) => [x.result.steps[6].state, x.result.steps[6].detail];
+  const READING = 'Read 2 reviews of the product from "See all reviews" on Flipkart, newest first (all the reviews Flipkart shows, 2 of the 1,519 it counts, back to 10-09-2026). 1 more review posted since the campaign started on 15-07-2026, kept on this computer from earlier readings, was searched too. Reviews posted on or after the day the order was delivered (23-07-2026, on the delivery screenshot) can be the user\'s.';
+  // Kept from an earlier reading, and older than today's reading reaches: found, as last seen; a review kept that today's reading shows counts once.
+  const kept = await go({ kept: [MINE, made(1, '2026-10-10', { lastSeen: '2026-10-13' })] });
+  assert.deepEqual(asked.at(-1), { pid: 'TESTPID0000001', day: '2026-07-23', start: START }, 'read back to the start date');
+  assert.deepEqual(step7(kept), ['pass', `Found the review among the reviews kept on this computer from earlier readings: its words match the review screenshot's, and it is under the name on the review screenshot. It was last seen on Flipkart on 05-08-2026; today's reading does not reach back to the day it was posted. On Flipkart it has 5 stars, and it was posted 1 Aug, 2026 (01-08-2026). ${READING}`]);
+  assert.deepEqual([kept.result.found.how, kept.result.found.kept, kept.result.found.lastSeen, kept.result.flipkart.start, kept.result.flipkart.kept], ['found', true, '2026-08-05', START, 1]);
+  assert.deepEqual([kept.result.final, kept.result.typeKey, kept.result.finalSays], ['pass', 'verified', "This transaction passed: the purchase screenshot and the delivery screenshot match the form, and the review was on Flipkart under the user's name when it was last seen there, on 05-08-2026, with the review screenshot's words, posted on or after the day the order was delivered."]);
+  // Today's reading reaches back past its day, and it is not there: it may have been removed.
+  const gone = await go({ reviews: [made(1, '2026-10-10'), made(2, '2026-07-20')], kept: [MINE] });
+  assert.deepEqual(step7(gone), ['fail', `The review screenshot's words match a review under the name on the review screenshot that was on Flipkart when it was last seen there, on 05-08-2026, but it is not among today's reviews, though they reach back to the day it was posted (01-08-2026), so it may have been removed from Flipkart. ${READING.replace('back to 10-09-2026', 'back to 20-07-2026')}`]);
+  assert.deepEqual([gone.result.found.how, gone.result.final, gone.result.typeKey, gone.result.steps[7].detail], ['gone', 'manual', 'reviewNotLive', 'The review is not among the reviews Flipkart shows today, so there is nothing to compare.']);
+  assert.equal(gone.result.note, 'A staff member needs to check this transaction because the review was on Flipkart when it was last seen there, on 05-08-2026, but it is not among the 2 reviews Flipkart shows for the product, though they reach back to the day it was posted (01-08-2026), so it may have been removed from Flipkart. A staff member must check whether the review is still on Flipkart. The purchase screenshot and the delivery screenshot match the form.');
+  // Found among the kept reviews before Flipkart stopped today's reading: no pause.
+  const stopped = await go({ end: 'prevented', prevented: 'captcha', reviews: [made(1, '2026-10-10')], says: 'Made-up: stopped.', kept: [MINE] });
+  assert.deepEqual([stopped.result.paused, stopped.result.steps[6].state], [null, 'pass']);
+  assert.match(stopped.result.steps[6].detail, / Made-up: stopped\. The review was found among the reviews kept from earlier readings\. 1 more review posted since/);
+  // Not found, and Flipkart's list ends before the start date: said, with both days.
+  const ended = await go({ kept: [] });
+  const endSaid = "Flipkart's list of the product's reviews ends at 10-09-2026, before the campaign's start date, 15-07-2026, as it shows only the newest 2 of the 1,519 reviews it counts.";
+  assert.ok(ended.result.steps[6].detail.includes(endSaid), ended.result.steps[6].detail);
+  assert.ok(ended.result.note.includes(endSaid), ended.result.note);
+  assert.equal(ended.result.flipkart.kept, 0);
+  // With kept reviews searched too, the Note says so.
+  const notKept = await go({ kept: [made(3, '2026-08-02', { lastSeen: '2026-08-05' })] });
+  assert.match(notKept.result.note, / The review posted since 15-07-2026 that was kept on this computer from earlier readings was searched too\./);
+  // The list reaching the start date, or showing every review Flipkart counts: nothing said.
+  const reached = await go({ end: 'date', reviews: [made(1, '2026-10-10'), made(2, '2026-07-10', { page: 2 })], kept: [] });
+  const whole = await go({ total: 2, kept: [] });
+  assert.deepEqual([reached, whole].map((x) => /list of the product's reviews ends/.test(x.result.note)), [false, false]);
+  assert.match(reached.result.steps[6].detail, /newest first \(back to 10-07-2026; the campaign started on 15-07-2026\)\./);
+  // No start date: read as before, and no kept review is searched.
+  const before = await go({ kept: [MINE] }, { campaigns: [CAMPAIGN] });
+  assert.deepEqual([asked.at(-1).start, before.result.found.how, Object.hasOwn(before.result.flipkart, 'start'), before.result.misuse], [null, 'notFound', false, null]);
+});
+
 test("how far back Flipkart's reviews are read, from what each row's last check kept: step 7's own day, else the day on the Delivered line, else the earliest order day, a day with no year being the most recent such day by the time of the check; none when it found none", () => {
   const at = '2026-10-13T05:00:00.000Z';
   assert.equal(keptDay({ finishedAt: at, reviewsFrom: { day: '2026-07-23', from: 'delivery', said: '…' }, delivery: { deliveredText: 'Delivered, Thu 9th Jul' } }), '2026-07-23');

@@ -54,7 +54,8 @@ export function shotWords(v) {
  * -> { how, review, count, name: { name, from ('screenshot', 'sheet' or
  * null) }, counted (how many reviews count by their date), nameOnly (how many
  * of those are under the name with other words), before (how many under the
- * name with these words were posted before the day), share and rareShare (how
+ * name with these words were posted before the day), earlier (the one of
+ * those that fits best, with its dates, or null), share and rareShare (how
  * much of the screenshot's words, and of its distinctive words, the review has),
  * rare (how many distinctive words the screenshot has) }. how: 'found' (one
  * review under the name with these words), 'several' (two or more: none is
@@ -67,7 +68,7 @@ export function matchReview({ shot, sheetName = null, reviews = [], day = null, 
   const shown = String(shot?.name ?? '').trim();
   const name = shown && !noNameShown(shown) ? { name: shown, from: 'screenshot' } : String(sheetName ?? '').trim() ? { name: String(sheetName).trim(), from: 'sheet' } : { name: null, from: null };
   const text = shotWords(shot);
-  const base = { how: 'noWords', review: null, count: 0, name, counted: 0, nameOnly: 0, before: 0, share: null, rareShare: null, rare: 0 };
+  const base = { how: 'noWords', review: null, count: 0, name, counted: 0, nameOnly: 0, before: 0, earlier: null, share: null, rareShare: null, rare: 0 };
   if (!wordsOf(text).length) return base;
   const rare = rareWords(text, [...avoid, name.name ?? '']);
   const all = (Array.isArray(reviews) ? reviews : []).map((r) => {
@@ -93,5 +94,6 @@ export function matchReview({ shot, sheetName = null, reviews = [], day = null, 
     return out(named.length ? 'otherName' : 'noName', named.length ? named : pointed);
   }
   const top = best(counted);
-  return { ...base, how: 'notFound', counted: counted.length, nameOnly: counted.filter((x) => x.fits && !x.words).length, before: all.filter((x) => !x.counts && x.words && x.fits).length, share: top?.share ?? null, rareShare: top?.rareShare ?? null, rare: rare.length };
+  const before = all.filter((x) => !x.counts && x.words && x.fits);
+  return { ...base, how: 'notFound', counted: counted.length, nameOnly: counted.filter((x) => x.fits && !x.words).length, before: before.length, earlier: best(before)?.r ?? null, share: top?.share ?? null, rareShare: top?.rareShare ?? null, rare: rare.length };
 }

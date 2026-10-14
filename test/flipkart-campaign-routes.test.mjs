@@ -1,6 +1,7 @@
 // Flipkart's campaign routes, over HTTP, through serve.mjs, with a pretend
 // Live Flipkart Browser that opens no window and no website: adding a
-// campaign (a brand, a name, live or ended, and products, as on Amazon) and
+// campaign (a brand, a name, live or ended, and products, as on Amazon, and
+// the day it started, day first, Flipkart's own) and
 // its products read one at a time after it is saved (a product link, a
 // product ID alone), each used only when its brand is the campaign's; a robot
 // check, a block or an error stopping the reading ("Flipkart prevented this
@@ -21,7 +22,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHandler, createSessions, bearerOf } from '../serve.mjs';
 import { createFlipkartRoutes } from '../flipkart/routes.js';
-import { PREVENTED_SAYS, ADD_LINK_SAYS, CAMPAIGN_KEY } from '../flipkart/campaigns.js';
+import { PREVENTED_SAYS, ADD_LINK_SAYS, CAMPAIGN_KEY, START_SAYS } from '../flipkart/campaigns.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const AT = '2026-10-12T05:00:00.000Z';
@@ -181,6 +182,7 @@ test("adding a campaign: its brand, name, live or ended and products are kept on
     brand: 'Test Glow',
     name: 'Test Glow Clean',
     live: true,
+    startDate: null,
     updatedAt: 'string',
     products: [
       shown(GLOW, 'used', { name: 'Test Glow Face Mask', brand: 'Test Glow', variants: ['100 ml'], variantCount: 2 }),
@@ -192,7 +194,7 @@ test("adding a campaign: its brand, name, live or ended and products are kept on
   assert.equal(statSync(join(dir, 'flipkart')).mode & 0o777, 0o700);
   assert.equal(statSync(join(dir, 'flipkart', 'campaigns.json')).mode & 0o777, 0o600);
   const kept = JSON.parse(readFileSync(join(dir, 'flipkart', 'campaigns.json'), 'utf8')).campaigns[0];
-  assert.deepEqual(Object.keys(kept).sort(), ['brand', 'createdAt', 'key', 'live', 'name', 'products', 'updatedAt']);
+  assert.deepEqual(Object.keys(kept).sort(), ['brand', 'createdAt', 'key', 'live', 'name', 'products', 'startDate', 'updatedAt']);
   // Every detail read is kept for the later steps: the product ID, the item ID, the stars, the counts and the link to all reviews too.
   assert.deepEqual(kept.products[0].read, { at: AT, name: 'Test Glow Face Mask', brand: 'Test Glow', variants: [{ pid: 'FCPTESTGLOW00002', label: '100 ml' }, { pid: 'FCPTESTGLOW00003', label: null }], pid: GLOW_PID, itemId: 'itmtestglow0001', rating: 4.1, ratings: 120, reviews: 12, allReviews: allReviews(GLOW_PID) });
   assert.deepEqual({ ...kept.products[1], read: Object.keys(kept.products[1].read).sort() }, { given: CLAY_PID, url: CLAY_BY_ID, pid: CLAY_PID, itemId: 'itmtestclay0001', byId: true, read: ['allReviews', 'at', 'brand', 'itemId', 'name', 'pid', 'rating', 'ratings', 'reviews', 'variants'], problem: { says: c.products[1].says, at: AT } });
@@ -249,6 +251,12 @@ test('changing a campaign keeps what was read for a product typed before and rea
   const rebranded = await call(at, 'POST', `/local/flipkart/campaigns/${key}`, { json: { brand: 'Test Glow', name: 'Test Glow and Jar', live: true, products: `${GLOW}\n${JAR}` } });
   assert.deepEqual(rebranded.json.campaign.products.map((p) => [p.state, p.says]), [['used', null], ['not used', 'Flipkart says this product\'s brand is "Test Home", not "Test Glow", so this product is not used.']]);
   assert.deepEqual([rebranded.json.reading, browser.opened], [false, [GLOW, JAR]], 'no page is opened again');
+  // The day it started, written day first, kept as a day; changed, it is kept as changed; left empty, the campaign has none again.
+  const started = await call(at, 'POST', `/local/flipkart/campaigns/${key}`, { json: { brand: 'Test Glow', name: 'Test Glow and Jar', live: true, startDate: ' 1/10/2026 ', products: `${GLOW}\n${JAR}` } });
+  assert.deepEqual([started.status, started.json.campaign.startDate, JSON.parse(readFileSync(join(dir, 'flipkart', 'campaigns.json'), 'utf8')).campaigns[0].startDate, browser.opened.length], [200, '2026-10-01', '2026-10-01', 2]);
+  const moved = await call(at, 'POST', `/local/flipkart/campaigns/${key}`, { json: { brand: 'Test Glow', name: 'Test Glow and Jar', live: true, startDate: '05-10-2026', products: `${GLOW}\n${JAR}` } });
+  const emptied = await call(at, 'POST', `/local/flipkart/campaigns/${key}`, { json: { brand: 'Test Glow', name: 'Test Glow and Jar', live: true, startDate: '', products: `${GLOW}\n${JAR}` } });
+  assert.deepEqual([moved.json.campaign.startDate, emptied.json.campaign.startDate, emptied.json.campaigns[0].startDate], ['2026-10-05', null, null]);
   const ended = await call(at, 'POST', `/local/flipkart/campaigns/${key}/end`, { json: {} });
   assert.deepEqual([ended.status, ended.json.campaigns[0].live, ended.json.campaigns[0].products.map((p) => p.state)], [200, false, ['used', 'not used']]);
   const deleted = await call(at, 'POST', `/local/flipkart/campaigns/${key}/delete`, { json: {} });
@@ -302,6 +310,9 @@ test("the form is checked in plain words, as on Amazon: the brand and the campai
   assert.deepEqual(await say({ brand: 'Test Glow', name: 'N'.repeat(81), products: GLOW }), [400, "The campaign's name is too long: at most 80 letters."]);
   assert.deepEqual(await say({ brand: 'Test Glow', name: 'Test Glow', products: '  \n ' }), [400, 'Write at least one product: a Flipkart link or a Flipkart product ID on each line.']);
   assert.deepEqual(await say({ brand: 'Test Glow', name: 'Test Glow', products: 'Test Glow Face Mask\nhttps://www.amazon.in/dp/B0TESTKIT9' }), [400, 'Line 1 of the products, "Test Glow Face Mask", is not a Flipkart link or a Flipkart product ID. Line 2 of the products is a link to www.amazon.in, not to Flipkart, so it cannot be used.']);
+  // The start date: a real day, written day first, or nothing.
+  assert.equal(START_SAYS, 'Write the day the campaign started, the day first, like 01-10-2026, or leave it empty.');
+  for (const startDate of ['31-02-2026', '2026-10-01', '01-10-26', '13-13-2026', 'last week']) assert.deepEqual(await say({ brand: 'Test Glow', name: 'Test Glow', startDate, products: GLOW }), [400, START_SAYS], startDate);
   const notJson = await call(at, 'POST', '/local/flipkart/campaigns', { body: Buffer.from('brand=Test'), type: 'text/plain' });
   assert.deepEqual([notJson.status, notJson.json.message], [415, 'The request could not be read. Reload the page, then try again.']);
   const broken = await call(at, 'POST', '/local/flipkart/campaigns', { body: Buffer.from('{'), type: 'application/json' });

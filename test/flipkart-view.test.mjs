@@ -860,6 +860,13 @@ test('a row\'s page shows what step 7 found on Flipkart ("Found on Flipkart"), a
   assert.deepEqual([textOf(findAll(card(notFound.page()), (n) => n.tag === 'p')[0]), fields(notFound.page())], ['Not found among the reviews read.', [...PRODUCT, READ, ['Found', 'No']]]);
   const twice = await page({ ...LAST_CHECK_READ, flipkart: FLIPKART, found: { ...FOUND, how: 'several', count: 2 } });
   assert.deepEqual([textOf(findAll(card(twice.page()), (n) => n.tag === 'p')[0]), fields(twice.page()).at(-1)], ['Two or more reviews fit, so none is shown.', ['Found', 'No: 2 reviews under the name have these words, so none is picked']]);
+  // With the campaign's start date: found among the reviews kept from earlier readings, as last seen; or gone from Flipkart since; and how many kept reviews were searched too.
+  const STARTED = { ...FLIPKART, start: '2026-08-01', kept: 40 };
+  const keptRead = ['Read', `${READ[1]}; and 40 more reviews posted since the campaign started on 01-08-2026, kept on this computer from earlier readings`];
+  const kept = await page({ ...LAST_CHECK_READ, flipkart: STARTED, found: { ...FOUND, kept: true, lastSeen: '2026-09-30' } });
+  assert.deepEqual([fields(kept.page()).at(-2), fields(kept.page()).at(-1), findAll(card(kept.page()), (n) => n.tag === 'a')[0].attrs.href, warned(kept.page())], [keptRead, ['Found', 'Yes, among the reviews kept from earlier readings: last seen on Flipkart on 30-09-2026. Open the review on Flipkart'], LINK, []]);
+  const gone = await page({ ...LAST_CHECK_READ, flipkart: STARTED, found: { ...FOUND, how: 'gone', kept: true, lastSeen: '2026-09-30' } });
+  assert.deepEqual([warned(gone.page()), fields(gone.page()).at(-1), fields(gone.page())[4]], [['This review was on Flipkart when it was last seen there, on 30-09-2026, but it is not among the reviews read today, though they reach back to the day it was posted, so it may have been removed.'], ['Found', 'No: it was last seen on Flipkart on 30-09-2026, but it is not among the reviews read today, though they reach back to its day, so it may have been removed'], ['On Flipkart', 'Open this review on Flipkart']]);
   // Nothing read from Flipkart yet; then live, as soon as step 7 has its answer.
   assert.equal(textOf(card((await page(LAST_CHECK)).page())), 'Found on FlipkartNothing read from Flipkart yet. Flipkart is opened only to look for the review shown on the review screenshot.');
   let release;

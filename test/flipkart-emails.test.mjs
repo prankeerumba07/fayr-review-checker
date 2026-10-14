@@ -37,17 +37,18 @@ const CHECK = {
   flipkart: { oldest: '2026-07-01' },
 };
 const words = (t) => t.split(/\s+/).filter(Boolean).length;
-const REVIEW_STEPS = '1. Open the Flipkart app and tap Account.\n2. Tap My Reviews (scroll down if needed).\n3. Open the Published tab.\n4. Find your review of this product.\n5. Take a screenshot that shows your name, the product and your review.';
+// Flipkart's app shows My Reviews without the user's name.
+const REVIEW_STEPS = '1. Open the Flipkart app and tap Account.\n2. Tap My Reviews (scroll down if needed).\n3. Open the Published tab.\n4. Find your review of this product.\n5. Take a screenshot that shows the product and your review.';
 
-test('every Type but Verified and Rating Only has an email, Something else too, each short and clear: a short subject, what we checked, what we found, and what to send, with numbered steps for finding it on Flipkart', () => {
+test('every Type but Verified and Rating Only has an email, Something else and Possible misuse too, each short and clear: a short subject, what we checked, what we found, and what to send, with numbered steps for finding it on Flipkart', () => {
   assert.deepEqual(EMAIL_KEYS.filter((k) => k !== 'notDeliveredCancelled'), TYPE_KEYS.filter((k) => k !== 'verified' && k !== 'ratingOnly'), 'in the order the Types are listed');
-  assert.deepEqual(EMAIL_KEYS, [...AMAZON_EMAIL_KEYS.filter((k) => k !== 'reviewDeleted'), 'somethingElse'], "the Amazon screen's, but for its deleted review, and with Something else");
+  assert.deepEqual(EMAIL_KEYS, [...AMAZON_EMAIL_KEYS.filter((k) => k !== 'reviewDeleted'), 'possibleMisuse', 'somethingElse'], "the Amazon screen's, but for its deleted review, and with Possible misuse and Something else");
   assert.equal(EMAIL_KEYS.indexOf('notDeliveredCancelled'), EMAIL_KEYS.indexOf('notDelivered') + 1, 'a second email for Not delivered, as on Amazon');
   assert.deepEqual(Object.keys(EMAILS.templates), EMAIL_KEYS);
   assert.deepEqual([hasEmail('verified'), hasEmail('ratingOnly'), hasEmail('reviewDeleted'), hasEmail('somethingElse'), hasEmail('notDelivered')], [false, false, false, true, true]);
   assert.deepEqual([emailName('notDelivered'), emailName('notDeliveredCancelled'), emailName('somethingElse')], ['Not delivered', 'Not delivered (cancelled or returned)', 'Something else']);
   const known = new Set(AMAZON_PLACEHOLDERS.map((p) => p.word));
-  const noSteps = ['duplicate', 'needDriveAccess', 'needAccess'];
+  const noSteps = ['duplicate', 'needDriveAccess', 'needAccess', 'possibleMisuse'];
   for (const k of EMAIL_KEYS) {
     const t = EMAILS.templates[k];
     assert.match(t.subject, /^Order \{order ID\}: [a-z][a-zA-Z ]+$/, `${k}: a short, clear subject`);
@@ -114,7 +115,7 @@ test('each email filled in for a made-up row stays short (about 150 words at mos
   assert.ok(odd.message.startsWith(`Hello,\n\nWe checked your entry for your Flipkart order ${ID} (Test … Bottle). This order, screenshot or review was already sent in another entry, so it cannot count again.`), odd.message);
 });
 
-test('"Reviewer name is different": each name we found and where (delivered to, the form, the review on Flipkart, the review screenshot), then that we cannot confirm the review was written from the user\'s own account, a screenshot of it from their own account, and to tell us if someone else wrote it', () => {
+test('"Reviewer name is different": each name we found and where (delivered to, the form, the review on Flipkart, the review screenshot), then that we cannot confirm the review was written from the user\'s own account, a screenshot of it from their own account (My Reviews shows no name), and to tell us if their account uses another name or someone else wrote it', () => {
   const email = emailFor({ typeKey: 'reviewerNotMatching', row: row(), result: CHECK, reviewer: 'Test Person Two' });
   assert.equal(email.subject, `Order ${ID}: names do not match`);
   assert.equal(
@@ -123,9 +124,9 @@ test('"Reviewer name is different": each name we found and where (delivered to, 
       'Hello Test Person Two,',
       `We checked your review of Test Brand Steel Bottle on Flipkart, for your order ${ID}.`,
       'The names we found do not match:\n- Delivered to (on your delivery screenshot): Test Person Two\n- In your form: Test Person Two\n- On the review on Flipkart: Other Test Person\n- On your review screenshot: Other Test Person',
-      'So we cannot confirm that the review was written from your own Flipkart account.',
+      'We cannot confirm the review was written from your own Flipkart account.',
       `Please send a screenshot of the review from your own account:\n${REVIEW_STEPS}`,
-      'If someone else wrote the review from your account, please tell us.',
+      "If your Flipkart account uses a different name, or the review was written from someone else's account, please tell us.",
       'Thank you,\nThe support team',
     ].join('\n\n'),
   );
@@ -159,4 +160,28 @@ test('"Review not live": what we found among the reviews Flipkart shows, then a 
   assert.equal(fact({ review: { ...result.review, tab: 'published' } }), 'Your review screenshot shows it on the Published tab, but it is not among the reviews Flipkart shows for this product, which we checked back to 01-07-2026.');
   assert.equal(fact({ found: { how: 'notFound', before: 1 } }), 'We found a review with the same words, but it was posted before your order was delivered on 23-07-2026, so it does not count for this order.');
   assert.equal(fact({ review: { ...result.review, form: true }, flipkart: null }), 'Your review screenshot shows the review being written, not posted, and it is not among the reviews Flipkart shows for this product.');
+  // Seen on Flipkart before, but gone from the reviews it shows now.
+  assert.equal(fact({ found: { how: 'gone', kept: true, lastSeen: '2026-08-05', review: { name: 'Test Person Two' } } }), 'We last saw your review on Flipkart on 05-08-2026, but it is no longer among the reviews Flipkart shows for this product.');
+});
+
+test('"Possible misuse": in polite words, only what came before the day the offer started, with the dates; and to tell us if a date is wrong', () => {
+  const misuse = (m) => ({ ...CHECK, misuse: { start: '2026-08-01', placed: null, delivered: null, posted: null, ...m } });
+  const email = emailFor({ typeKey: 'possibleMisuse', row: row(), result: misuse({ placed: '2026-07-20', delivered: '2026-07-23' }), reviewer: 'Test Person Two' });
+  assert.deepEqual([email.key, email.name, email.subject], ['possibleMisuse', 'Possible misuse', `Order ${ID}: dates before the offer started`]);
+  assert.equal(
+    email.message,
+    [
+      'Hello Test Person Two,',
+      `We checked the dates for your Flipkart order ${ID} (Test Brand Steel Bottle). This offer started on 01-08-2026. Your purchase screenshot shows the order was placed on 20-07-2026 and your delivery screenshot shows it was delivered on 23-07-2026, both before that day.`,
+      'If you think a date here is wrong, please reply and tell us.',
+      'Thank you,\nThe support team',
+    ].join('\n\n'),
+  );
+  assert.doesNotMatch(email.message, /misuse|cheat|fraud|fake|abuse/i, 'only what came before the start date');
+  const fact = (m) => whatIsWrong('possibleMisuse', { row: row(), result: m === null ? null : misuse(m) });
+  assert.equal(fact({ posted: { date: '2026-07-28', dateLatest: '2026-07-28', dateSaid: '28 Jul, 2026' } }), 'This offer started on 01-08-2026. Your review of this product on Flipkart was posted on 28-07-2026, before that day.');
+  assert.equal(fact({ delivered: '2026-07-23', posted: { date: '2026-06-14', dateLatest: '2026-06-29', dateSaid: '1 month ago' } }), 'This offer started on 01-08-2026. Your delivery screenshot shows the order was delivered on 23-07-2026 and your review of this product on Flipkart was posted by 29-06-2026, both before that day.');
+  assert.equal(fact({ placed: '2026-07-20', delivered: '2026-07-23', posted: { date: '2026-07-28', dateLatest: '2026-07-28' } }), 'This offer started on 01-08-2026. Your purchase screenshot shows the order was placed on 20-07-2026, your delivery screenshot shows it was delivered on 23-07-2026 and your review of this product on Flipkart was posted on 28-07-2026, all before that day.');
+  // A result a staff member chose: a sentence that is still true.
+  assert.deepEqual([fact(null), fact({})], ['Some dates for this order are before the day this offer started.', 'Some dates for this order are before the day this offer started.']);
 });

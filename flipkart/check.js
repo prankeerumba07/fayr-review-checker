@@ -21,15 +21,21 @@
 // of several reviews, only the user's; step 7 finds the review among
 // Flipkart's public reviews: the campaign product's own page on Flipkart,
 // then "See all reviews", newest first, read once in a checking run and kept
-// on this computer for every row (routes.js, reviews.js), searched for the
-// review screenshot's words and name, from the day a review can be the
-// user's (the delivery day, else the order day); step 8 compares the review
+// on this computer for every row (routes.js, reviews.js), back to the
+// campaign's start date when it has one, searched for the review screenshot's
+// words and name, from the day a review can be the user's (the delivery day,
+// else the order day), together with the reviews since the start date kept
+// from earlier readings (kept-reviews.js; one of those counts only when
+// today's reading does not reach back to its day, and when it does and the
+// review is not there, it may have been removed); step 8 compares the review
 // found with the review screenshot, as the Amazon checker compares a review
 // with its screenshot and with the Reviewer Name column: the name, the words,
 // the stars and the day it was posted; and step 9 gives the row its Status
 // (Pass, Fail or Needs Manual Staff Checking), its Type and its Note, with
 // the Amazon checker's words and rules (final.js): the screenshots' problems
-// first, in the Amazon order, then the review's. It passes only when both
+// first, in the Amazon order, then the review's; but the review, or the order
+// on its screenshots, before the campaign's start date is Possible misuse,
+// for a staff member, unless a problem fails the row. It passes only when both
 // screenshots match the sheet and the review is live on Flipkart under the
 // user's name with the review screenshot's words, posted on or after the
 // delivery day, or, as on Amazon, when the review screenshot shows a star
@@ -55,6 +61,7 @@ import { readOrderShot, readDeliveryShot } from './shot-read.js';
 import { NOT_DELIVERED_WORDS, parseDelivery } from './delivery-read.js';
 import { readReviewShot, nameFits } from './review-read.js';
 import { matchReview, shotWords } from './review-match.js';
+import { reachOf, reaches, keptNotRead } from './kept-reviews.js';
 import { indiaDay, plainText } from './review-page.js';
 import { linkLabel, isShortLink, reviewPageLink } from './links.js';
 import { DEFAULT_MARKS } from './settings.js';
@@ -272,14 +279,14 @@ class Paused extends Error {
  *   has — the columns the file has: { orderDate, amount, product, orderShot, deliveryShot, reviewShot, reviewLink }, each true unless false
  *   screenshots — screenshots.js: forCell(rowId, which, { signal })
  *   marks — Flipkart's passing marks (settings.js): { productNameShare, amountDifferenceRupees, feeAllowanceRupees }
- *   campaigns — the live campaigns the row uses (campaigns.js campaignsFor): { name, brand, products: [{ pid, name, short, variants }] }
+ *   campaigns — the live campaigns the row uses (campaigns.js campaignsFor): { name, brand, startDate (YYYY-MM-DD, or null), products: [{ pid, name, short, variants }] }
  *   readOrder(files, { want }) — what the purchase screenshot says (shot-read.js readOrderShot)
  *   readDelivery(files, { want }) — what the delivery screenshot says (shot-read.js readDeliveryShot)
  *   readReview(files, { reviewer, productIs }) — what the review screenshot says (review-read.js readReviewShot)
  *   reviewer — the reviewer named in the sheet (null when the file has no Reviewer Name column, or the cell is empty), which finds the user's review among several on the review screenshot, and is compared with the name on Flipkart (step 8)
- *   reviews(pid, { rowId, day, onPage, signal }) — Flipkart's public reviews of a campaign's product, read once in a checking run and kept on this computer (routes.js, reviews.js readProductReviews); day is the oldest day this row needs
+ *   reviews(pid, { rowId, day, start, onPage, signal }) — Flipkart's public reviews of a campaign's product, read once in a checking run and kept on this computer (routes.js, reviews.js readProductReviews); day is the oldest day this row needs; start is the day the product's campaign started (or null): the reviews are read back to it, and the answer carries the reviews since it kept from earlier readings (kept)
  *   emit(event) — started, action, step and done lines for the screen; a step's line carries what was read so far (partial)
- * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, status, type, typeKey, note, final, finalSays, steps, sheet, order, delivery, review, reviewsFrom, flipkart, found, compared, shotsHad, comparison, paused, stopped }
+ * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, status, type, typeKey, note, final, finalSays, steps, sheet, order, delivery, review, reviewsFrom, flipkart, found, misuse, compared, shotsHad, comparison, paused, stopped }
  */
 export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_MARKS, campaigns = [], readOrder = readOrderShot, readDelivery = readDeliveryShot, readReview = readReviewShot, reviewer = null, reviews = null, emit = () => {}, signal = null, checkId = newCheckId(), now = () => new Date() }) {
   const had = { orderDate: true, amount: true, product: true, orderShot: true, deliveryShot: true, reviewShot: true, reviewLink: true, ...Object.fromEntries(Object.entries(has ?? {}).map(([k, v]) => [k, v !== false])) };
@@ -318,6 +325,8 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     reviewsFrom: null,
     flipkart: null,
     found: null,
+    // What came before the campaign's start date (step 9, misuseOf): { start, placed, delivered, posted }, or null.
+    misuse: null,
     // What was compared, and the screenshots the file has: the comparison shows only those.
     compared,
     shotsHad: SHOTS.filter((w) => had[SHOT_COLUMN[w]]),
@@ -734,11 +743,29 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const today = indiaDay(now());
     const delivered = dayOf(daysRead.delivery, today);
     if (delivered) return { day: delivered, from: 'delivery', said: `the day the order was delivered (${dayFirst(delivered)}, on the delivery screenshot)` };
-    const dates = daysRead.order ?? [];
-    const marked = dates.filter((d) => d.labelled).map((d) => dayOf(d, today)).find(Boolean);
-    const ordered = marked ?? dates.map((d) => dayOf(d, today)).filter(Boolean).sort()[0] ?? null;
+    const ordered = orderDay(today);
     if (ordered) return { day: ordered, from: 'order', said: `the day the order was placed (${dayFirst(ordered)}, on the purchase screenshot, as the delivery screenshot shows no delivery day)` };
     return { day: null, from: null, said: 'neither the delivery screenshot nor the purchase screenshot shows a day' };
+  }
+  /** The day the order was placed, on the purchase screenshot: the date marked as the order's, else the earliest; null when it shows none. */
+  function orderDay(today) {
+    const dates = daysRead.order ?? [];
+    const marked = dates.filter((d) => d.labelled).map((d) => dayOf(d, today)).find(Boolean);
+    return marked ?? dates.map((d) => dayOf(d, today)).filter(Boolean).sort()[0] ?? null;
+  }
+  /**
+   * The day the row's campaign started (campaigns.js startDayFrom): of the
+   * product bought, when it is known, else of every campaign the row uses;
+   * with several, the earliest. Null when a campaign has no start date: then
+   * the row is checked as before campaigns had one.
+   */
+  function startDay(product) {
+    const withProducts = campaigns.filter((c) => c.products?.length);
+    const has = (c) => (c.products ?? []).some((p) => p.pid === product.pid || (p.variants ?? []).includes(product.pid));
+    const mine = product?.pid ? withProducts.filter(has) : [];
+    const list = mine.length ? mine : withProducts;
+    if (!list.length || list.some((c) => !/^\d{4}-\d{2}-\d{2}$/.test(String(c.startDate ?? '')))) return null;
+    return list.map((c) => c.startDate).sort()[0];
   }
   /** The campaign's product the row is for: the one the purchase screenshot shows, else the campaign's only one; null when it cannot be told. */
   function boughtProduct() {
@@ -798,41 +825,53 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       seven.skip = 'noProduct';
       return finish(n, 'not-reached', "Which of the campaign's products was bought could not be told from the purchase screenshot, so it is not known whose reviews to search.");
     }
+    // The day the product's campaign started: the reviews are read back to it, and the ones since it kept from earlier readings come too (routes.js).
+    const begun = startDay(product);
     const got = await reviews(product.pid, {
       rowId: row.id,
       signal,
       day: result.reviewsFrom.day,
+      start: begun,
       onPage: (p, read, wait) => say(wait ? `Flipkart showed an error page; opening it once more in ${Math.round(wait / 1000)} seconds` : p === 0 ? "Opening the product's page on Flipkart" : `Reading Flipkart's reviews, newest first${read ? ` (${read} read so far)` : ''}`),
     });
     checkStop();
     const kept = (got.reviews ?? []).length;
     const oldest = (got.reviews ?? []).map((r) => r.date).filter(Boolean).sort()[0] ?? null;
-    result.flipkart = { pid: product.pid, name: got.product?.name ?? product.name ?? null, readAt: got.readAt ?? null, reused: Boolean(got.reused), pages: got.pages ?? 0, count: kept, total: got.total ?? null, end: got.end ?? null, since: got.since ?? null, oldest, says: got.says ?? null };
+    // The reviews since the start date kept from earlier readings that today's reading does not show (kept-reviews.js): searched too.
+    const keptOnly = begun ? keptNotRead(got, got.kept) : [];
+    result.flipkart = { pid: product.pid, name: got.product?.name ?? product.name ?? null, readAt: got.readAt ?? null, reused: Boolean(got.reused), pages: got.pages ?? 0, count: kept, total: got.total ?? null, end: got.end ?? null, since: got.since ?? null, oldest, says: got.says ?? null, ...(begun ? { start: begun, kept: keptOnly.length } : {}) };
     const pause = got.end === 'prevented' ? `flipkart-${got.prevented ?? 'blocked'}` : READING_PAUSES[got.end];
     // Searched even when the reading stopped part way: a review found among the pages read is found, and nothing more is needed.
     const day = result.reviewsFrom.day;
     // Each review's words as a person reads them (a copy kept earlier may still hold the page's HTML codes).
-    const list = (got.reviews ?? []).map((r) => ({ ...r, name: r.name ? plainText(r.name) : r.name, title: r.title ? plainText(r.title) : r.title, text: r.text ? plainText(r.text) : r.text }));
-    const m = kept && got.end !== 'none' ? matchReview({ shot: result.review, sheetName: reviewer, reviews: list, day, avoid: [product.name ?? '', got.product?.name ?? ''] }) : null;
+    const list = [...(got.reviews ?? []), ...keptOnly].map((r) => ({ ...r, name: r.name ? plainText(r.name) : r.name, title: r.title ? plainText(r.title) : r.title, text: r.text ? plainText(r.text) : r.text }));
+    const found = (kept && got.end !== 'none') || keptOnly.length ? matchReview({ shot: result.review, sheetName: reviewer, reviews: list, day, avoid: [product.name ?? '', got.product?.name ?? ''] }) : null;
+    // A review kept from an earlier reading counts as found only when today's reading does not reach back to its day; when it does, and the review
+    // is not among today's, it may have been removed from Flipkart ('gone').
+    const m = found?.how === 'found' && found.review?.kept && reaches(reachOf(got), found.review) ? { ...found, how: 'gone' } : found;
     // The review is kept with its own link as Flipkart's reviews pages sent it, which opens it on Flipkart (none when they sent none, never one made up); never its place in the list, which Flipkart's website does not show.
-    result.found = m ? { how: m.how, count: m.count, nameFrom: m.name.from, counted: m.counted, nameOnly: m.nameOnly, before: m.before, share: m.share, rareShare: m.rareShare, review: m.review ? { id: m.review.id ?? null, name: m.review.name ?? null, stars: m.review.stars ?? null, title: m.review.title ?? null, text: m.review.text ?? null, dateSaid: m.review.dateSaid ?? null, date: m.review.date ?? null, dateLatest: m.review.dateLatest ?? null, link: reviewPageLink(m.review.link, m.review.id) } : null } : null;
+    result.found = m ? { how: m.how, count: m.count, nameFrom: m.name.from, counted: m.counted, nameOnly: m.nameOnly, before: m.before, share: m.share, rareShare: m.rareShare, review: m.review ? { id: m.review.id ?? null, name: m.review.name ?? null, stars: m.review.stars ?? null, title: m.review.title ?? null, text: m.review.text ?? null, dateSaid: m.review.dateSaid ?? null, date: m.review.date ?? null, dateLatest: m.review.dateLatest ?? null, link: reviewPageLink(m.review.link, m.review.id) } : null, ...(m.review?.kept ? { kept: true, lastSeen: m.review.lastSeen ?? null } : {}) } : null;
     seven.got = got;
     seven.m = m;
     // Flipkart stopping the reading (a robot check, a refused page, an error page, a page too slow), or the Live Flipkart Browser closed, offline or
     // led to another website, before the review was found pauses the check, as on Amazon: nothing is got around, and the reading goes on from there later.
-    if (pause && m?.how !== 'found') pauseAt(n, pause, PAUSE_SAYS[pause], `${got.says} The check paused here; nothing was got around.`);
-    if (got.end === 'none' || !kept) return finish(n, 'fail', got.says ?? "Flipkart's reviews could not be read.");
+    // A review kept from earlier readings and gone from the reviews read today would not be among the older ones still to read.
+    if (pause && m?.how !== 'found' && m?.how !== 'gone') pauseAt(n, pause, PAUSE_SAYS[pause], `${got.says} The check paused here; nothing was got around.`);
+    if (!m) return finish(n, 'fail', got.says ?? "Flipkart's reviews could not be read.");
     const how = got.reused || (got.wentOn && !got.opened) ? ' They were read earlier and kept on this computer, so Flipkart was not opened again.' : got.wentOn ? ' The reading went on from where it had stopped, keeping the reviews read before.' : '';
     // "1 month ago" is a day only roughly: the oldest review read, about then.
     const rough = (got.reviews ?? []).some((r) => r.date === oldest && r.dateLatest !== r.date);
     const reach = oldest ? `back to ${rough ? 'about ' : ''}${dayFirst(oldest)}` : null;
     // Flipkart may show fewer reviews than it counts: then older ones cannot be read at all.
     const hidden = got.end === 'last page' && Number.isInteger(got.total) && got.total > kept;
-    const back = got.end === 'last page' ? `all the reviews Flipkart shows${hidden ? `, ${kept} of the ${got.total.toLocaleString('en-IN')} it counts` : ''}${reach ? `, ${reach}` : ''}` : reach ? `${reach}${got.end === 'limit' ? ', the most read at one time' : got.end === 'date' && got.since ? `; the rows need reviews back to ${dayFirst(got.since)}` : ''}` : 'their dates could not be read';
+    const need = begun && got.since === begun ? `; the campaign started on ${dayFirst(begun)}` : `; the rows need reviews back to ${dayFirst(got.since)}`;
+    const back = got.end === 'last page' ? `all the reviews Flipkart shows${hidden ? `, ${kept} of the ${got.total.toLocaleString('en-IN')} it counts` : ''}${reach ? `, ${reach}` : ''}` : reach ? `${reach}${got.end === 'limit' ? ', the most read at one time' : got.end === 'date' && got.since ? need : ''}` : 'their dates could not be read';
     const rule = day ? `Reviews posted on or after ${result.reviewsFrom.said} can be the user's.` : `The date is not used for this row: ${result.reviewsFrom.said}.`;
-    const reading = pause ? `${got.says} The review was found among the reviews read before that.` : `Read ${kept === 1 ? '1 review' : `${kept} reviews`} of the product from "See all reviews" on Flipkart, newest first (${back}).${how}`;
+    const keptSaid = keptOnly.length ? ` ${keptOnly.length === 1 ? '1 more review' : `${keptOnly.length} more reviews`} posted since the campaign started on ${dayFirst(begun)}, kept on this computer from earlier readings, ${keptOnly.length === 1 ? 'was' : 'were'} searched too.` : '';
+    const foundBefore = m.how !== 'found' ? '' : m.review?.kept ? ' The review was found among the reviews kept from earlier readings.' : ' The review was found among the reviews read before that.';
+    const reading = pause ? `${got.says}${foundBefore}` : kept ? `Read ${kept === 1 ? '1 review' : `${kept} reviews`} of the product from "See all reviews" on Flipkart, newest first (${back}).${how}` : got.says ?? 'No review was read on Flipkart.';
     const [state, said] = foundSaid(m, got, oldest);
-    return finish(n, state, `${said} ${reading} ${rule}`);
+    return finish(n, state, `${said} ${reading}${keptSaid} ${rule}`);
   }
   /** Step 7's result, in plain words, never a review's words: [state, sentence]. */
   function foundSaid(m, got, oldest) {
@@ -841,12 +880,15 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const many = (k, one, more) => (k === 1 ? one : more);
     const whose = m.name.from === 'screenshot' ? 'the name on the review screenshot' : m.name.from === 'sheet' ? "the reviewer's name in the sheet" : null;
     if (m.how === 'noWords') return ['later', 'The review screenshot shows no words to search for; the review link is opened in a later step.'];
+    const exact = r?.date && r.date === r.dateLatest ? ` (${dayFirst(r.date)})` : '';
     if (m.how === 'found') {
-      const exact = r.date && r.date === r.dateLatest ? ` (${dayFirst(r.date)})` : '';
       const shown = [Number.isInteger(r.stars) ? `it has ${r.stars} ${many(r.stars, 'star', 'stars')}` : null, r.dateSaid ? `it was posted ${r.dateSaid}${exact}` : null].filter(Boolean).join(', and ');
+      // Kept from an earlier reading, and older than today's reading reaches: found, as last seen.
+      if (r.kept) return ['pass', `Found the review among the reviews kept on this computer from earlier readings: its words match the review screenshot's, and it is under ${whose}. It was last seen on Flipkart on ${dayFirst(r.lastSeen)}; today's reading does not reach back to the day it was posted.${shown ? ` On Flipkart ${shown}.` : ''}`];
       const live = v?.form || v?.pending || v?.tab ? ' Finding it among Flipkart\'s public reviews shows the review is live.' : '';
       return ['pass', `Found the review among Flipkart's public reviews: its words match the review screenshot's, and it is under ${whose}.${shown ? ` On Flipkart ${shown}.` : ''}${live}`];
     }
+    if (m.how === 'gone') return ['fail', `The review screenshot's words match a review under ${whose} that was on Flipkart when it was last seen there, on ${dayFirst(r.lastSeen)}, but it is not among today's reviews, though they reach back to the day it was posted${exact}, so it may have been removed from Flipkart.`];
     if (m.how === 'several') return ['fail', `${m.count} reviews under ${whose} have the review screenshot's words, so which one is the user's could not be told; none is picked.`];
     if (m.how === 'otherName') return ['fail', `The review screenshot's words match ${many(m.count, 'a review', `${m.count} reviews`)} under another name, not under ${whose}, so ${many(m.count, 'it is', 'they are')} not counted as found.`];
     if (m.how === 'noName') return ['fail', `The review screenshot's words match ${many(m.count, 'a review', `${m.count} reviews`)}, but Flipkart shows no name for ${many(m.count, 'it', 'them')} ("Flipkart Customer"), so the name could not be checked; ${many(m.count, 'it is', 'they are')} not counted as found.`];
@@ -861,7 +903,24 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     if (m.before) notes.push(`${many(m.before, 'A review', `${m.before} reviews`)} with these words under that name ${many(m.before, 'was', 'were')} posted before ${dayFirst(day)}, so ${many(m.before, 'it does', 'they do')} not count.`);
     const hidden = got.end === 'last page' && Number.isInteger(got.total) && got.total > (got.reviews ?? []).length;
     if (oldest && day && day < oldest && (got.end !== 'last page' || hidden)) notes.push(`The order was ${result.reviewsFrom.from === 'delivery' ? 'delivered' : 'placed'} on ${dayFirst(day)}, before the oldest review ${hidden ? 'Flipkart shows, so the review may be among the older ones it does not show' : 'read, so the review may be among older reviews not read yet'}.`);
+    const ended = listEndedSaid(got);
+    if (ended) notes.push(ended);
     return ['fail', `Not found among Flipkart's reviews: ${none}.${notes.length ? ` ${notes.join(' ')}` : ''}`];
+  }
+  /**
+   * Flipkart's list of the product's reviews ending before the campaign's
+   * start date (it shows at most 150 reviews, newest first): a sentence that
+   * says so, with both days; null when the list reaches the start date, shows
+   * every review Flipkart counts, or the campaign has no start date.
+   */
+  function listEndedSaid(got) {
+    const begun = result.flipkart?.start ?? null;
+    const oldest = result.flipkart?.oldest ?? null;
+    const list = got?.reviews ?? [];
+    if (!begun || !oldest || oldest <= begun || got?.end !== 'last page' || (Number.isInteger(got.total) && got.total <= list.length)) return null;
+    const rough = list.some((r) => r.date === oldest && r.dateLatest !== r.date);
+    const counted = Number.isInteger(got.total) ? ` of the ${got.total.toLocaleString('en-IN')} reviews it counts` : ' reviews';
+    return `Flipkart's list of the product's reviews ends at ${rough ? 'about ' : ''}${dayFirst(oldest)}, before the campaign's start date, ${dayFirst(begun)}, as it shows only the newest ${list.length}${counted}.`;
   }
 
   // ---- step 8: comparing the reviewer's name and the review's words (amazon/check.js reviewShotCheck and reviewerCheck) ----
@@ -893,7 +952,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     checkStop();
     const f = result.found;
     if (ratingOnly) return finish(n, 'not-needed', 'A rating only needs no comparison.');
-    if (f?.how !== 'found' || !f.review) return finish(n, 'not-reached', 'The review was not found on Flipkart, so there is nothing to compare.');
+    if (f?.how !== 'found' || !f.review) return finish(n, 'not-reached', f?.how === 'gone' ? 'The review is not among the reviews Flipkart shows today, so there is nothing to compare.' : 'The review was not found on Flipkart, so there is nothing to compare.');
     start(n, "Comparing the reviewer's name and the review's words");
     const v = result.review ?? {};
     const r = f.review;
@@ -1226,12 +1285,18 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     if (m.how === 'noName') return { type: 'reviewerNotMatching', says: [`The review screenshot's words match ${many(m.count, 'a review', `${m.count} reviews`)} on Flipkart that ${many(m.count, 'shows', 'show')} no name ("Flipkart Customer"), so whose review it is could not be checked.`], then: whoseCheck };
     if (m.how === 'noNameToCheck') return { type: 'reviewerNotMatching', says: [`The review screenshot's words match ${many(m.count, 'a review', `${m.count} reviews`)} on Flipkart, but there is no reviewer's name on the review screenshot or in the sheet to check ${many(m.count, 'it', 'them')} with.`], then: whoseCheck };
     if (m.how === 'noWords') return { type: 'somethingElse', says: ['The review screenshot shows no words to look for on Flipkart.'], then: 'Open it by hand.' };
+    const among = reviewsReadSaid(g);
+    // Kept from an earlier reading, but not among today's reviews though they reach back to its day: it may have been removed.
+    if (m.how === 'gone') {
+      const r = m.review;
+      const posted = r.date && r.date === r.dateLatest ? ` (${dayFirst(r.date)})` : '';
+      return { type: 'reviewNotLive', says: [`The review was on Flipkart when it was last seen there, on ${dayFirst(r.lastSeen)}, but it is not among ${among}, though they reach back to the day it was posted${posted}, so it may have been removed from Flipkart.`], then: 'A staff member must check whether the review is still on Flipkart.' };
+    }
     // Not found: the most telling reason first.
     const day = result.reviewsFrom?.day ?? null;
     const what = result.reviewsFrom?.from === 'order' ? 'placed' : 'delivered';
     const hidden = g.end === 'last page' && Number.isInteger(g.total) && g.total > (g.reviews ?? []).length;
     const oldest = result.flipkart?.oldest ?? null;
-    const among = reviewsReadSaid(g);
     // The order is older than the oldest review read: the review may be among older ones, which Flipkart does not show, or which were not read.
     const isOlder = Boolean(oldest && day && day < oldest && (g.end !== 'last page' || hidden));
     const maybe = hidden ? 'the review may be among the older ones Flipkart does not show' : 'the review may be among older reviews not read yet';
@@ -1243,11 +1308,44 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       `The review is not among ${among}.`,
     ].filter(Boolean);
     const first = reasons[0];
+    const keptN = result.flipkart?.kept ?? 0;
     const notes = [
       isOlder && !first.includes(maybe) ? `The order was ${what} on ${dayFirst(day)}, before the oldest of ${among}, so ${maybe}.` : null,
+      // Flipkart's list ending before the campaign's start date, with both days.
+      listEndedSaid(g),
+      keptN ? `The ${keptN === 1 ? 'review' : `${keptN} reviews`} posted since ${dayFirst(result.flipkart.start)} that ${keptN === 1 ? 'was' : 'were'} kept on this computer from earlier readings ${keptN === 1 ? 'was' : 'were'} searched too.` : null,
       m.nameOnly ? `${many(m.nameOnly, 'A review', `${m.nameOnly} reviews`)} under ${whose} ${many(m.nameOnly, 'is', 'are')} there, but ${many(m.nameOnly, 'its', 'their')} words do not match.` : null,
     ];
     return { type: 'reviewNotLive', says: [first, ...notes].filter(Boolean), then: m.before ? 'A staff member must check whether that review is for this order.' : 'It may not be public yet.' };
+  }
+
+  /**
+   * What came before the day the row's campaign started (startDay), for
+   * Possible misuse: the day the order was placed (on the purchase
+   * screenshot), the day it was delivered (on the delivery screenshot), and
+   * when the review on the review screenshot was posted on Flipkart (found, or
+   * found only before the day the order was delivered), each only when it
+   * surely came before that day. -> { start, placed, delivered, posted: {
+   * date, dateLatest, dateSaid }, says (the reason: words that follow
+   * "because") }, or null when nothing came before it, or the campaign has no
+   * start date.
+   */
+  function misuseOf() {
+    const product = boughtProduct();
+    const begun = startDay(product ?? {});
+    if (!begun) return null;
+    const today = indiaDay(now());
+    const placed = orderDay(today);
+    const delivered = dayOf(daysRead.delivery, today);
+    const m = seven.m;
+    const r = m?.how === 'found' || m?.how === 'gone' ? m.review : m?.how === 'notFound' ? m.earlier : null;
+    const out = { start: begun, placed: placed && placed < begun ? placed : null, delivered: delivered && delivered < begun ? delivered : null, posted: r?.dateLatest && r.dateLatest < begun ? { date: r.date ?? null, dateLatest: r.dateLatest, dateSaid: r.dateSaid ?? null } : null };
+    if (!out.placed && !out.delivered && !out.posted) return null;
+    const p = out.posted;
+    const when = !p ? null : p.date === p.dateLatest ? `on ${dayFirst(p.date)}` : `${p.dateSaid ? quoted(p.dateSaid, 30) : 'on a day not shown'} (by ${dayFirst(p.dateLatest)} at the latest)`;
+    const parts = [out.placed ? `the purchase screenshot shows the order was placed on ${dayFirst(out.placed)}` : null, out.delivered ? `the delivery screenshot shows ${out.placed ? 'it' : 'the order'} was delivered on ${dayFirst(out.delivered)}` : null, p ? `the review on Flipkart was posted ${when}` : null].filter(Boolean);
+    const campaign = named.length ? theCampaign : 'the campaign';
+    return { ...out, says: `${joinAnd(parts)}, ${['', 'before', 'both before', 'all before'][parts.length]} ${campaign} started on ${dayFirst(begun)}` };
   }
 
   /** Writes the row's Status, Type and Note: the Note starts with the Status and its reason, then says the rest once. */
@@ -1277,6 +1375,10 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const reviewFails = Boolean(review && TYPE_FINAL[review.type] === 'fail');
     /** The review's problems, one sentence each, said after a screenshot's; not that the product bought could not be told, which only follows from the screenshot's. */
     const reviewSaid = [seven.skip === 'noProduct' ? null : review?.says[0], ...flags.map((f) => f.says)];
+    // The review, or the order on its screenshots, before the campaign's start date: Possible misuse, unless a problem fails the row.
+    const misuse = misuseOf();
+    result.misuse = misuse ? { start: misuse.start, placed: misuse.placed, delivered: misuse.delivered, posted: misuse.posted } : null;
+    const misuseSaid = misuse ? `${cap(misuse.says)}.` : null;
     let final;
     let typeKey;
     let reason;
@@ -1287,12 +1389,17 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       final = 'fail';
       typeKey = failing.type;
       reason = reasonOf(failing);
-      rest = [...detailOf(failing), ...problems.filter((p) => p !== failing).map(problemSaid), early?.says, ...reviewSaid];
+      rest = [...detailOf(failing), ...problems.filter((p) => p !== failing).map(problemSaid), misuseSaid, early?.says, ...reviewSaid];
     } else if (reviewFails) {
       final = 'fail';
       typeKey = review.type;
       reason = lowerFirst(review.says[0]);
-      rest = [...review.says.slice(1), ...problems.map(problemSaid), early?.says];
+      rest = [...review.says.slice(1), ...problems.map(problemSaid), misuseSaid, early?.says];
+    } else if (misuse) {
+      final = 'manual';
+      typeKey = 'possibleMisuse';
+      reason = misuse.says;
+      rest = ['A staff member must check whether this order can count for the campaign.', early?.says, ...problems.map(problemSaid), ...reviewSaid];
     } else if (early) {
       final = 'manual';
       typeKey = 'somethingElse';
@@ -1320,7 +1427,10 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       reviewTold = true;
       final = 'pass';
       typeKey = ratingOnly ? 'ratingOnly' : 'verified';
-      reason = ratingOnly ? 'the purchase screenshot and the delivery screenshot match the form, and the review screenshot shows a star rating with no written words' : `the purchase screenshot and the delivery screenshot match the form, and the review is live on Flipkart under the user's name, with the review screenshot's words, posted on or after the day the order was ${result.reviewsFrom?.from === 'order' ? 'placed' : 'delivered'}`;
+      const what = result.reviewsFrom?.from === 'order' ? 'placed' : 'delivered';
+      // A review kept from an earlier reading that today's reading does not reach back to: as it was when last seen.
+      const lastSeen = result.found?.kept ? result.found.lastSeen : null;
+      reason = ratingOnly ? 'the purchase screenshot and the delivery screenshot match the form, and the review screenshot shows a star rating with no written words' : lastSeen ? `the purchase screenshot and the delivery screenshot match the form, and the review was on Flipkart under the user's name when it was last seen there, on ${dayFirst(lastSeen)}, with the review screenshot's words, posted on or after the day the order was ${what}` : `the purchase screenshot and the delivery screenshot match the form, and the review is live on Flipkart under the user's name, with the review screenshot's words, posted on or after the day the order was ${what}`;
       rest = [];
     }
     // A row with no campaign for its brand was compared with its product name in the sheet, and its Note says so, as on Amazon.

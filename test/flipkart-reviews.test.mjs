@@ -18,6 +18,7 @@ import { dateFromWords, indiaDay, reviewsPageLink, reviewsInPageData, pageData, 
 import { pageForPid, reviewPageLink, linkLabel } from '../flipkart/links.js';
 import { whatPageIs } from '../flipkart/page-read.js';
 import { createFlipkartStore } from '../flipkart/store.js';
+import { keepReviews, reachOf, reaches, keptNotRead, sameReview, MAX_KEPT_REVIEWS } from '../flipkart/kept-reviews.js';
 
 const AT = '2026-10-12T05:00:00.000Z';
 const now = () => new Date(AT);
@@ -338,4 +339,55 @@ test("a review's own link, as Flipkart's reviews pages send it (/reviews/<produc
   assert.equal(plainText('It&rsquo;s &amp; &#39;fine&#x27; &ldquo;quite&rdquo; good&hellip; &unknown;'), 'It’s & \'fine\' “quite” good… &unknown;');
   const html = `<script>window.__INITIAL_STATE__ = {"r":{"type":"ProductReviewValue","id":"${ID}","author":"Made-up O&#39;Reviewer","rating":4,"title":"Nice &amp; handy","text":"It&rsquo;s light.","created":"Today"}};</script>`;
   assert.deepEqual(reviewsInPageData(html).map((r) => [r.name, r.title, r.text]), [["Made-up O'Reviewer", 'Nice & handy', 'It’s light.']]);
+});
+
+test("every review since a campaign's start date, kept with the last day it was seen on Flipkart: each reading adds the new ones and marks the day it saw the others again (not the ones only carried over from the reading it went on from); ones from before the start date are not kept; how far back a reading shows every review; the kept reviews it does not show, to search too", async () => {
+  const made = (i, date, over = {}) => ({ id: `made-up-${i}`, name: `Made-up Reviewer ${i}`, stars: 4, title: 'Nice', text: `Made-up review number ${i}.`, dateSaid: 'Today', date, dateLatest: date, city: 'Test Town', certified: true, reviewFor: null, link: null, page: 1, ...over });
+  const START = '2026-10-01';
+  // The first reading, on 05-10-2026: the reviews since the start date are kept; the one from before it is not.
+  const first = { pid: PID, readAt: '2026-10-05T05:00:00.000Z', end: 'last page', total: 1519, reviews: [made(1, '2026-10-04'), made(2, '2026-10-02'), made(3, '2026-09-28', { page: 2 })] };
+  const one = keepReviews(null, first, { start: START, now: new Date('2026-10-05T05:00:00.000Z') });
+  assert.equal(one.changed, true);
+  assert.deepEqual(one.kept, { pid: PID, start: START, updatedAt: '2026-10-05T05:00:00.000Z', reviews: [1, 2].map((i) => { const { page, ...r } = made(i, i === 1 ? '2026-10-04' : '2026-10-02'); return { ...r, lastSeen: '2026-10-05' }; }) });
+  // The same reading again: nothing changes, so nothing need be written.
+  assert.equal(keepReviews(one.kept, first, { start: START, now: new Date('2026-10-05T06:00:00.000Z') }).changed, false);
+  // Nine days later, newer reviews push review 2 out of the list Flipkart shows: kept still, last seen on 05-10-2026; review 1 is seen again.
+  const later = { pid: PID, readAt: '2026-10-14T05:00:00.000Z', end: 'last page', total: 1600, reviews: [made(5, '2026-10-13', { text: 'Made-up review number 5, &amp; more.' }), made(4, '2026-10-10'), made(1, '2026-10-04', { stars: 5 })] };
+  const two = keepReviews(one.kept, later, { start: START, now: new Date('2026-10-14T05:00:00.000Z') });
+  assert.deepEqual(two.kept.reviews.map((r) => [r.id, r.lastSeen, r.stars]), [['made-up-1', '2026-10-14', 5], ['made-up-2', '2026-10-05', 4], ['made-up-5', '2026-10-14', 4], ['made-up-4', '2026-10-14', 4]], 'its words as Flipkart shows them now');
+  // A reading that went on from an earlier one: the reviews it only carried over were not seen again.
+  const wentOn = keepReviews(one.kept, { ...later, wentOn: 2, reviews: [made(1, '2026-10-04'), made(6, '2026-10-03', { page: 2 })] }, { start: START, now: new Date('2026-10-14T05:00:00.000Z') });
+  assert.deepEqual(wentOn.kept.reviews.map((r) => [r.id, r.lastSeen]), [['made-up-1', '2026-10-05'], ['made-up-2', '2026-10-05'], ['made-up-6', '2026-10-14']]);
+  // The start date moved later: what came before it goes. "1 month ago" is kept while its last day can be on or after the start date, and the
+  // narrower days of a review read twice are kept ("12 days ago" over "1 month ago").
+  const moved = keepReviews(two.kept, { ...later, reviews: [] }, { start: '2026-10-03', now: new Date('2026-10-14T05:00:00.000Z') });
+  assert.deepEqual([moved.changed, moved.kept.reviews.map((r) => r.id)], [true, ['made-up-1', 'made-up-5', 'made-up-4']]);
+  const month = made(7, '2026-09-14', { dateSaid: '1 month ago', dateLatest: '2026-09-29' });
+  const rough = keepReviews(null, { ...later, reviews: [month] }, { start: '2026-09-20' }).kept;
+  assert.deepEqual(rough.reviews.map((r) => r.dateSaid), ['1 month ago']);
+  const exact = keepReviews(rough, { ...later, readAt: '2026-10-15T05:00:00.000Z', reviews: [{ ...month, dateSaid: '25 days ago', date: '2026-09-20', dateLatest: '2026-09-20' }] }, { start: '2026-09-20' }).kept;
+  assert.deepEqual(exact.reviews.map((r) => [r.dateSaid, r.date, r.dateLatest, r.lastSeen]), [['25 days ago', '2026-09-20', '2026-09-20', '2026-10-15']]);
+  // The same review with no ID (a page whose data could not be read) is the same review by its name, stars, title and words.
+  assert.deepEqual([sameReview(made(1, '2026-10-04'), { ...made(1, '2026-10-04'), id: null, text: 'Made-up  review number 1.' }), sameReview(made(1, '2026-10-04'), made(8, '2026-10-04', { name: 'Made-up Reviewer 1', text: 'Made-up review number 1.' }))], [true, false]);
+  assert.deepEqual(keepReviews(one.kept, { ...later, reviews: [{ ...made(2, '2026-10-02'), id: null }] }, { start: START }).kept.reviews.map((r) => [r.id, r.lastSeen]), [['made-up-1', '2026-10-05'], ['made-up-2', '2026-10-14']]);
+  // At most MAX_KEPT_REVIEWS, the newest.
+  const lots = Array.from({ length: MAX_KEPT_REVIEWS + 2 }, (_, i) => made(`m${i}`, i < 2 ? '2026-10-01' : '2026-10-05'));
+  assert.deepEqual([keepReviews(null, { ...later, reviews: lots }, { start: START }).kept.reviews.length, keepReviews(null, { ...later, reviews: lots }, { start: START }).kept.reviews.some((r) => r.date === '2026-10-01')], [MAX_KEPT_REVIEWS, false]);
+  // How far back a reading shows every review still on Flipkart: newest first, so after the last one read; all of them when it shows all Flipkart counts.
+  assert.deepEqual([reachOf(later), reachOf({ ...later, total: 3 }), reachOf({ ...later, end: 'date' }), reachOf({ ...later, reviews: [made(1, '2026-10-04'), month] }), reachOf({ end: 'none', reviews: [] })], ['2026-10-04', '0000-01-01', '2026-10-04', '2026-09-29', null]);
+  assert.deepEqual([reaches('2026-10-04', made(2, '2026-10-05')), reaches('2026-10-04', made(2, '2026-10-04')), reaches('2026-10-04', made(2, '2026-10-02')), reaches(null, made(2, '2026-10-05'))], [true, false, false, false], 'a review posted on the day of the last one read may come after it in the list');
+  // The reviews kept that a reading does not show: searched too, each marked kept.
+  assert.deepEqual(keptNotRead(later, two.kept.reviews).map((r) => [r.id, r.kept, r.lastSeen]), [['made-up-2', true, '2026-10-05']]);
+  // Kept only in data/flipkart/reviews/<product ID>-kept.json; no product ID makes no path.
+  const dir = mkdtempSync(join(tmpdir(), 'arc-flipkart-kept-'));
+  try {
+    const store = createFlipkartStore(dir);
+    assert.equal(await store.keptReviews(PID), null);
+    await store.saveKeptReviews(PID, two.kept);
+    assert.deepEqual([await store.keptReviews(PID), readdirSync(join(dir, 'flipkart', 'reviews')), statSync(join(dir, 'flipkart', 'reviews', `${PID}-kept.json`)).mode & 0o777], [two.kept, [`${PID}-kept.json`], 0o600]);
+    await assert.rejects(store.saveKeptReviews('../made-up', two.kept), /Not a Flipkart product ID/);
+    assert.equal(await store.keptReviews('../made-up'), null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

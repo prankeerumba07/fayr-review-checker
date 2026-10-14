@@ -774,6 +774,56 @@ test("step 7 over HTTP: the campaign product's reviews on Flipkart read once in 
   assert.deepEqual([asked.length, carryOn.find((e) => e.event === 'row').rowId, carryOn.at(-1).event], [14, stop.rowId, 'run-done']);
 });
 
+test("step 7 over HTTP with the campaign's start date: the reviews are read back to it, and every review read since it is kept in data/flipkart/reviews/<product ID>-kept.json with the last day it was seen, starting with the copy read before; the next reading adds the new ones; the user's review, pushed out of the reviews Flipkart shows by newer ones, is found in the kept copy, as last seen", async () => {
+  const dir = tempDir();
+  const google = driveLogin();
+  const reader = pretendReader();
+  let clock = new Date('2026-10-13T05:00:00.000Z');
+  const PID = 'TESTPID0000001';
+  const START = '2026-06-01';
+  const LINK = `https://www.flipkart.com/test-brand-steel-bottle/product-reviews/itmtestbottle01?pid=${PID}&marketplace=FLIPKART`;
+  const made = (i, date) => ({ id: `made-up-${i}`, name: `Made-up Reviewer ${i}`, stars: 4, title: 'Nice', text: `Made-up review number ${i}.`, dateSaid: 'Today', date, dateLatest: date, city: 'Test Town', certified: true, reviewFor: null, link: null, page: 1 });
+  // The review on every made-up review screenshot (pretendReader), as Flipkart shows it.
+  const MINE = { ...made('mine', '2026-10-01'), id: '00000000-0000-4000-8000-000000000001', name: 'Test Reviewer', stars: 5, title: 'Wonderful', text: 'Good product, works well.', dateSaid: '12 days ago', link: `https://www.flipkart.com/reviews/${PID}:7?reviewId=00000000-0000-4000-8000-000000000001` };
+  const asked = [];
+  // What Flipkart shows: at most its newest reviews; one from before the start date is on the last page read.
+  let shown = [made(1, '2026-10-12'), MINE, made(2, '2026-09-20'), made(3, '2026-05-20')];
+  const reviews = async (browser, pid, opts) => {
+    asked.push({ pid, since: opts.since, from: opts.from?.pages ?? null });
+    return { pid, link: LINK, readAt: clock.toISOString(), since: opts.since, pages: 1, total: 1519, end: 'last page', stoppedAt: null, says: 'Made-up.', loginBox: false, links: true, reviews: shown, product: { pid, name: 'Test Brand Steel Bottle', rating: 4.2, ratings: 100, reviews: 1519 } };
+  };
+  const routes = createFlipkartRoutes({ dataDir: dir, auth, google, shotOptions: { gapMs: 0 }, readers: { ...reader, reviews }, now: () => clock });
+  const at = await serve({ flipkart: routes });
+  assert.equal((await upload(at, 'flipkart-orders.xlsx', FIXTURE)).status, 200);
+  const rows = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  reader.set(rows);
+  const store = createFlipkartStore(dir);
+  const read = { at: '2026-10-12T05:00:00.000Z', name: rows[1].product, brand: 'Test Brand', variants: [], pid: PID, itemId: null, rating: 4.2, ratings: 100, reviews: 1519, allReviews: null };
+  await store.changeCampaigns((list) => putCampaign(list, { key: 'f00000000000e', brand: 'Test Brand', name: 'Test Brand Bottles', live: true, startDate: START, products: [{ given: PID, url: pageForPid(PID), pid: PID, itemId: null, byId: true, read, problem: null }] }));
+  const lines = (res) => res.text.trim().split('\n').map((l) => JSON.parse(l));
+  const check = async (row) => lines(await call('POST', `/local/flipkart/rows/${row.id}/check`, { at, body: Buffer.from('{}'), type: 'application/json' }));
+  const keptFile = () => JSON.parse(readFileSync(join(dir, 'flipkart', 'reviews', `${PID}-kept.json`), 'utf8'));
+  // A copy read the day before, kept before start dates: the kept reviews start with it, as seen that day.
+  await store.saveReviews(PID, { pid: PID, link: LINK, readAt: '2026-10-12T05:00:00.000Z', since: null, pages: 1, total: 1519, end: 'last page', stoppedAt: null, says: 'Made-up.', loginBox: false, links: true, reviews: [made(0, '2026-07-02')], product: { pid: PID, name: 'Test Brand Steel Bottle', rating: 4.2, ratings: 100, reviews: 1519 } });
+  // The first reading: back to the start date; every review since it kept, each seen today; the one from before it not kept.
+  const first = (await check(rows[1])).at(-1).result;
+  assert.deepEqual([asked, first.steps[6].state, first.found.how, first.found.kept], [[{ pid: PID, since: START, from: null }], 'pass', 'found', undefined]);
+  assert.deepEqual([keptFile().pid, keptFile().start, keptFile().reviews.map((r) => [r.id, r.lastSeen])], [PID, START, [['made-up-0', '2026-10-12'], ['made-up-1', '2026-10-13'], [MINE.id, '2026-10-13'], ['made-up-2', '2026-10-13']]]);
+  // Two days later, newer reviews have pushed the user's out of the ones Flipkart shows: the new ones are added, and it is found in the kept copy.
+  clock = new Date('2026-10-15T05:00:00.000Z');
+  shown = [made(4, '2026-10-15'), made(1, '2026-10-12')];
+  const second = (await check(rows[1])).at(-1).result;
+  assert.deepEqual([asked.length, asked.at(-1).since], [2, START]);
+  assert.deepEqual(keptFile().reviews.map((r) => [r.id, r.lastSeen]), [['made-up-0', '2026-10-12'], ['made-up-1', '2026-10-15'], [MINE.id, '2026-10-13'], ['made-up-2', '2026-10-13'], ['made-up-4', '2026-10-15']]);
+  assert.equal(second.steps[6].state, 'pass');
+  assert.match(second.steps[6].detail, /^Found the review among the reviews kept on this computer from earlier readings: .* It was last seen on Flipkart on 13-10-2026; today's reading does not reach back to the day it was posted\. .* 3 more reviews posted since the campaign started on 01-06-2026, kept on this computer from earlier readings, were searched too\. /);
+  // Kept with the row's check, for its page: found as last seen, with its own link; the start date and how many kept reviews were searched.
+  const kept = (await store.row(rows[1].id)).check;
+  assert.deepEqual([kept.found.how, kept.found.kept, kept.found.lastSeen, kept.found.review.link, kept.flipkart.start, kept.flipkart.kept, kept.misuse], ['found', true, '2026-10-13', MINE.link, START, 3, null]);
+  const page = (await call('GET', `/local/flipkart/rows/${rows[1].id}`, { at })).json.result;
+  assert.deepEqual([page.found.kept, page.found.lastSeen], [true, '2026-10-13']);
+});
+
 /** "Start checking" as the page sends it, its lines read as they come; stop() closes it, as Stop does. */
 function startRun(at, body = {}) {
   const lines = [];
@@ -980,9 +1030,9 @@ test('a result a staff member changed or marked right, over HTTP, as on Amazon: 
   // A row not checked yet can be given a result too, with nothing the dashboard said; "Start checking" then passes it by.
   const given = (await change(three, { final: 'manual', typeKey: 'somethingElse', note: 'Made-up.' })).json.row;
   assert.deepEqual([given.done, given.final, given.last.staff.was], [true, 'manual', null]);
-  // The Type list comes with the rows, in the Amazon screen's order, without "Amazon review is deleted", which a Flipkart row never gets; a staff member cannot choose it either.
+  // The Type list comes with the rows, in the Amazon screen's order, without "Amazon review is deleted", which a Flipkart row never gets (a staff member cannot choose it either), and with Flipkart's own "Possible misuse" before "Something else".
   const sheet = (await call('GET', '/local/flipkart/sheet', { at })).json;
-  assert.deepEqual([sheet.types.length, sheet.types[0], sheet.types.at(-1), sheet.types.some((t) => t.key === 'reviewDeleted' || /amazon/i.test(t.word))], [22, { key: 'verified', word: 'Verified' }, { key: 'somethingElse', word: 'Something else' }, false]);
+  assert.deepEqual([sheet.types.length, sheet.types[0], sheet.types.at(-2), sheet.types.at(-1), sheet.types.some((t) => t.key === 'reviewDeleted' || /amazon/i.test(t.word))], [23, { key: 'verified', word: 'Verified' }, { key: 'possibleMisuse', word: 'Possible misuse' }, { key: 'somethingElse', word: 'Something else' }, false]);
   assert.deepEqual([(await change(three, { final: 'fail', typeKey: 'reviewDeleted' })).json.message], ['Choose a Type from the list.']);
   // After a restart, all of it is still there.
   const at2 = await serve({ flipkart: make() });

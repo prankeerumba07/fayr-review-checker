@@ -16,7 +16,9 @@
 // it stopped, keeping the pages read before. Each review keeps its own link,
 // as the page's data gives it (the one link to one review Flipkart's website
 // opens). The reviews are kept only in
-// data/flipkart/reviews/<product ID>.json, with when they were read: step 7
+// data/flipkart/reviews/<product ID>.json, with when they were read (and the
+// ones since a campaign's start date in <product ID>-kept.json too, by
+// routes.js with kept-reviews.js): step 7
 // of a row's check searches them (check.js), as the Amazon checker searches
 // Amazon's reviews, read once in a checking run for every row (routes.js).
 

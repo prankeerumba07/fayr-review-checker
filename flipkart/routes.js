@@ -48,12 +48,13 @@ import { writeCells, headingStyle, WriteError } from './xlsx-write.js';
 import { readZip } from './zip.js';
 import { createScreenshots, downloadable } from './screenshots.js';
 import { runCheck, PAUSE_SAYS, keptDay, clean } from './check.js';
-import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct, campaignsFound, campaignsFor, brandIn } from './campaigns.js';
+import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct, campaignsFound, campaignsFor, brandIn, startDayFrom, startDayOf } from './campaigns.js';
 import { readOrderShot, readDeliveryShot } from './shot-read.js';
 import { readReviewShot } from './review-read.js';
 import { SettingsError } from './settings.js';
 import { FlipkartBrowser } from './browser.js';
 import { readProductReviews } from './reviews.js';
+import { keepReviews } from './kept-reviews.js';
 
 const TOO_BIG = `The file is larger than ${MAX_SHEET_BYTES / (1024 * 1024)} megabytes, so save a smaller copy (only the Flipkart tab, for example), then upload that.`;
 const MAX_JSON_BYTES = 64 * 1024;
@@ -476,6 +477,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       brand: c.brand,
       name: c.name,
       live: Boolean(c.live),
+      startDate: startDayOf(c),
       updatedAt: c.updatedAt ?? null,
       products: (c.products ?? []).map((p) => ({
         given: p.given,
@@ -506,7 +508,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   /** Why a campaign cannot be changed just now, naming the button to press later; null when it can. */
   const campaignBusy = (button) => (job ? `${READING_NOW} Wait for it to finish, then press ${button}.` : checking ? checkingSays(`press ${button}`) : null);
 
-  /** A campaign from the screen's form: its brand, its name, live or ended, and its products, one per line. A product typed before keeps what was read for it. */
+  /** A campaign from the screen's form: its brand, its name, live or ended, the day it started (day first, or none), and its products, one per line. A product typed before keeps what was read for it. */
   function campaignFrom(body, old) {
     const words = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
     const brand = words(body?.brand);
@@ -515,6 +517,8 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
     if (brand.length > 60) throw new HttpError(400, 'The brand is too long: at most 60 letters.');
     if (!/[\p{L}\p{N}]/u.test(name)) throw new HttpError(400, "Write the campaign's name, for example Koparo Clean.");
     if (name.length > 80) throw new HttpError(400, "The campaign's name is too long: at most 80 letters.");
+    const start = startDayFrom(body?.startDate);
+    if (start.problem) throw new HttpError(400, start.problem);
     const { products, problems } = productLines(body?.products);
     if (problems.length) throw new HttpError(400, problems.join(' '));
     if (!products.length) throw new HttpError(400, 'Write at least one product: a Flipkart link or a Flipkart product ID on each line.');
@@ -522,7 +526,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       const was = (old?.products ?? []).find((x) => x.given === p.given);
       return was ? { ...was, url: p.url } : { ...p, read: null, problem: null };
     });
-    return confirmProducts({ key: old?.key ?? newCampaignKey(), brand, name, live: body?.live !== false, products: kept });
+    return confirmProducts({ key: old?.key ?? newCampaignKey(), brand, name, live: body?.live !== false, startDate: start.day, products: kept });
   }
 
   /**
@@ -750,10 +754,12 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
    * Flipkart's public reviews of a campaign's product, for step 7 of the
    * check: read once in a checking run in the Live Flipkart Browser (its own
    * page, then "See all reviews", newest first; reviews.js
-   * readProductReviews), back to the oldest day the rows need (oldestDay),
-   * and kept on this computer, in data/flipkart/reviews/<product ID>.json;
-   * every row of the run searches that copy, and Flipkart is not opened
-   * again. A copy read in full in the last hour serves too. A copy that
+   * readProductReviews), back to the campaign's start date, and no further
+   * (start), or, for a campaign with no start date, back to the oldest day the
+   * rows need (oldestDay); and kept on this computer, in
+   * data/flipkart/reviews/<product ID>.json; every row of the run searches
+   * that copy, and Flipkart is not opened again. A copy read in full in the
+   * last hour serves too. A copy that
    * stopped at a newer day than a row needs is read on from where it stopped,
    * and so is one stopped part way in the last day (a robot check, a refusal,
    * an error, a page too slow, Stop), its pages kept. A reading stopped part
@@ -766,12 +772,16 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
    * of reviews (its product's page refused, say) serves the rest of the run
    * too, so Flipkart is not asked again. A copy kept before each review's own
    * link was kept (14-10-2026) is not used: the reviews are read again, once.
+   * With a start date, every review read that can be posted on or after it is
+   * also kept, with the last day it was seen on Flipkart, in
+   * data/flipkart/reviews/<product ID>-kept.json, each reading adding the new
+   * ones (kept-reviews.js), starting with the copy read before the first such
+   * reading; the answer carries them (kept) for step 7 to search too.
    */
   function reviewsSource() {
     const run = new Map();
     const covers = (r, since) => r.end === 'last page' || r.end === 'limit' || (r.end === 'date' && since !== null && r.since !== null && r.since <= since);
-    return async (pid, { rowId = null, day = null, onPage, signal = null } = {}) => {
-      const since = oldestDay(await keptRows(), rowId, day);
+    async function reading(pid, { since, onPage, signal }) {
       const kept = withLinks(await store.reviews(pid).catch(() => null));
       const age = now().getTime() - Date.parse(kept?.readAt ?? '');
       const prior = run.get(pid) ?? (wholeReading(kept) && age < KEPT_REVIEWS_MS ? kept : null);
@@ -782,6 +792,18 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       else if (read.refused && kept) await store.saveReviews(pid, { ...kept, refused: read.refused });
       if (wholeReading(read) || partReading(read) || stoppedByFlipkart(read)) run.set(pid, read);
       return { ...read, reused: false };
+    }
+    return async (pid, { rowId = null, day = null, start = null, onPage, signal = null } = {}) => {
+      // The copy read before this reading: the first time reviews since the start date are kept, they start with it, as seen when it was read.
+      const before = start ? await store.reviews(pid).catch(() => null) : null;
+      const got = await reading(pid, { since: start ?? oldestDay(await keptRows(), rowId, day), onPage, signal });
+      if (!start) return got;
+      const was = await store.keptReviews(pid).catch(() => null);
+      const first = !was && Array.isArray(before?.reviews) ? keepReviews(null, before, { start, now: now() }).kept : was;
+      // Every review since the campaign's start date, kept: this reading's added to the ones kept before.
+      const { kept, changed } = keepReviews(first, got, { start, now: now() });
+      if (changed || first !== was) await store.saveKeptReviews(pid, kept);
+      return { ...got, kept: kept.reviews };
     };
   }
   /** The kept file's rows, as kept; none when no file is kept. */

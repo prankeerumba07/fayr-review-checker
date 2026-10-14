@@ -5,7 +5,9 @@
 // review is live on Flipkart under the user's name with the screenshot's
 // words, posted on or after the delivery day (or a star rating only, as on
 // Amazon); a review not found, or that cannot be told to be the user's, is
-// for a staff member, never a Fail. Made-up rows, readings and reviews only:
+// for a staff member, never a Fail; and the review, or the order on its
+// screenshots, before the campaign's start date is Possible misuse, for a
+// staff member, unless a problem fails the row. Made-up rows, readings and reviews only:
 // nothing is downloaded, no picture is read and no page is opened.
 // Run: node test/flipkart-status.test.mjs
 
@@ -79,13 +81,15 @@ async function check({ row = ROW, answers = {}, read = reading(PURCHASE), delive
 const steps89 = (r) => [r.steps[7].state, r.steps[7].detail, r.steps[8].state, r.steps[8].detail];
 const status = (r) => [r.final, r.status, r.typeKey, r.type];
 
-test("the Statuses, Types and words are the Amazon checker's own, but for \"Amazon review is deleted\", which a Flipkart row never gets", () => {
+test("the Statuses, Types and words are the Amazon checker's own, but for \"Amazon review is deleted\", which a Flipkart row never gets, and with Flipkart's own \"Possible misuse\", for a staff member, before \"Something else\"", () => {
   const notAmazonOnly = ([k]) => k !== 'reviewDeleted';
+  const own = (list) => [...list.filter((k) => k !== 'somethingElse'), 'possibleMisuse', 'somethingElse'];
   assert.deepEqual(FINAL_WORDS, AMAZON_FINAL_WORDS);
-  assert.deepEqual(TYPE_KEYS, AMAZON_TYPE_KEYS.filter((k) => k !== 'reviewDeleted'), 'every other Type, in the order the Amazon screen lists them');
-  assert.deepEqual({ ...TYPE_WORDS }, Object.fromEntries(Object.entries(DEFAULT_SETTINGS.typeWords).filter(notAmazonOnly)));
-  assert.deepEqual({ ...TYPE_FINAL }, Object.fromEntries(Object.entries(AMAZON_TYPE_FINAL).filter(notAmazonOnly)));
-  assert.equal(TYPE_KEYS.length, 22);
+  assert.deepEqual(TYPE_KEYS, own(AMAZON_TYPE_KEYS.filter((k) => k !== 'reviewDeleted')), 'every other Type, in the order the Amazon screen lists them');
+  assert.deepEqual(Object.keys(TYPE_WORDS), TYPE_KEYS);
+  assert.deepEqual({ ...TYPE_WORDS }, { ...Object.fromEntries(Object.entries(DEFAULT_SETTINGS.typeWords).filter(notAmazonOnly)), possibleMisuse: 'Possible misuse' });
+  assert.deepEqual({ ...TYPE_FINAL }, { ...Object.fromEntries(Object.entries(AMAZON_TYPE_FINAL).filter(notAmazonOnly)), possibleMisuse: 'manual' });
+  assert.equal(TYPE_KEYS.length, 23);
   assert.ok(!Object.values(TYPE_WORDS).some((w) => /amazon/i.test(w)), 'no Type names Amazon');
   for (const [k, why] of [['pass', 'all is well'], ['fail', 'the order ID is different.'], ['manual', 'the review was not found']]) assert.equal(finalSentence(k, why), amazonFinalSentence(k, why));
   assert.equal(lowerFirst('The review is not there.'), 'the review is not there');
@@ -224,4 +228,34 @@ test('a check that paused (a download, or Flipkart stopping the reading before t
   assert.deepEqual([stopped.stopped, stopped.final], [true, null]);
   const broken = await check({ readDelivery: async () => { throw new Error('made-up'); } });
   assert.deepEqual([broken.final, broken.typeKey, broken.finalSays], ['manual', 'somethingElse', 'A staff member needs to check this transaction because something went wrong on this computer while reading the delivery screenshot.']);
+});
+
+test("Possible misuse: the order placed or delivered before the campaign's start date (on its screenshots), or the review on Flipkart posted before it, is for a staff member, with a Note saying what came before it and the days; a problem that fails the row still fails it, and the Note says it too; a campaign with no start date, as before", async () => {
+  const started = (startDate) => [{ ...CAMPAIGN, startDate }];
+  // Placed before the start date: the rest would pass.
+  const placed = await check({ campaigns: started('2026-07-22') });
+  assert.deepEqual(status(placed), ['manual', 'Needs Manual Staff Checking', 'possibleMisuse', 'Possible misuse']);
+  assert.equal(placed.note, 'A staff member needs to check this transaction because the purchase screenshot shows the order was placed on 20-07-2026, before the campaign "Test Brand Bottles" started on 22-07-2026. A staff member must check whether this order can count for the campaign.');
+  assert.deepEqual([placed.misuse, placed.steps[8].detail], [{ start: '2026-07-22', placed: '2026-07-20', delivered: null, posted: null }, 'Needs Manual Staff Checking: Possible misuse.']);
+  // Placed and delivered before it; and the review too.
+  const both = await check({ campaigns: started('2026-08-01') });
+  assert.equal(both.finalSays, 'A staff member needs to check this transaction because the purchase screenshot shows the order was placed on 20-07-2026 and the delivery screenshot shows it was delivered on 23-07-2026, both before the campaign "Test Brand Bottles" started on 01-08-2026.');
+  const all = await check({ campaigns: started('2026-10-05') });
+  assert.equal(all.finalSays, 'A staff member needs to check this transaction because the purchase screenshot shows the order was placed on 20-07-2026, the delivery screenshot shows it was delivered on 23-07-2026 and the review on Flipkart was posted on 01-10-2026, all before the campaign "Test Brand Bottles" started on 05-10-2026.');
+  assert.deepEqual(all.misuse, { start: '2026-10-05', placed: '2026-07-20', delivered: '2026-07-23', posted: { date: '2026-10-01', dateLatest: '2026-10-01', dateSaid: '12 days ago' } });
+  // The review the screenshot shows, posted before the start date and before the order was delivered: not found for this order, and Possible misuse.
+  const old = await check({ campaigns: started('2026-07-18'), reviews: [made(1), made(2), { ...MINE, dateSaid: '10 Jul, 2026', date: '2026-07-10', dateLatest: '2026-07-10' }] });
+  assert.deepEqual([old.typeKey, old.note], ['possibleMisuse', 'A staff member needs to check this transaction because the review on Flipkart was posted on 10-07-2026, before the campaign "Test Brand Bottles" started on 18-07-2026. A staff member must check whether this order can count for the campaign. The only review on Flipkart with the review screenshot\'s words under the name on the review screenshot was posted before 23-07-2026, the day the order was delivered, so it does not count for this order.']);
+  // "1 month ago" only when its last day is before the start date.
+  const rough = { ...MINE, dateSaid: '4 months ago', date: '2026-06-10', dateLatest: '2026-07-10' };
+  assert.equal((await check({ campaigns: started('2026-07-11'), reviews: [made(1), rough] })).finalSays, 'A staff member needs to check this transaction because the review on Flipkart was posted "4 months ago" (by 10-07-2026 at the latest), before the campaign "Test Brand Bottles" started on 11-07-2026.');
+  assert.equal((await check({ campaigns: started('2026-07-05'), reviews: [made(1), rough] })).typeKey, 'reviewNotLive', 'it may be on or after the start date');
+  // A problem that fails the row still fails it, and the Note says what came before the start date too.
+  const failed = await check({ campaigns: started('2026-08-01'), row: { ...ROW, shots: { ...ROW.shots, delivery: cell() } } });
+  assert.deepEqual([failed.final, failed.typeKey], ['fail', 'deliveryShotMissing']);
+  assert.match(failed.note, /^This transaction failed because the user did not give a delivery screenshot\. .*The purchase screenshot shows the order was placed on 20-07-2026, before the campaign "Test Brand Bottles" started on 01-08-2026\./);
+  // No start date, or every day on or after it: as before.
+  const none = await check({ campaigns: started(null) });
+  const after = await check({ campaigns: started('2026-07-20') });
+  assert.deepEqual([[none.final, none.typeKey, none.misuse], [after.final, after.typeKey, after.misuse]], [['pass', 'verified', null], ['pass', 'verified', null]]);
 });

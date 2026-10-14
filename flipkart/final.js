@@ -7,19 +7,22 @@
 //          Flipkart not accepting the review
 //   Needs Manual Staff Checking: anything the dashboard could not decide: a
 //          screenshot it could not open or read, a review not found or that
-//          cannot be told to be the user's, and a possible reading mistake (an
+//          cannot be told to be the user's, a possible reading mistake (an
 //          order ID, an order date or an amount one digit away from the sheet,
-//          or no "Delivered" found on the delivery screenshot)
+//          or no "Delivered" found on the delivery screenshot), and Possible
+//          misuse, Flipkart's own Type: the review, or the order on its
+//          screenshots, came before the campaign's start date
 // A row not checked yet has none. (In the code, the Status's key is called
 // "final": 'pass', 'fail' or 'manual'.) The Type words are the Amazon
 // checker's own (its settings' typeWords as they come), never read from its
 // settings file, but for "Amazon review is deleted", which a Flipkart row
-// never gets.
+// never gets, and with "Possible misuse", which the Amazon checker does not
+// have.
 
 export const FINAL_KEYS = ['pass', 'fail', 'manual'];
 export const FINAL_WORDS = { pass: 'Pass', fail: 'Fail', manual: 'Needs Manual Staff Checking' };
 
-/** Every Type, in the order the Amazon screen lists them, with its words; not "Amazon review is deleted". */
+/** Every Type, in the order the Amazon screen lists them, with its words; not "Amazon review is deleted", and Flipkart's own "Possible misuse" before "Something else". */
 export const TYPE_WORDS = Object.freeze({
   verified: 'Verified',
   ratingOnly: 'Rating Only',
@@ -42,6 +45,7 @@ export const TYPE_WORDS = Object.freeze({
   reviewerNotMatching: 'Reviewer name is different',
   reviewShotNotMatching: 'Review screenshot not matching',
   cannotAddReviews: 'User not being able to add reviews',
+  possibleMisuse: 'Possible misuse',
   somethingElse: 'Something else',
 });
 export const TYPE_KEYS = Object.keys(TYPE_WORDS);
@@ -69,6 +73,7 @@ export const TYPE_FINAL = Object.freeze({
   reviewLinkNeeded: 'manual',
   reviewerNotMatching: 'manual',
   reviewShotNotMatching: 'manual',
+  possibleMisuse: 'manual',
   somethingElse: 'manual',
 });
 

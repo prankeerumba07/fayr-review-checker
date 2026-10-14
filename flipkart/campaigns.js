@@ -1,4 +1,6 @@
-// Flipkart campaigns: a brand, a name, live or ended, and the Flipkart products
+// Flipkart campaigns: a brand, a name, live or ended, the day it started
+// (written day first, as 01-10-2026; a campaign with none works as before it
+// had one), and the Flipkart products
 // users may buy for it, typed as Flipkart links or Flipkart product IDs (the
 // pid, Flipkart's version of Amazon's ASIN), one per line. Each product is
 // read once from its Flipkart page in the Live Flipkart Browser (one page at a
@@ -39,6 +41,29 @@ export const PREVENTED_SAYS = {
   blocked: 'Flipkart prevented this check: it refused the page. This product was not read; wait a while, then press "Read the products again".',
   error: 'Flipkart prevented this check: it showed an error. This product was not read; press "Read the products again" later.',
 };
+
+/** A campaign's start date as kept: YYYY-MM-DD. */
+const START_DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** What the form says when the start date cannot be read. */
+export const START_SAYS = "Write the day the campaign started, the day first, like 01-10-2026, or leave it empty.";
+
+/**
+ * The day a campaign started, as staff typed it, the day first (01-10-2026;
+ * 1-10-2026, 01/10/2026 and 01.10.2026 too). -> { day: YYYY-MM-DD, or null
+ * when nothing was typed } or { problem } when it is not a real day.
+ */
+export function startDayFrom(text) {
+  const t = String(text ?? '').trim();
+  if (!t) return { day: null };
+  const m = t.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+  if (!m) return { problem: START_SAYS };
+  const [d, mo, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const at = new Date(Date.UTC(y, mo - 1, d));
+  if (y < 2000 || at.getUTCFullYear() !== y || at.getUTCMonth() !== mo - 1 || at.getUTCDate() !== d) return { problem: START_SAYS };
+  return { day: at.toISOString().slice(0, 10) };
+}
+/** A start date as kept, or null. */
+export const startDayOf = (c) => (START_DAY.test(String(c?.startDate ?? '')) ? c.startDate : null);
 
 /** When a product was typed as its product ID alone and no product page opened from it. */
 export const ADD_LINK_SAYS = "No Flipkart product page opened from this product ID. Add this product's link instead.";
@@ -188,9 +213,9 @@ export const usable = (p) => Boolean(p?.read?.name && !p.problem);
  * The campaigns a row uses, as on Amazon: every live one whose brand is in the
  * row's product name in the sheet, or else in the file's name or the tab's
  * name (places), with only the products that are used, as the check needs
- * them: { key, name, brand, live, products: [{ pid, name, short, variants:
- * [pid] }] }, each product by its real name read from Flipkart. Copied from
- * amazon/campaigns.js.
+ * them: { key, name, brand, live, startDate (YYYY-MM-DD, or null), products:
+ * [{ pid, name, short, variants: [pid] }] }, each product by its real name
+ * read from Flipkart. Copied from amazon/campaigns.js.
  */
 export function campaignsFor(productName, campaigns, places = []) {
   return campaignsFound(productName, campaigns, places).list.map((c) => ({
@@ -198,6 +223,7 @@ export function campaignsFor(productName, campaigns, places = []) {
     name: c.name,
     brand: c.brand,
     live: Boolean(c.live),
+    startDate: startDayOf(c),
     products: (c.products ?? []).filter(usable).map((p) => ({ pid: p.read.pid ?? p.pid ?? null, name: p.read.name, short: shortName(p.read.name), variants: (p.read.variants ?? []).map((v) => v.pid).filter(Boolean) })),
   }));
 }

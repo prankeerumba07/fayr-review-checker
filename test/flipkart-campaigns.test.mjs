@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { productLines, readProduct, needsReading, usable, brandIn, brandProblem, confirmProducts, clean, PREVENTED_SAYS, ADD_LINK_SAYS, MAX_CAMPAIGN_PRODUCTS, CAMPAIGN_KEY, newCampaignKey } from '../flipkart/campaigns.js';
+import { productLines, readProduct, needsReading, usable, brandIn, brandProblem, confirmProducts, clean, PREVENTED_SAYS, ADD_LINK_SAYS, MAX_CAMPAIGN_PRODUCTS, CAMPAIGN_KEY, newCampaignKey, startDayFrom, START_SAYS, campaignsFor } from '../flipkart/campaigns.js';
 import { isFlipkart, isFlipkartSite, pidFrom, itemIdFrom, pageForPid, pageForLink } from '../flipkart/links.js';
 import { whatPageIs, productOnPage } from '../flipkart/page-read.js';
 
@@ -83,6 +83,15 @@ test('the products, one per line: a Flipkart link or a Flipkart product ID alone
   assert.deepEqual(productLines(many).problems, ['A campaign can have at most 30 products.']);
   assert.equal(productLines(many.split('\n').slice(0, 30).join('\n')).problems.length, 0, '30 is fine');
   assert.match(newCampaignKey(), CAMPAIGN_KEY);
+});
+
+test("the day a campaign started, typed day first (with -, / or .), kept as a day; nothing typed is none; anything else is said in plain words; a row's campaigns carry it, and one saved before start dates has none", () => {
+  assert.deepEqual(['01-10-2026', '1-10-2026', '01/10/2026', '1.10.2026', ' 29-02-2028 ', '', '  ', null].map(startDayFrom), [{ day: '2026-10-01' }, { day: '2026-10-01' }, { day: '2026-10-01' }, { day: '2026-10-01' }, { day: '2028-02-29' }, { day: null }, { day: null }, { day: null }]);
+  for (const t of ['29-02-2026', '2026-10-01', '10/2026', '01-10-26', '32-01-2026', '01-00-2026', '01-10-1999', 'today']) assert.deepEqual(startDayFrom(t), { problem: START_SAYS }, t);
+  const products = [{ given: GLOW_PID, pid: GLOW_PID, read: READ_GLOW, problem: null }];
+  const live = (startDate) => ({ key: 'f0000000000a1', brand: 'Test Glow', name: 'Test Glow Clean', live: true, ...(startDate === undefined ? {} : { startDate }), products });
+  assert.deepEqual(campaignsFor('Test Glow Face Mask', [live('2026-10-01')]).map((c) => [c.name, c.startDate, c.products.map((p) => p.pid)]), [['Test Glow Clean', '2026-10-01', [GLOW_PID]]]);
+  assert.deepEqual([campaignsFor('Test Glow Face Mask', [live(undefined)])[0].startDate, campaignsFor('Test Glow Face Mask', [live('01-10-2026')])[0].startDate], [null, null], 'none kept, or not kept as a day');
 });
 
 test("Flipkart's own links: its websites, the product ID and the item ID in a link, and the page opened for a product", () => {
