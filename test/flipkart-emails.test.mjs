@@ -1,15 +1,16 @@
-// The email for a user, ready to copy (flipkart/emails.js): the Amazon
-// checker's emails (amazon/emails.js) with Flipkart in place of Amazon, one
-// for every Type but Verified and Rating Only (Something else too, which
-// Amazon has none for), filled in for a row as on Amazon. Made-up rows and
-// checks only: nothing is read, opened or sent.
+// The email for a user, ready to copy (flipkart/emails.js): one for every
+// Type but Verified and Rating Only (Something else too), short and clear
+// after staff tried them on real rows: what we checked, what we found for
+// this order, and exactly what the user must send, with numbered steps for
+// finding it on Flipkart. Made-up rows and checks only: nothing is read,
+// opened or sent.
 // Run: node test/flipkart-emails.test.mjs
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EMAIL_KEYS, EMAILS, emailFor, emailName, emailKeyFor, hasEmail, whatIsWrong, fill } from '../flipkart/emails.js';
+import { EMAIL_KEYS, EMAILS, emailFor, emailName, emailKeyFor, hasEmail, whatIsWrong, fill, deliveredToName, namesFound } from '../flipkart/emails.js';
 import { TYPE_KEYS } from '../flipkart/final.js';
-import { EMAIL_KEYS as AMAZON_EMAIL_KEYS, DEFAULT_EMAILS as AMAZON_EMAILS, PLACEHOLDERS as AMAZON_PLACEHOLDERS, fill as amazonFill } from '../amazon/emails.js';
+import { EMAIL_KEYS as AMAZON_EMAIL_KEYS, PLACEHOLDERS as AMAZON_PLACEHOLDERS, fill as amazonFill } from '../amazon/emails.js';
 
 const ID = 'OD100000000000000002';
 /** A made-up row as the Flipkart store keeps it. */
@@ -26,88 +27,136 @@ const row = (over = {}) => ({
   values: {},
   ...over,
 });
-const HELLO = `Hello Test Person Two,\n\nThis is about your order ${ID} for Test Brand Steel Bottle.`;
-const words = (email) => `${email.subject}\n${email.message}`;
+/** A made-up check, as kept with a row: what each screenshot showed, and the review found on Flipkart. */
+const CHECK = {
+  order: { ok: true, details: { orderId: { state: 'different', shown: 'OD100000000000000009' }, orderDate: { state: 'same', shown: '20-07-2026' }, amount: { state: 'different', shown: '₹399' }, product: { state: 'different', shown: 'Test Brand Lunch Box' } } },
+  delivery: { ok: true, delivered: true, notDelivered: null, details: { product: { state: 'not shown' } }, text: `Order ID ${ID}\nDelivered, Jul 23\nDelivered to Test Person Two at Home` },
+  review: { ok: true, kind: 'written', name: 'Other Test Person', stars: 4, tab: null, form: false },
+  found: { how: 'otherName', nameFrom: 'screenshot', count: 1, before: 0, review: { name: 'Other Test Person', stars: 5 } },
+  reviewsFrom: { day: '2026-07-23', from: 'delivery' },
+  flipkart: { oldest: '2026-07-01' },
+};
+const words = (t) => t.split(/\s+/).filter(Boolean).length;
+const REVIEW_STEPS = '1. Open the Flipkart app and tap Account.\n2. Tap My Reviews (scroll down if needed).\n3. Open the Published tab.\n4. Find your review of this product.\n5. Take a screenshot that shows your name, the product and your review.';
 
-test('every Type but Verified and Rating Only has an email, Something else too: the Amazon checker\'s emails, with Flipkart in place of Amazon', () => {
+test('every Type but Verified and Rating Only has an email, Something else too, each short and clear: a short subject, what we checked, what we found, and what to send, with numbered steps for finding it on Flipkart', () => {
   assert.deepEqual(EMAIL_KEYS.filter((k) => k !== 'notDeliveredCancelled'), TYPE_KEYS.filter((k) => k !== 'verified' && k !== 'ratingOnly'), 'in the order the Types are listed');
-  assert.deepEqual(EMAIL_KEYS, [...AMAZON_EMAIL_KEYS.filter((k) => k !== 'reviewDeleted'), 'somethingElse'], "Amazon's, but for its deleted review, and with Something else");
+  assert.deepEqual(EMAIL_KEYS, [...AMAZON_EMAIL_KEYS.filter((k) => k !== 'reviewDeleted'), 'somethingElse'], "the Amazon screen's, but for its deleted review, and with Something else");
   assert.equal(EMAIL_KEYS.indexOf('notDeliveredCancelled'), EMAIL_KEYS.indexOf('notDelivered') + 1, 'a second email for Not delivered, as on Amazon');
   assert.deepEqual(Object.keys(EMAILS.templates), EMAIL_KEYS);
   assert.deepEqual([hasEmail('verified'), hasEmail('ratingOnly'), hasEmail('reviewDeleted'), hasEmail('somethingElse'), hasEmail('notDelivered')], [false, false, false, true, true]);
-  assert.equal(EMAILS.signOff, AMAZON_EMAILS.signOff);
+  assert.deepEqual([emailName('notDelivered'), emailName('notDeliveredCancelled'), emailName('somethingElse')], ['Not delivered', 'Not delivered (cancelled or returned)', 'Something else']);
   const known = new Set(AMAZON_PLACEHOLDERS.map((p) => p.word));
+  const noSteps = ['duplicate', 'needDriveAccess', 'needAccess'];
   for (const k of EMAIL_KEYS) {
     const t = EMAILS.templates[k];
-    // Amazon's subject, with Flipkart in place of Amazon; Something else's is written the same way.
-    if (AMAZON_EMAILS.templates[k]) assert.equal(t.subject, AMAZON_EMAILS.templates[k].subject.replaceAll('Amazon', 'Flipkart'), k);
-    else assert.match(t.subject, /^Your order \{order ID\}: /, k);
-    assert.ok(t.message.startsWith('Hello {name},\n\nThis is about your order {order ID} for {product}.\n\n') && t.message.endsWith('\n\n{sign-off}'), k);
-    // Nothing that fits only Amazon: its name, where its orders are, its email saying a review is live.
-    assert.doesNotMatch(words(t), /Amazon|Your Orders|Returns & Orders|review is live|tap Submit/, k);
-    for (const m of words(t).matchAll(/\{[^{}]*\}/g)) assert.ok(known.has(m[0]), `${k}: ${m[0]} is a word Amazon's emails fill in too`);
-    assert.doesNotMatch(words(t), /--|\bTBD\b/, `${k}: short and simple`);
+    assert.match(t.subject, /^Order \{order ID\}: [a-z][a-zA-Z ]+$/, `${k}: a short, clear subject`);
+    assert.ok(t.subject.split(' ').length <= 9, `${k}: ${t.subject}`);
+    assert.match(t.message, /^Hello \{name\},\n\nWe (checked|looked for|compared) /, `${k}: what we checked comes first`);
+    assert.ok(t.message.endsWith('\n\n{sign-off}'), k);
+    for (const m of `${t.subject} ${t.message}`.matchAll(/\{[^{}]*\}/g)) assert.ok(known.has(m[0]), `${k}: ${m[0]} is a word filled in for the row`);
+    assert.doesNotMatch(`${t.subject}\n${t.message}`, /Amazon|--|\bTBD\b/, k);
+    // Numbered steps for finding what to send on Flipkart, but where there is nothing to find there.
+    if (!noSteps.includes(k)) assert.match(t.message, /\n1\. [^\n]*Flipkart (app|website)|\n1\. Go to flipkart\.com/, `${k}: numbered steps`);
   }
-  // Where a Flipkart user finds an order and a review.
-  assert.match(EMAILS.templates.orderShotMissing.message, /In the Flipkart app: tap "Account", then "Orders", then this order\./);
-  assert.match(EMAILS.templates.reviewNotLive.message, /open "My Reviews" in your account, click "Share" under your review, and copy the link\./);
-  assert.match(EMAILS.templates.reviewNotLive.message, /a review Flipkart has published is on the "Published" tab/);
-  assert.match(EMAILS.templates.cannotAddReviews.message, /Flipkart did not accept your review for this product\./);
-  assert.deepEqual([emailName('notDelivered'), emailName('notDeliveredCancelled'), emailName('somethingElse')], ['Not delivered', 'Not delivered (cancelled or returned)', 'Something else']);
-  // Filled in the same way as on Amazon.
-  const values = { name: 'Test Person Two', orderId: ID, product: '', whatIsWrong: '', signOff: 'Made-up sign-off' };
+  // The proof of a review: a screenshot from My Reviews, on its Published tab, found in the app.
+  for (const k of ['reviewLinkMissing', 'reviewNotClear', 'wrongReviewLink', 'reviewNotLive', 'reviewShotNotMatching', 'reviewerNotMatching', 'cannotAddReviews']) {
+    assert.match(EMAILS.templates[k].message, /screenshot of (?:your review|the review|it) from (?:the Published tab of My Reviews|your own account)/, k);
+    assert.ok(EMAILS.templates[k].message.includes(REVIEW_STEPS), `${k}: the steps to My Reviews, on its Published tab`);
+  }
+  // A link only where one is truly needed, and only from the Flipkart website.
+  const asksLink = EMAIL_KEYS.filter((k) => /send the link|paste it into your reply/.test(EMAILS.templates[k].message));
+  assert.deepEqual(asksLink, ['reviewLinkNeeded']);
+  assert.match(EMAILS.templates.reviewLinkNeeded.message, /How to get the link, on a computer \(links from the Flipkart app do not open on a computer\):\n1\. Go to flipkart\.com and log in\.\n2\. Open My Reviews in your account\.\n3\. Click Share under your review of this product\.\n4\. Copy the link and paste it into your reply\./);
+  assert.match(EMAILS.templates.wrongReviewLink.message, /You do not need to send a link\./);
+  assert.match(EMAILS.templates.orderShotMissing.message, /How to find it:\n1\. Open the Flipkart app and tap Account\.\n2\. Tap Orders, then tap this order\.\n3\. Take a screenshot that shows the order ID, the product and the amount\./);
+  // Filled in the same way as on Amazon, but a blank product goes with its brackets.
+  const values = { name: 'Test Person Two', orderId: ID, product: 'Test Brand Steel Bottle', whatIsWrong: 'Made-up.', signOff: 'Made-up sign-off' };
   for (const k of EMAIL_KEYS) assert.equal(fill(EMAILS.templates[k].message, values, { addSignOff: true }), amazonFill(EMAILS.templates[k].message, values, { addSignOff: true }), k);
+  assert.equal(fill('We checked your entry for your Flipkart order {order ID} ({product}). See {product}.', { orderId: ID }), `We checked your entry for your Flipkart order ${ID}. See this product.`);
 });
 
-test('the email is filled in for the row, as on Amazon: the name, the order ID, the product, what is wrong from its last check, and the sign-off', () => {
-  const r = row();
-  const idCheck = { order: { ok: true, details: { orderId: { state: 'different', shown: 'OD100000000000000009' } } }, delivery: null };
-  const id = emailFor({ typeKey: 'orderIdNotMatching', row: r, result: idCheck, reviewer: 'Test Person Two' });
-  assert.deepEqual([id.key, id.name, id.subject], ['orderIdNotMatching', 'Order ID is not matching', `Your order ${ID}: the order ID does not match`]);
-  assert.ok(id.message.startsWith(`${HELLO}\n\nYou gave order ID ${ID}, but your purchase screenshot shows order ID OD100000000000000009.\n\nPlease reply to this email with the screenshot of the right order, or with the right order ID.\n\nHow to take it:\nIn the Flipkart app:`), id.message);
-  assert.ok(id.message.endsWith('The screenshot must show the order ID, the amount and the product.\n\nThank you,\nThe support team'), id.message);
-  // No name in the file: "Hello," alone; no check to tell from (a result a staff member chose): a sentence that is still true.
-  const bare = emailFor({ typeKey: 'orderIdNotMatching', row: r, result: null, reviewer: null });
-  assert.ok(bare.message.startsWith(`Hello,\n\nThis is about your order ${ID} for Test Brand Steel Bottle.\n\nThe order ID you gave, ${ID}, is not the order ID on your screenshot.`), bare.message);
-  // The order date and the amount, as the sheet has them and as the screenshots show them.
-  const details = { orderDate: { state: 'different', shown: '21-07-2026' }, amount: { state: 'different', shown: '₹399' } };
-  assert.equal(whatIsWrong('orderDetailsNotMatching', { row: r, result: { order: { ok: true, details }, delivery: { ok: true, details: { orderDate: details.orderDate } } } }), 'The order date is different: you gave 20-07-2026, but your screenshots show 21-07-2026. The amount is different: you gave ₹349, but your purchase screenshot shows ₹399.');
-  assert.equal(whatIsWrong('productNotMatching', { row: r, result: { order: { ok: true, details: { product: { state: 'different', shown: 'Test Brand Lunch Box', campaign: true } } } } }), 'Your purchase screenshot shows "Test Brand Lunch Box", but the product should be "Test Brand Steel Bottle".');
-  assert.equal(whatIsWrong('orderNotClear', { row: r, result: { order: { ok: true, details: { orderId: { state: 'not shown' }, amount: { state: 'same', shown: '₹349' }, product: { state: 'not shown' } } } } }), 'On the purchase screenshot you sent, we could not see the order ID and the product.');
-  assert.equal(whatIsWrong('deliveryNotClear', { row: r, result: { delivery: { ok: true, delivered: true, details: { orderId: { state: 'same', shown: ID }, product: { state: 'not shown' } } } } }), 'The delivery screenshot you sent does not show the product, so it is not enough.');
-  // A picture that could not be had.
+test('each email filled in for a made-up row stays short (about 150 words at most) and says what we found for this order', () => {
+  for (const k of EMAIL_KEYS) {
+    const typeKey = k === 'notDeliveredCancelled' ? 'notDelivered' : k;
+    const result = k === 'notDeliveredCancelled' ? { delivery: { ok: true, delivered: false, notDelivered: 'Cancelled', details: {} } } : CHECK;
+    const email = emailFor({ typeKey, row: row({ product: { text: 'Test Brand Steel Bottle 1 Litre Blue' } }), result, reviewer: 'Test Person Two' });
+    assert.equal(email.key, k);
+    assert.ok(words(email.message) <= 150, `${k}: ${words(email.message)} words`);
+    assert.ok(email.message.startsWith('Hello Test Person Two,\n\nWe '), k);
+    assert.ok(email.message.endsWith('\n\nThank you,\nThe support team'), k);
+    assert.match(email.subject, new RegExp(`^Order ${ID}: `), k);
+  }
+  const fact = (key, result = CHECK, r = row()) => whatIsWrong(key, { row: r, result, reviewer: 'Test Person Two' });
+  assert.equal(fact('orderIdNotMatching'), `In the form you gave order ID ${ID}, but your purchase screenshot shows order ID OD100000000000000009.`);
+  assert.equal(fact('orderDetailsNotMatching'), 'In the form you gave the amount ₹349, but your purchase screenshot shows ₹399.');
+  assert.equal(fact('orderDetailsNotMatching', { order: { ok: true, details: { orderDate: { state: 'different', shown: '21-07-2026' } } }, delivery: { ok: true, details: { orderDate: { state: 'different', shown: '21-07-2026' } } } }), 'In the form you gave the order date 20-07-2026, but your screenshots show 21-07-2026.');
+  assert.equal(fact('productNotMatching'), 'Your purchase screenshot shows "Test Brand Lunch Box", not "Test Brand Steel Bottle".');
+  assert.equal(fact('orderNotClear', { order: { ok: true, details: { orderId: { state: 'not shown' }, amount: { state: 'not shown' }, product: { state: 'same' } } } }), 'We could not see the order ID or the amount on it.');
+  assert.equal(fact('orderNotClear', { order: { ok: false } }), 'We could not read it.');
+  assert.equal(fact('deliveryNotClear', { delivery: { ok: true, delivered: false, details: { product: { state: 'not shown' } } } }), 'It does not show the word "Delivered" or the product.');
+  assert.equal(fact('notDelivered', { delivery: { ok: true, delivered: false, notDelivered: 'Shipped', details: {} } }), 'Your delivery screenshot says "Shipped", not "Delivered".');
+  const typed = row({ shots: { ...row().shots, delivery: { text: 'Order cancelled', links: [] } } });
+  assert.deepEqual([emailKeyFor('notDelivered', { row: typed }), fact('notDeliveredCancelled', null, typed)], ['notDeliveredCancelled', 'In the form you wrote "Order cancelled".']);
+  assert.equal(fact('notDelivered', null, row({ shots: { ...row().shots, delivery: { text: 'Not delivered yet', links: [] } } })), 'In the form you wrote "Not delivered yet" instead of sending a delivery screenshot.');
   const unopened = row({ pictures: { order: [{ link: 'https://drive.google.com/open?id=1TestOrder', problem: { kind: 'drive', site: 'Google Drive', says: 'made-up', noAccess: true } }], delivery: [], review: [], reviewShot: [] } });
-  assert.equal(emailFor({ typeKey: 'needDriveAccess', row: unopened, reviewer: 'Test Person Two' }).message, `${HELLO}\n\nWe could not open the purchase screenshot you sent on Google Drive.\n\nPlease reply to this email with the same screenshot again, as a clear picture.\n\nThank you,\nThe support team`);
-  // Something else, which Amazon has no email for.
-  const other = emailFor({ typeKey: 'somethingElse', row: r, reviewer: 'Test Person Two' });
-  assert.deepEqual([other.key, other.name, other.subject], ['somethingElse', 'Something else', `Your order ${ID}: we could not finish checking it`]);
-  assert.ok(other.message.startsWith(`${HELLO}\n\nWe could not finish checking your order from what you sent.\n\nPlease reply to this email with a clear screenshot of this order and a screenshot of your review on Flipkart`), other.message);
+  assert.equal(fact('needDriveAccess', null, unopened), 'We could not open your purchase screenshot on Google Drive.');
+  assert.equal(fact('reviewShotNotMatching'), 'Your review screenshot shows 4 stars, but your review on Flipkart has 5 stars.');
+  assert.equal(fact('reviewLinkNeeded', { found: { how: 'several', count: 2 } }), 'We found 2 reviews on Flipkart with the same words, so we cannot tell which one is yours.');
+  assert.equal(fact('cannotAddReviews'), 'It shows a message from Flipkart that your review was not accepted.');
+  // With nothing known from a check (a result a staff member chose), a sentence that is still true.
+  assert.deepEqual(['orderIdNotMatching', 'productNotMatching', 'reviewerNotMatching', 'reviewNotLive'].map((k) => fact(k, null)), [`The order ID on your screenshot is not ${ID}, the one in your form.`, 'Your screenshot shows a different product.', 'We found only one name, so we could not match it:\n- In your form: Test Person Two', 'It is not among the reviews Flipkart shows for this product.']);
   // Pass has no email, and neither has a Type this dashboard does not know.
-  assert.deepEqual(['verified', 'ratingOnly', 'reviewDeleted', 'notAType', null].map((typeKey) => emailFor({ typeKey, row: r })), [null, null, null, null, null]);
-  // A word this dashboard never shows is hidden in the email too, as on Amazon.
+  assert.deepEqual(['verified', 'ratingOnly', 'reviewDeleted', 'notAType', null].map((typeKey) => emailFor({ typeKey, row: row() })), [null, null, null, null, null]);
+  // A word this dashboard never shows is hidden in the email too; no name in the file: "Hello," alone.
   const hidden = Buffer.from('cmVmdW5k', 'base64').toString('utf8');
-  assert.ok(emailFor({ typeKey: 'duplicate', row: row({ product: { text: `Test ${hidden} Bottle` } }), reviewer: 'Test Person Two' }).message.includes('for Test … Bottle.'));
+  const odd = emailFor({ typeKey: 'duplicate', row: row({ product: { text: `Test ${hidden} Bottle` } }), reviewer: null });
+  assert.ok(odd.message.startsWith(`Hello,\n\nWe checked your entry for your Flipkart order ${ID} (Test … Bottle). This order, screenshot or review was already sent in another entry, so it cannot count again.`), odd.message);
 });
 
-test("a Flipkart row's own findings in its email: the delivery screenshot's words (cancelled or returned gets Amazon's second email), the name on the review found on Flipkart, and its stars", () => {
-  const r = row();
-  const said = (word) => ({ delivery: { ok: true, delivered: false, notDelivered: word, details: {} } });
-  const cancelled = emailFor({ typeKey: 'notDelivered', row: r, result: said('Cancelled'), reviewer: 'Test Person Two' });
-  assert.deepEqual([cancelled.key, cancelled.name, cancelled.subject], ['notDeliveredCancelled', 'Not delivered (cancelled or returned)', `Your order ${ID}: the screenshot says it was cancelled or returned`]);
-  assert.ok(cancelled.message.includes('Your delivery screenshot says "Cancelled", so it looks like the order was not delivered.\n\nIf the order was in fact delivered'), cancelled.message);
-  const shipped = emailFor({ typeKey: 'notDelivered', row: r, result: said('Shipped'), reviewer: 'Test Person Two' });
-  assert.deepEqual([shipped.key, whatIsWrong('notDelivered', { row: r, result: said('Shipped') })], ['notDelivered', 'Your delivery screenshot says "Shipped", not "Delivered".']);
-  // Words in the delivery cell, in place of a screenshot.
-  const typed = row({ shots: { ...r.shots, delivery: { text: 'Order cancelled', links: [] } } });
-  assert.deepEqual([emailKeyFor('notDelivered', { row: typed }), whatIsWrong('notDeliveredCancelled', { row: typed })], ['notDeliveredCancelled', 'You wrote "Order cancelled" in the form, so it looks like the order was not delivered.']);
-  assert.equal(whatIsWrong('notDelivered', { row: row({ shots: { ...r.shots, delivery: { text: 'Not delivered yet', links: [] } } }) }), 'You wrote "Not delivered yet" in the form instead of giving a delivery screenshot.');
-  // The name on the review found on Flipkart, and the name in the file or on the review screenshot.
-  const found = (how, extra = {}) => ({ review: { ok: true, name: 'Test P. Two', stars: 4 }, found: { how, nameFrom: 'screenshot', review: { name: 'Other Test Person', stars: 5 }, ...extra } });
-  assert.equal(whatIsWrong('reviewerNotMatching', { row: r, result: found('found'), reviewer: 'Test Person Two' }), 'The name on the review on Flipkart is "Other Test Person", but the name you gave is "Test Person Two".');
-  assert.equal(whatIsWrong('reviewerNotMatching', { row: r, result: found('otherName'), reviewer: 'Test Person Two' }), 'The name on the review on Flipkart is "Other Test Person", but the name on your review screenshot is "Test P. Two".');
-  assert.equal(whatIsWrong('reviewerNotMatching', { row: r, result: found('found'), reviewer: null }), 'The name on the review on Flipkart is "Other Test Person", but the name on your review screenshot is "Test P. Two".');
-  assert.equal(whatIsWrong('reviewerNotMatching', { row: r, result: found('noName'), reviewer: 'Test Person Two' }), 'Your review on Flipkart shows "Flipkart Customer" instead of a name, so we could not see that it is yours.');
-  assert.equal(whatIsWrong('reviewerNotMatching', { row: r, result: null, reviewer: 'Test Person Two' }), 'The name on the review is not the name you gave.');
-  assert.equal(whatIsWrong('reviewShotNotMatching', { row: r, result: found('found') }), 'Your review screenshot shows 4 stars, but your review on Flipkart has 5 stars.');
-  assert.equal(whatIsWrong('reviewShotNotMatching', { row: r, result: null }), 'Your review screenshot does not match your review on Flipkart.');
+test('"Reviewer name is different": each name we found and where (delivered to, the form, the review on Flipkart, the review screenshot), then that we cannot confirm the review was written from the user\'s own account, a screenshot of it from their own account, and to tell us if someone else wrote it', () => {
+  const email = emailFor({ typeKey: 'reviewerNotMatching', row: row(), result: CHECK, reviewer: 'Test Person Two' });
+  assert.equal(email.subject, `Order ${ID}: names do not match`);
+  assert.equal(
+    email.message,
+    [
+      'Hello Test Person Two,',
+      `We checked your review of Test Brand Steel Bottle on Flipkart, for your order ${ID}.`,
+      'The names we found do not match:\n- Delivered to (on your delivery screenshot): Test Person Two\n- In your form: Test Person Two\n- On the review on Flipkart: Other Test Person\n- On your review screenshot: Other Test Person',
+      'So we cannot confirm that the review was written from your own Flipkart account.',
+      `Please send a screenshot of the review from your own account:\n${REVIEW_STEPS}`,
+      'If someone else wrote the review from your account, please tell us.',
+      'Thank you,\nThe support team',
+    ].join('\n\n'),
+  );
+  // A name read from a screenshot only when it was read clearly; "Flipkart Customer" is no name.
+  assert.deepEqual(namesFound({ result: { ...CHECK, delivery: { ...CHECK.delivery, ok: false }, review: { ...CHECK.review, ok: false } }, reviewer: 'Test Person Two' }), [{ where: 'In your form', name: 'Test Person Two' }, { where: 'On the review on Flipkart', name: 'Other Test Person' }]);
+  assert.deepEqual(namesFound({ result: { ...CHECK, review: { ...CHECK.review, name: 'Oth3r T#st' }, found: { how: 'noName', review: { name: 'Flipkart Customer' } } }, reviewer: '' }), [{ where: 'Delivered to (on your delivery screenshot)', name: 'Test Person Two' }, { where: 'On the review on Flipkart', name: 'no name, only "Flipkart Customer"' }]);
+  const delivered = (text, ok = true) => deliveredToName({ ok, text });
+  assert.deepEqual(
+    [delivered('Delivered to Test Person Two at Home'), delivered('Delivered to: TEST PERSON at Front Door'), delivered('Delivered to Test P. Two'), delivered('Delivered to Test Person at'), delivered('Delivered to Customer at Home'), delivered('Delivered to Security guard at Gate'), delivered('Delivered to T3st Pers0n at Home'), delivered('Delivered to Test | Person at Home'), delivered('Your order was delivered to your address'), delivered('Delivered, Jul 23'), delivered('Delivered to Test Person Two at Home', false), deliveredToName(null)],
+    ['Test Person Two', 'TEST PERSON', 'Test P. Two', 'Test Person', null, null, null, null, null, null, null, null],
+  );
+});
+
+test('"Review not live": what we found among the reviews Flipkart shows, then a screenshot of the review from the Published tab of My Reviews, and to wait while it is on the Pending tab', () => {
+  const result = { ...CHECK, review: { ok: true, kind: 'written', name: 'Test Person Two', tab: null, form: false }, found: null };
+  const email = emailFor({ typeKey: 'reviewNotLive', row: row(), result, reviewer: 'Test Person Two' });
+  assert.equal(email.subject, `Order ${ID}: review not found on Flipkart`);
+  assert.equal(
+    email.message,
+    [
+      'Hello Test Person Two,',
+      `We looked for your review of Test Brand Steel Bottle on Flipkart, for your order ${ID}. It is not among the reviews Flipkart shows for this product, which we checked back to 01-07-2026.`,
+      'Please send a screenshot of your review from the Published tab of My Reviews.',
+      `How to find it:\n${REVIEW_STEPS}`,
+      'If your review is still on the Pending tab, Flipkart has not published it yet. Please wait until it moves to Published, then send the screenshot.',
+      'Thank you,\nThe support team',
+    ].join('\n\n'),
+  );
+  const fact = (over) => whatIsWrong('reviewNotLive', { row: row(), result: { ...result, ...over } });
+  assert.equal(fact({ review: { ...result.review, tab: 'pending' } }), 'Your review screenshot shows it on the Pending tab of My Reviews, so Flipkart had not published it yet.');
+  assert.equal(fact({ review: { ...result.review, tab: 'published' } }), 'Your review screenshot shows it on the Published tab, but it is not among the reviews Flipkart shows for this product, which we checked back to 01-07-2026.');
+  assert.equal(fact({ found: { how: 'notFound', before: 1 } }), 'We found a review with the same words, but it was posted before your order was delivered on 23-07-2026, so it does not count for this order.');
+  assert.equal(fact({ review: { ...result.review, form: true }, flipkart: null }), 'Your review screenshot shows the review being written, not posted, and it is not among the reviews Flipkart shows for this product.');
 });

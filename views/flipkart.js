@@ -50,9 +50,11 @@
 // screen's email box for the row: who the email is to (the reviewer's name,
 // and the email address when the file has an email address column), its
 // subject and its message, filled in for the row as on Amazon, which can be
-// changed, each with a Copy button. Unlike Amazon, nothing is ever sent from
-// here (no Send button, no Test or Real choice, no Gmail), and the box says
-// so. Beside "Check every row again", the Amazon screen's Download button:
+// changed, each with a Copy button, and the row's screenshots as small
+// pictures, each with "Copy picture" (to paste into an email in Gmail or
+// Outlook) and "Save" (a file to attach). Unlike Amazon, nothing is ever sent
+// from here (no Send button, no Test or Real choice, no Gmail), and the box
+// says so. Beside "Check every row again", the Amazon screen's Download button:
 // "The checked Excel file" and "The results only". The local server reads
 // and keeps the file and the campaigns, and runs the checks and the Google
 // login; this screen only shows them.
@@ -1449,6 +1451,56 @@ async function copyWords(ctx, which) {
   }
 }
 
+/** A screenshot in a file's name and in a sentence: the kind of picture each picture cell holds. */
+const SHOT_WORDS = { order: 'purchase screenshot', delivery: 'delivery screenshot', review: 'review link picture', reviewShot: 'review screenshot' };
+const PICTURE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+/** One of a row's kept pictures, as it was kept. */
+const pictureRoute = (r, which, p) => `${ROWS}/${encodeURIComponent(r.id)}/picture/${which}/${p.i}`;
+
+/** A picture as a PNG, the kind Gmail and Outlook take when a picture is pasted in: a JPEG or a WEBP is drawn again as a PNG, on this computer. */
+async function asPng(blob) {
+  if (blob?.type === 'image/png') return blob;
+  const bitmap = await globalThis.createImageBitmap(blob);
+  const canvas = new globalThis.OffscreenCanvas(bitmap.width, bitmap.height);
+  canvas.getContext('2d').drawImage(bitmap, 0, 0);
+  bitmap.close?.();
+  return canvas.convertToBlob({ type: 'image/png' });
+}
+
+/** What the email box says after a picture's button is pressed: copied, or why not. */
+function pictureSaid(ctx, box, change) {
+  if (ctx.state.email === box) ctx.update(() => Object.assign(box, change));
+}
+
+/**
+ * "Copy picture": the screenshot copied as a picture, to paste into an email
+ * in Gmail or Outlook. The copy is asked for at once, while the press counts,
+ * and the picture follows once it is fetched (and made a PNG).
+ */
+function copyPicture(ctx, r, which, p) {
+  const box = ctx.state.email;
+  const clipboard = globalThis.navigator?.clipboard;
+  const Item = globalThis.ClipboardItem;
+  if (typeof clipboard?.write !== 'function' || typeof Item !== 'function') return pictureSaid(ctx, box, { copied: null, copyError: `This browser cannot copy pictures. Press Save beside the ${SHOT_WORDS[which]}, then attach the file to your email.` });
+  const png = ctx.local.blob(pictureRoute(r, which, p)).then((out) => asPng(out?.blob));
+  return clipboard.write([new Item({ 'image/png': png })]).then(
+    () => pictureSaid(ctx, box, { copied: `picture-${which}-${p.i}`, copyError: null }),
+    () => pictureSaid(ctx, box, { copied: null, copyError: `The ${SHOT_WORDS[which]} could not be copied. Press Save beside it, then attach the file to your email.` }),
+  );
+}
+
+/** "Save": the screenshot saved as a file, as it was kept, to attach to an email. */
+async function savePicture(ctx, r, which, p) {
+  const box = ctx.state.email;
+  try {
+    const out = await ctx.local.blob(pictureRoute(r, which, p));
+    const many = arr(r.shots?.[which]?.pictures).filter((x) => x?.ok).length > 1;
+    ctx.download(`${r.label ?? 'Row'} ${SHOT_WORDS[which]}${many ? ` ${p.i + 1}` : ''}.${PICTURE_EXT[out?.blob?.type] ?? 'png'}`, out?.blob);
+  } catch (err) {
+    pictureSaid(ctx, box, { copied: null, copyError: `The ${SHOT_WORDS[which]} could not be saved: ${err.message}` });
+  }
+}
+
 // ---- downloads (copied from the Amazon screen) ----
 
 /** "The results only": Row (its number on the dashboard), Order ID, Status, Type and Note. A row not checked yet has no Status. */
@@ -1596,12 +1648,12 @@ function runPanel(ctx) {
 
 // ---- drawing one row's page ----
 
-function thumbButton(ctx, r, which, p, large = false) {
+function thumbButton(ctx, r, which, p, large = false, place = large ? 'row-' : '') {
   const { h, state } = ctx;
   const url = state.thumbs[thumbKey(r, which, p)];
   return h(
     'button',
-    { type: 'button', class: `fk-thumb${large ? ' fk-thumb-large' : ''}`, key: `${which}-${p.i}`, onclick: (e) => { e.stopPropagation(); openBig(ctx, r, which, p); }, 'aria-label': `Enlarge the ${WHAT[which].toLowerCase()} of ${r.label ?? 'this row'}`, 'data-id': `${large ? 'row-' : ''}thumb-${which}-${r.id}-${p.i}` },
+    { type: 'button', class: `fk-thumb${large ? ' fk-thumb-large' : ''}`, key: `${which}-${p.i}`, onclick: (e) => { e.stopPropagation(); openBig(ctx, r, which, p); }, 'aria-label': `Enlarge the ${WHAT[which].toLowerCase()} of ${r.label ?? 'this row'}`, 'data-id': `${place}thumb-${which}-${r.id}-${p.i}` },
     url ? h('img', { src: url, alt: '' }) : h('span', { class: 'muted small' }, 'Picture'),
   );
 }
@@ -1883,11 +1935,49 @@ const typedInto = (ctx, it, which) => (ev) => {
 };
 
 /**
+ * The row's screenshots in the email box, as small pictures (each opens large
+ * when clicked), each with "Copy picture", to paste it into an email in Gmail
+ * or Outlook, and "Save", to attach it as a file.
+ */
+function emailShots(ctx, r) {
+  const { h, state } = ctx;
+  const named = Object.fromEntries(arr(state.saved?.sheet?.columns).filter((c) => c?.key).map((c) => [c.key, c.name]));
+  const shots = PICTURE_KEYS.flatMap((w) => arr(r.shots?.[w]?.pictures).filter((p) => p?.ok).map((p) => [w, p]));
+  return h(
+    'div',
+    { class: 'fk-form-field', 'data-id': 'email-shots' },
+    h('p', { class: 'label' }, 'Screenshots'),
+    shots.length
+      ? h(
+          'div',
+          { class: 'fk-user-shots' },
+          shots.map(([w, p]) => {
+            const id = `${w}-${p.i}`;
+            return h(
+              'div',
+              { key: id, class: 'fk-user-shot' },
+              h('p', { class: 'label' }, named[CELL_COLUMN[w]] ?? WHAT[w]),
+              thumbButton(ctx, r, w, p, true, 'email-'),
+              h(
+                'div',
+                { class: 'fk-shot-actions' },
+                h('button', { type: 'button', class: 'btn btn-small btn-quiet', title: 'Copies the picture, to paste into an email in Gmail or Outlook.', onclick: () => copyPicture(ctx, r, w, p), 'data-id': `copy-picture-${id}` }, icon(h, state.email?.copied === `picture-${id}` ? 'check' : 'image'), state.email?.copied === `picture-${id}` ? 'Copied' : 'Copy picture'),
+                h('button', { type: 'button', class: 'btn btn-small btn-quiet', title: 'Saves the picture as a file, to attach to an email.', onclick: () => savePicture(ctx, r, w, p), 'data-id': `save-picture-${id}` }, icon(h, 'download'), 'Save'),
+              ),
+            );
+          }),
+        )
+      : h('p', { class: 'muted small', 'data-id': 'email-no-shots' }, 'No screenshot of this row is kept yet. They are kept when the row is checked.'),
+  );
+}
+
+/**
  * The Amazon screen's email box for one row, with nothing ever sent: who the
  * email is to (the reviewer's name, and the email address when the file has
  * an email address column), its subject and its message, which can be
- * changed, each with a Copy button; then Close. No Send button, no Test or
- * Real choice and no Gmail, and the box says so.
+ * changed, each with a Copy button, and the row's screenshots, each with
+ * "Copy picture" and "Save"; then Close. No Send button, no Test or Real
+ * choice and no Gmail, and the box says so.
  */
 function emailBox(ctx, r) {
   const { h, words, state } = ctx;
@@ -1899,7 +1989,7 @@ function emailBox(ctx, r) {
     'section',
     { class: 'card fk-email-panel', key: 'email', 'data-id': 'email-panel' },
     h('div', { class: 'card-head' }, h('h2', null, icon(h, 'mail'), 'Prepare email')),
-    h('p', { class: 'card-sub', 'data-id': 'email-not-sent' }, 'Nothing is sent from here. Read the email and change its words if you like, then press Copy beside the email address, the subject and the message, and paste each one into your own email.'),
+    h('p', { class: 'card-sub', 'data-id': 'email-not-sent' }, 'Nothing is sent from here. Read the email and change its words if you like, then press Copy beside the email address, the subject and the message, and paste each one into your own email. Under it, the row\'s screenshots, to paste in or attach.'),
     e.loading ? h('p', { class: 'muted', role: 'status' }, 'Preparing the email…') : null,
     words.notice(h, 'error', e.error),
     it
@@ -1911,6 +2001,7 @@ function emailBox(ctx, r) {
           noAddress ? h('p', { class: 'muted small', 'data-id': 'email-no-address' }, noAddress) : null,
           h('div', { class: 'fk-form-field' }, h('div', { class: 'fk-copy-head' }, h('label', { class: 'label', for: 'fk-email-subject' }, 'Subject'), copyButton(ctx, 'subject')), h('input', { id: 'fk-email-subject', type: 'text', autocomplete: 'off', value: it.subject, 'data-id': 'email-subject', oninput: typedInto(ctx, it, 'subject') })),
           h('div', { class: 'fk-form-field' }, h('div', { class: 'fk-copy-head' }, h('label', { class: 'label', for: 'fk-email-message' }, 'Message'), copyButton(ctx, 'message')), h('textarea', { id: 'fk-email-message', rows: '14', spellcheck: 'true', value: it.message, 'data-id': 'email-message', oninput: typedInto(ctx, it, 'message') })),
+          emailShots(ctx, r),
           words.notice(h, 'error', e.copyError),
         )
       : null,

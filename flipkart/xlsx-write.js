@@ -1,8 +1,12 @@
 // Writing the results into the uploaded Excel file, for "The checked Excel
 // file" under Download. Copied from the Amazon checker (amazon/xlsx-write.js),
-// unchanged. Only the Status, Type and Note cells of the tab read change, and
-// the headings of the Status, Type and Note columns the file did not have;
-// they are written straight into that tab's XML. A Note keeps each of its
+// changed only so that each new heading takes the look of the file's nearest
+// heading with words in it: an empty cell after the last heading (files often
+// have a row of them, with a plain look) is passed over, so the Status, Type
+// and Note headings all look like the file's other headings. Only the Status,
+// Type and Note cells of the tab read change, and the headings of the Status,
+// Type and Note columns the file did not have; they are written straight into
+// that tab's XML. A Note keeps each of its
 // lines on its own line: its cell gets a copy of its own look with "wrap
 // text" turned on, added at the end of the file's list of cell looks. Every
 // other part of the file stays byte for byte the same: the other tabs, the
@@ -190,7 +194,7 @@ export function writeCells(buffer, tabName, writes) {
   return replaceInZip(buffer, parts);
 }
 
-/** The style of the heading cell nearest to the left of a column on the heading row, for a new heading; null when none. */
+/** The style of the heading cell with words in it nearest to the left of a column on the heading row, for a new heading; an empty cell is passed over. Null when none. */
 export function headingStyle(buffer, tabName, row, col) {
   const zip = readZip(buffer);
   const tab = tabsOf(zip).find((t) => t.name === tabName);
@@ -199,10 +203,11 @@ export function headingStyle(buffer, tabName, row, col) {
   const rowXml = [...xml.matchAll(/<(?:\w+:)?row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?row>)/g)].find((m) => Number(attrs(m[1]).r) === row);
   if (!rowXml?.[2]) return null;
   let best = null;
-  for (const c of rowXml[2].matchAll(/<(?:\w+:)?c\b([^>]*?)(?:\/>|>)/g)) {
+  for (const c of rowXml[2].matchAll(/<(?:\w+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?c>)/g)) {
     const a = attrs(c[1]);
     const ref = String(a.r ?? '').match(/^([A-Z]+)\d+$/);
-    if (!ref) continue;
+    // A cell with no value (no words, no number) is not a heading, whatever its look.
+    if (!ref || !/<(?:\w+:)?(?:v|is)\b/.test(c[2] ?? '')) continue;
     const at = columnNumber(ref[1]);
     if (at < col && (!best || at > best.at)) best = { at, style: a.s ?? null };
   }

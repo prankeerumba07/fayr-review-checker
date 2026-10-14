@@ -1252,7 +1252,7 @@ test('"Prepare email" on a row\'s page, the Amazon screen\'s email box for the r
     await settle();
     assert.deepEqual(local.calls.filter((c) => c.path.endsWith('/email')).map((c) => `${c.method} ${c.path}`), ['GET /local/flipkart/rows/r000000000001/email']);
     assert.equal(byId(s.page(), 'prepare-email').attrs.disabled, true, 'once open, it is not opened again');
-    assert.deepEqual([textOf(findAll(box(), (n) => n.tag === 'h2')[0]), textOf(byId(box(), 'email-not-sent')), textOf(byId(box(), 'email-name')), textOf(byId(box(), 'email-to')), byId(box(), 'email-subject').attrs.value, byId(box(), 'email-message').attrs.value], ['Prepare email', 'Nothing is sent from here. Read the email and change its words if you like, then press Copy beside the email address, the subject and the message, and paste each one into your own email.', 'Row 1: Review not live', 'Test Person Two, test.person2@example.test', EMAIL.subject, EMAIL.message]);
+    assert.deepEqual([textOf(findAll(box(), (n) => n.tag === 'h2')[0]), textOf(byId(box(), 'email-not-sent')), textOf(byId(box(), 'email-name')), textOf(byId(box(), 'email-to')), byId(box(), 'email-subject').attrs.value, byId(box(), 'email-message').attrs.value], ['Prepare email', 'Nothing is sent from here. Read the email and change its words if you like, then press Copy beside the email address, the subject and the message, and paste each one into your own email. Under it, the row\'s screenshots, to paste in or attach.', 'Row 1: Review not live', 'Test Person Two, test.person2@example.test', EMAIL.subject, EMAIL.message]);
     // A Copy button beside the address, the subject and the message, then Close: no Send button, no Test or Real choice, no test email address.
     assert.deepEqual(findAll(box(), (n) => n.tag === 'button').map((b) => [b.attrs['data-id'], textOf(b)]), [['copy-address', 'Copy'], ['copy-subject', 'Copy'], ['copy-message', 'Copy'], ['close-email', 'Close']]);
     assert.equal(findAll(box(), (n) => n.tag === 'input' && n.attrs.type !== 'text').length, 0, 'no tick box and no Test or Real choice');
@@ -1288,6 +1288,75 @@ test('"Prepare email" on a row\'s page, the Amazon screen\'s email box for the r
     assert.equal(byId(pass.page(), 'prepare-email'), null);
   } finally {
     delete globalThis.navigator.clipboard;
+  }
+});
+
+test('"Prepare email" shows the row\'s screenshots as small pictures, each with "Copy picture", which copies it to paste into an email in Gmail or Outlook (a JPEG is made a PNG first), and "Save", which saves it as a file to attach; nothing is sent', async () => {
+  const jpeg = [{ i: 0, ok: true, type: 'image/jpeg', at: '2026-10-12T12:30:00.000Z', link: DELIVERY_SHOT }];
+  const pictured = { ...PICTURED, done: true, final: 'manual', last: MANUAL_LAST, emailKey: 'reviewNotLive', shots: { ...PICTURED.shots, delivery: { ...PICTURED.shots.delivery, pictures: jpeg } } };
+  const fetched = [];
+  const local = fakeLocal({ saved: { ...SAVED, rows: [pictured, SAVED.rows[1], SAVED.rows[2]], types: TYPES }, pages: { r000000000001: { row: pictured, result: null } }, emails: { r000000000001: EMAIL }, file: (path) => (fetched.push(path), { blob: new Blob(['made-up picture'], { type: path.includes('/delivery/') ? 'image/jpeg' : 'image/png' }), fileName: null }) });
+  const written = [];
+  const drawn = [];
+  let refuse = false;
+  const write = async (items) => {
+    for (const item of items) for (const [type, picture] of Object.entries(item.items)) written.push([type, (await picture).type]);
+    if (refuse) throw new Error('Made-up refusal.');
+  };
+  Object.defineProperty(globalThis.navigator, 'clipboard', { configurable: true, value: { write } });
+  globalThis.ClipboardItem = class {
+    constructor(items) {
+      this.items = items;
+    }
+  };
+  globalThis.createImageBitmap = async (blob) => ({ width: 3, height: 2, close() {}, kind: blob.type });
+  globalThis.OffscreenCanvas = class {
+    getContext() {
+      return { drawImage: (bitmap) => drawn.push(bitmap.kind) };
+    }
+    convertToBlob({ type }) {
+      return Promise.resolve(new Blob(['made-up png'], { type }));
+    }
+  };
+  try {
+    const s = await rowScreen(local);
+    const saves = [];
+    s.ctx.download = (name, data) => saves.push([name, data.type]);
+    byId(s.page(), 'prepare-email').attrs.onclick();
+    await settle();
+    const shots = () => byId(byId(s.page(), 'email-panel'), 'email-shots');
+    assert.deepEqual(findAll(shots(), (n) => /\bfk-user-shot\b/.test(n.attrs?.class ?? '')).map((n) => textOf(findAll(n, (x) => x.tag === 'p')[0])), ['Order Screenshot', 'Delivery Screenshot', 'Review Screenshot'], "the row's screenshots, named as on its page");
+    assert.deepEqual(findAll(shots(), (n) => n.tag === 'img').map((n) => n.attrs.src), ['order', 'delivery', 'reviewShot'].map((w) => `blob:/local/flipkart/rows/r000000000001/small/${w}/0`), 'as small pictures');
+    assert.deepEqual(findAll(shots(), (n) => n.tag === 'button' && !/thumb/.test(n.attrs['data-id'])).map((b) => [b.attrs['data-id'], textOf(b)]), ['order', 'delivery', 'reviewShot'].flatMap((w) => [[`copy-picture-${w}-0`, 'Copy picture'], [`save-picture-${w}-0`, 'Save']]));
+    // "Copy picture": the picture as a PNG, the kind Gmail and Outlook take when one is pasted in.
+    byId(shots(), 'copy-picture-order-0').attrs.onclick();
+    await settle();
+    byId(shots(), 'copy-picture-delivery-0').attrs.onclick();
+    await settle();
+    assert.deepEqual([written, drawn], [[['image/png', 'image/png'], ['image/png', 'image/png']], ['image/jpeg']], 'the JPEG was drawn again as a PNG; the PNG was copied as it was');
+    assert.deepEqual(['order', 'delivery'].map((w) => textOf(byId(shots(), `copy-picture-${w}-0`))), ['Copy picture', 'Copied']);
+    // "Save": the picture as it was kept, as a file to attach.
+    byId(shots(), 'save-picture-delivery-0').attrs.onclick();
+    await settle();
+    byId(shots(), 'save-picture-order-0').attrs.onclick();
+    await settle();
+    assert.deepEqual(saves, [['Row 1 delivery screenshot.jpg', 'image/jpeg'], ['Row 1 purchase screenshot.png', 'image/png']]);
+    assert.deepEqual(fetched, ['order', 'delivery', 'delivery', 'order'].map((w) => `/local/flipkart/rows/r000000000001/picture/${w}/0`), 'each picture fetched from this computer, as it was kept');
+    // A copy the browser refuses, or a browser that cannot copy pictures, says what to do instead.
+    refuse = true;
+    byId(shots(), 'copy-picture-order-0').attrs.onclick();
+    await settle();
+    assert.match(textOf(byId(s.page(), 'email-panel')), /The purchase screenshot could not be copied\. Press Save beside it, then attach the file to your email\./);
+    delete globalThis.ClipboardItem;
+    byId(shots(), 'copy-picture-reviewShot-0').attrs.onclick();
+    await settle();
+    assert.match(textOf(byId(s.page(), 'email-panel')), /This browser cannot copy pictures\. Press Save beside the review screenshot, then attach the file to your email\./);
+    assert.deepEqual(local.calls.filter((c) => c.method !== 'GET').map((c) => c.path), [], 'nothing is sent anywhere');
+  } finally {
+    delete globalThis.navigator.clipboard;
+    delete globalThis.ClipboardItem;
+    delete globalThis.createImageBitmap;
+    delete globalThis.OffscreenCanvas;
   }
 });
 
@@ -1445,7 +1514,7 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   byId(staffPage.page(), 'change-result').attrs.onclick();
   add(staffPage);
   // "Prepare email" open on a row's page, and the Download button while the checked Excel file is prepared.
-  const mailRow = { ...staffRow, emailKey: 'reviewNotLive' };
+  const mailRow = { ...staffRow, shots: PICTURED.shots, emailKey: 'reviewNotLive' };
   const mailPage = await rowScreen(fakeLocal({ saved: { ...SAVED, rows: [mailRow, SAVED.rows[1], SAVED.rows[2]], types: TYPES }, pages: { r000000000001: { row: mailRow, result: LAST_CHECK } }, emails: { r000000000001: EMAIL } }));
   byId(mailPage.page(), 'prepare-email').attrs.onclick();
   await settle();
@@ -1527,7 +1596,7 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
     assert.equal(rule(css, mine), rule(amazonCss, theirs), `${mine} is the same as ${theirs}`);
   }
   assert.equal(rule(css, '.fk-menu-list'), rule(amazonCss, '.menu-list').replace('menu-in', 'fk-menu-in'), 'the Download menu, opening the same way');
-  for (const cls of ['fk-email-panel', 'fk-email-item', 'fk-email-head', 'fk-email-to', 'fk-copy-line', 'fk-copy-head', 'fk-menu', 'fk-menu-chevron', 'fk-menu-list', 'fk-menu-item', 'fk-menu-words', 'fk-menu-note']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
+  for (const cls of ['fk-email-panel', 'fk-email-item', 'fk-email-head', 'fk-email-to', 'fk-copy-line', 'fk-copy-head', 'fk-shot-actions', 'fk-menu', 'fk-menu-chevron', 'fk-menu-list', 'fk-menu-item', 'fk-menu-words', 'fk-menu-note']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);
   const wide = (src) => src.match(/@media \(max-width: 1200px\) \{([^]*?)\n\}/)?.[1] ?? null;
   assert.equal(wide(css), wide(amazonCss).replaceAll('.rows-layout.with-live', '.fk-rows-layout.fk-with-live').replaceAll('.live-panel', '.fk-live-panel'), 'in a narrower window, the checking area goes under the table, as on Amazon');
   for (const cls of ['fk-overview', 'fk-main-actions', 'fk-rows-layout', 'fk-with-live', 'fk-rows-main', 'fk-current-row', 'fk-live-panel', 'fk-live-head', 'fk-run-progress', 'fk-live-links', 'fk-live-flat', 'fk-steps-flat', 'fk-read', 'fk-ocr-text', 'fk-comparison-table', 'fk-cell-text', 'fk-result-cell', 'fields', 'field-row']) assert.ok(used.has(cls), `${cls} is drawn in one of the states`);

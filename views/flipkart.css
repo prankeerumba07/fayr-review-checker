@@ -277,7 +277,7 @@
 .fk-cell-text { min-width: 9rem; max-width: 22rem; }
 .fk-result-cell { min-width: 10rem; }
 
-/* ---- the email box on a row's page ("Prepare email"), like the Amazon one (views/amazon.css), under Flipkart's own names; the Copy buttons beside the email address, the subject and the message are Flipkart's own, since nothing is sent from here ---- */
+/* ---- the email box on a row's page ("Prepare email"), like the Amazon one (views/amazon.css), under Flipkart's own names; the Copy buttons beside the email address, the subject and the message, and "Copy picture" and "Save" under each screenshot, are Flipkart's own, since nothing is sent from here ---- */
 
 .fk-email-item textarea { min-height: 18em; }
 .fk-email-panel .card-head h2 { display: flex; align-items: center; gap: 8px; }
@@ -290,6 +290,7 @@
 .fk-copy-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .fk-copy-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; margin-bottom: 4px; }
 .fk-copy-head .label { margin-bottom: 0; }
+.fk-shot-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 
 /* ---- the Download button beside "Check every row again", like the Amazon one ---- */
 

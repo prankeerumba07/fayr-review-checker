@@ -31,7 +31,7 @@ import { parseReviewShot } from '../flipkart/review-read.js';
 import { DEFAULT_MARKS } from '../flipkart/settings.js';
 import { tinyPng } from './fixtures/flipkart/zip-tools.mjs';
 import { MAX_SHEET_BYTES, createFlipkartStore, putCampaign } from '../flipkart/store.js';
-import { readZip } from '../flipkart/zip.js';
+import { readZip, replaceInZip } from '../flipkart/zip.js';
 import { tabsOf } from '../flipkart/ooxml.js';
 import { TYPE_WORDS } from '../flipkart/final.js';
 import { ONLY_FLIPKART_NAMES } from '../flipkart/browser.js';
@@ -1014,17 +1014,17 @@ test('"Prepare email" over HTTP, as on Amazon: the email for a row, filled in fr
   const got = await email(rows[0]);
   assert.equal(got.status, 200, got.text);
   const e = got.json.email;
-  assert.deepEqual([e.rowId, e.label, e.reviewer, e.reviewerColumn, e.orderId, e.address, e.addressOk, e.addressSays, e.emailColumn, e.key, e.name, e.subject], [rows[0].id, 'Row 1', person(2), true, orderId(2), emailOf(2), true, null, true, 'orderShotMissing', 'Purchase screenshot missing', `Your order ${orderId(2)}: please send the purchase screenshot`]);
-  assert.ok(e.message.startsWith(`Hello ${person(2)},\n\nThis is about your order ${orderId(2)} for Test Brand Steel Bottle.\n\nThe purchase screenshot was not added in the form, so we cannot see the order.\n\nPlease reply to this email with the purchase screenshot: a screenshot of this order on Flipkart`), e.message);
+  assert.deepEqual([e.rowId, e.label, e.reviewer, e.reviewerColumn, e.orderId, e.address, e.addressOk, e.addressSays, e.emailColumn, e.key, e.name, e.subject], [rows[0].id, 'Row 1', person(2), true, orderId(2), emailOf(2), true, null, true, 'orderShotMissing', 'Purchase screenshot missing', `Order ${orderId(2)}: purchase screenshot needed`]);
+  assert.ok(e.message.startsWith(`Hello ${person(2)},\n\nWe checked the form you filled in for your Flipkart order ${orderId(2)} (Test Brand Steel Bottle). There was no purchase screenshot in it.\n\nPlease send a screenshot of this order on Flipkart.\n\nHow to find it:\n1. Open the Flipkart app and tap Account.`), e.message);
   assert.ok(e.message.endsWith('\n\nThank you,\nThe support team'), e.message);
   // Row 4 has no email address in the file; a Pass has no email; and the row with a staff result changed to Something else gets that email.
   assert.equal((await change(rows[3], 'reviewNotLive', 'manual')).emailKey, 'reviewNotLive');
   const noAddress = (await email(rows[3])).json.email;
-  assert.deepEqual([noAddress.reviewer, noAddress.address, noAddress.addressOk, noAddress.addressSays, noAddress.key, noAddress.subject], [person(6), '', false, 'There is no email address in the file for this row.', 'reviewNotLive', `Your order ${orderId(6)}: please send the link to your review`]);
+  assert.deepEqual([noAddress.reviewer, noAddress.address, noAddress.addressOk, noAddress.addressSays, noAddress.key, noAddress.subject], [person(6), '', false, 'There is no email address in the file for this row.', 'reviewNotLive', `Order ${orderId(6)}: review not found on Flipkart`]);
   assert.equal((await change(rows[1], 'verified', 'pass')).emailKey, null);
   assert.deepEqual([(await email(rows[1])).status, (await email(rows[1])).json.message], [400, 'Row 2 has no email: its Type has none, or it is not checked yet.']);
   assert.equal((await change(rows[1], 'somethingElse', 'manual')).emailKey, 'somethingElse');
-  assert.equal((await email(rows[1])).json.email.subject, `Your order ${orderId(3)}: we could not finish checking it`);
+  assert.equal((await email(rows[1])).json.email.subject, `Order ${orderId(3)}: please send two screenshots`);
   const post = await call('POST', `/local/flipkart/rows/${rows[0].id}/email`, json({}));
   assert.deepEqual([post.status, post.headers.allow, (await call('GET', '/local/flipkart/rows/r999999999999/email', { at })).status], [405, 'GET, HEAD', 404]);
   // A file with no email address column and no Reviewer Name column: no name and no address.
@@ -1033,7 +1033,7 @@ test('"Prepare email" over HTTP, as on Amazon: the email for a row, filled in fr
   await change(only, 'duplicate');
   const bare = (await email(only)).json.email;
   assert.deepEqual([bare.reviewer, bare.reviewerColumn, bare.address, bare.addressOk, bare.addressSays, bare.emailColumn], ['', false, '', false, 'This file has no email address column.', false]);
-  assert.ok(bare.message.startsWith(`Hello,\n\nThis is about your order ${orderId(8)} for Test Brand Mug.\n\nThe same order, screenshot or review was already sent for another entry.`), bare.message);
+  assert.ok(bare.message.startsWith(`Hello,\n\nWe checked your entry for your Flipkart order ${orderId(8)} (Test Brand Mug). This order, screenshot or review was already sent in another entry, so it cannot count again.`), bare.message);
   // Nothing is ever sent: there is no route that sends, and nothing is kept about an email.
   for (const path of ['/local/flipkart/emails/send', '/local/flipkart/emails/preview', '/local/flipkart/email-address']) assert.equal((await call('POST', path, json({}))).status, 404, path);
   assert.deepEqual(filesIn(dir), ['flipkart/rows.json', 'flipkart/settings.json', 'flipkart/upload.csv']);
@@ -1070,4 +1070,31 @@ test('"The checked Excel file" over HTTP, as on Amazon: the uploaded file with e
   // A CSV file: only "The results only".
   assert.equal((await upload(at, 'flipkart orders.csv', Buffer.from(`Order ID,Reviewer Name,Review Link\n${orderId(2)},${person(2)},${reviewLink(2)}\n`))).status, 200);
   assert.deepEqual([(await checked()).status, (await checked()).json.message], [400, 'The uploaded sheet is not an Excel file, so there is no Excel file to fill in. Press "Download", then "The results only", instead.']);
+});
+
+test('"The checked Excel file": the new Status, Type and Note headings all look like the file\'s other headings, even when empty cells with a plain look follow its last heading, as in many files', async () => {
+  const { at } = await fresh();
+  const json = (body) => ({ at, body: Buffer.from(JSON.stringify(body)), type: 'application/json' });
+  // The made-up file, with six empty cells of the plain look after its last heading.
+  const zip = readZip(FIXTURE);
+  const part = tabsOf(zip).find((t) => t.name === 'Flipkart').part;
+  const xml = zip.get(part)().toString('utf8');
+  const head = xml.match(/<row r="1"[^>]*>[\s\S]*?<\/row>/)[0];
+  const empty = ['K', 'L', 'M', 'N', 'O', 'P'].map((c) => `<c r="${c}1" s="0"/>`).join('');
+  const file = replaceInZip(FIXTURE, new Map([[part, Buffer.from(xml.replace(head, head.replace('</row>', `${empty}</row>`)))]]));
+  assert.equal((await upload(at, 'flipkart-orders.xlsx', file)).status, 200);
+  const rows = (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  await call('POST', `/local/flipkart/rows/${rows[0].id}/result`, json({ final: 'pass', typeKey: 'verified', note: 'Made-up.' }));
+  const got = await call('GET', '/local/flipkart/sheet/checked.xlsx', { at });
+  assert.equal(got.status, 200, got.text);
+  const looks = (x) => Object.fromEntries([...x.match(/<row r="1"[^>]*>([\s\S]*?)<\/row>/)[1].matchAll(/<c r="([A-Z]+)1"([^>]*?)(?:\/>|>)/g)].map((m) => [m[1], /\bs="(\d+)"/.exec(m[2])?.[1] ?? null]));
+  const before = looks(xml);
+  const after = looks(readZip(got.data).get(part)().toString('utf8'));
+  assert.ok(before.J && before.J !== '0', 'the headings have a look of their own');
+  assert.deepEqual([after.K, after.L, after.M], [before.J, before.J, before.J], 'Status, Type and Note look like the last heading, not like the empty cells');
+  assert.deepEqual([after.N, after.O, after.P], ['0', '0', '0'], 'the empty cells after them stay as they were');
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(got.data);
+  const ws = wb.getWorksheet('Flipkart');
+  assert.deepEqual(['J1', 'K1', 'L1', 'M1'].map((c) => [ws.getCell(c).text, Boolean(ws.getCell(c).font?.bold)]), [['Review Screenshot', true], ['Status', true], ['Type', true], ['Note', true]], 'all bold, as the file\'s headings are');
 });

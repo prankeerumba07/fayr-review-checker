@@ -1,22 +1,23 @@
-// The email for a user about what is still needed, copied from the Amazon
-// checker's emails (amazon/emails.js) and changed for Flipkart: one for every
-// Type that is not Pass, and a second one for an order whose screenshot says
-// cancelled or returned. The Amazon checker has no email for Something else,
-// so its email here is written in the same way. "Amazon" is "Flipkart" here,
-// and what fits only Amazon is changed to fit Flipkart: where a user finds an
-// order (Flipkart's "Orders") and a review ("My Reviews", its "Published"
-// tab, and "Share" under a review on the website), and Flipkart's own message
-// for a review it did not accept; Amazon's email saying a review is live is
-// not asked for. The words are short and simple, with nothing a
-// child could not follow: no double dashes, no short codes, no hard words,
-// and never one of the words this dashboard must not show. On a row's page,
-// "Prepare email" fills these words in for the row:
+// The email for a user about what is still needed, for "Prepare email" on a
+// row's page: one for every Type but Verified and Rating Only, and a second
+// one for an order whose screenshot says cancelled or returned. First copied
+// from the Amazon checker's emails (amazon/emails.js); rewritten on
+// 14-10-2026, after staff tried them on real rows, to be short and clear:
+// about 150 words at most, with a short subject, each says what we checked,
+// what we found for this order (the facts from its screenshots and the form;
+// a name read from a screenshot only when it was read clearly) and exactly
+// what the user must send, with numbered steps for finding it in the Flipkart
+// app. The proof of a review is a screenshot from My Reviews, on its
+// Published tab; a link is asked for only where one is truly needed, and only
+// from the Flipkart website, since links shared from Flipkart's app do not
+// open on a computer. Plain words a child could follow: no double dashes, no
+// short codes, no hard words, and never one of the words this dashboard must
+// not show. These words are filled in for the row:
 //   {name}          the name in the file's Reviewer Name column
 //   {order ID}      the row's order ID
 //   {product}       the product ordered, as the file names it
-//   {what is wrong} what the check found for that row, in one or two
-//                   sentences (for example: "You gave order ID A, but your
-//                   purchase screenshot shows order ID B.")
+//   {what is wrong} what the check found for that row: a sentence or two, or
+//                   for "Reviewer name is different", each name found and where
 //   {sign-off}      the sign-off at the end, the same for every email
 // Nothing here, or anywhere on the Flipkart screen, sends an email: a staff
 // member copies the words into their own email.
@@ -51,103 +52,106 @@ export const EMAIL_KEYS = [
   'somethingElse',
 ];
 
-const HELLO = 'Hello {name},\n\nThis is about your order {order ID} for {product}.';
-const ORDERS = 'In the Flipkart app: tap "Account", then "Orders", then this order.\nOn the Flipkart website: open the menu under your name at the top of the page, click "Orders", then this order.';
-const PURCHASE_HOW = `How to take it:\n${ORDERS}\nThe screenshot must show the order ID, the amount and the product.`;
-const DELIVERY_HOW = `How to take it:\n${ORDERS}\nThe screenshot must show the word "Delivered" and the product.`;
-const LINK_HOW = 'How to copy the link to your review:\nOn the Flipkart website, open "My Reviews" in your account, click "Share" under your review, and copy the link.';
-const SHOT_HOW = 'How to take the screenshot of your review:\nOpen "My Reviews" in your Flipkart account. In the Flipkart app, a review Flipkart has published is on the "Published" tab. The screenshot must show the product and the words of your review.';
-const LINK_ASK = 'Please reply to this email with the link to your own review on Flipkart and a screenshot of it.';
-const CLEAR_ASK = 'Please reply to this email with the same screenshot again, as a clear picture.';
+const HELLO = 'Hello {name},';
+/** What we checked, then what we found for this order. */
+const checked = (what) => `We checked ${what} for your Flipkart order {order ID} ({product}). {what is wrong}`;
+const LOOKED = 'We looked for your review of {product} on Flipkart, for your order {order ID}. {what is wrong}';
+const ORDER_STEPS = 'How to find it:\n1. Open the Flipkart app and tap Account.\n2. Tap Orders, then tap this order.\n3. Take a screenshot that shows the order ID, the product and the amount.';
+const DELIVERY_STEPS = 'How to find it:\n1. Open the Flipkart app and tap Account.\n2. Tap Orders, then tap this order.\n3. Take a screenshot that shows "Delivered", the date and the product.';
+const REVIEW_STEPS = '1. Open the Flipkart app and tap Account.\n2. Tap My Reviews (scroll down if needed).\n3. Open the Published tab.\n4. Find your review of this product.\n5. Take a screenshot that shows your name, the product and your review.';
+const REVIEW_HOW = `How to find it:\n${REVIEW_STEPS}`;
+const LINK_HOW = 'How to get the link, on a computer (links from the Flipkart app do not open on a computer):\n1. Go to flipkart.com and log in.\n2. Open My Reviews in your account.\n3. Click Share under your review of this product.\n4. Copy the link and paste it into your reply.';
+const REVIEW_ASK = 'Please send a screenshot of your review from the Published tab of My Reviews.';
+const AGAIN_ASK = 'Please attach the same screenshot to your reply as a picture, not as a link.';
 const message = (...parts) => `${parts.join('\n\n')}\n\n{sign-off}`;
 
-/** Every email, and the sign-off: the Amazon checker's own, changed for Flipkart. */
+/** Every email, and the sign-off. */
 export const EMAILS = {
   signOff: 'Thank you,\nThe support team',
   templates: {
     duplicate: {
-      subject: 'Your order {order ID}: it was already sent',
-      message: message(HELLO, 'The same order, screenshot or review was already sent for another entry.', 'If this is a mistake, please reply to this email and tell us.'),
+      subject: 'Order {order ID}: already sent before',
+      message: message(HELLO, checked('your entry'), 'You do not need to send anything. If you think this is a mistake, please reply and tell us.'),
     },
     orderShotMissing: {
-      subject: 'Your order {order ID}: please send the purchase screenshot',
-      message: message(HELLO, 'The purchase screenshot was not added in the form, so we cannot see the order.', 'Please reply to this email with the purchase screenshot: a screenshot of this order on Flipkart that shows the order ID, the amount and the product.', PURCHASE_HOW),
+      subject: 'Order {order ID}: purchase screenshot needed',
+      message: message(HELLO, checked('the form you filled in'), 'Please send a screenshot of this order on Flipkart.', ORDER_STEPS),
     },
     deliveryShotMissing: {
-      subject: 'Your order {order ID}: please send the delivery screenshot',
-      message: message(HELLO, 'The delivery screenshot was not added in the form, so we cannot see that the order was delivered.', 'Please reply to this email with the delivery screenshot: a screenshot of this order on Flipkart that shows the word "Delivered" and the product.', DELIVERY_HOW),
+      subject: 'Order {order ID}: delivery screenshot needed',
+      message: message(HELLO, checked('the form you filled in'), 'Please send a screenshot of this order that shows it was delivered.', DELIVERY_STEPS),
     },
     reviewLinkMissing: {
-      subject: 'Your order {order ID}: please send the link to your review',
-      message: message(HELLO, 'The link to your review and the screenshot of it were not added in the form, so we cannot see your review.', LINK_ASK, LINK_HOW, SHOT_HOW),
+      subject: 'Order {order ID}: review screenshot needed',
+      message: message(HELLO, checked('the form you filled in'), REVIEW_ASK, REVIEW_HOW),
     },
     needDriveAccess: {
-      subject: 'Your order {order ID}: please send the screenshot again',
-      message: message(HELLO, '{what is wrong}', CLEAR_ASK),
+      subject: 'Order {order ID}: please send the screenshot again',
+      message: message(HELLO, checked('the screenshots you sent'), AGAIN_ASK),
     },
     needAccess: {
-      subject: 'Your order {order ID}: please send the screenshot again',
-      message: message(HELLO, '{what is wrong}', CLEAR_ASK),
+      subject: 'Order {order ID}: please send the screenshot again',
+      message: message(HELLO, checked('the screenshots you sent'), AGAIN_ASK),
     },
     orderNotClear: {
-      subject: 'Your order {order ID}: please send a clear purchase screenshot',
-      message: message(HELLO, '{what is wrong}', 'Please reply to this email with a clear screenshot of this order on Flipkart that shows the order ID, the amount and the product.', PURCHASE_HOW),
+      subject: 'Order {order ID}: clearer purchase screenshot needed',
+      message: message(HELLO, checked('the purchase screenshot you sent'), 'Please send a clear screenshot of this order on Flipkart.', ORDER_STEPS),
     },
     deliveryNotClear: {
-      subject: 'Your order {order ID}: please send a clear delivery screenshot',
-      message: message(HELLO, '{what is wrong}', 'Please reply to this email with a screenshot of this order on Flipkart that shows the word "Delivered" and the product.', DELIVERY_HOW),
+      subject: 'Order {order ID}: clearer delivery screenshot needed',
+      message: message(HELLO, checked('the delivery screenshot you sent'), 'Please send a screenshot of this order that shows it was delivered.', DELIVERY_STEPS),
     },
     reviewNotClear: {
-      subject: 'Your order {order ID}: please send the review screenshot again',
-      message: message(HELLO, '{what is wrong}', CLEAR_ASK),
+      subject: 'Order {order ID}: clearer review screenshot needed',
+      message: message(HELLO, checked('the review screenshot you sent'), 'Please send a clear screenshot of your review from the Published tab of My Reviews.', REVIEW_HOW),
     },
     orderIdNotMatching: {
-      subject: 'Your order {order ID}: the order ID does not match',
-      message: message(HELLO, '{what is wrong}', 'Please reply to this email with the screenshot of the right order, or with the right order ID.', PURCHASE_HOW),
+      subject: 'Order {order ID}: order ID does not match',
+      message: message(HELLO, checked('the screenshots you sent'), 'Please send a screenshot of order {order ID}. If the order ID in your form is wrong, reply with the right one.', ORDER_STEPS),
     },
     orderDetailsNotMatching: {
-      subject: 'Your order {order ID}: the order details do not match',
-      message: message(HELLO, '{what is wrong}', 'Please reply to this email with the right screenshot, or with the right details.', PURCHASE_HOW),
+      subject: 'Order {order ID}: order details do not match',
+      message: message(HELLO, checked('the screenshots you sent'), 'Please send a screenshot of this order that shows the right details, or reply with the right details.', ORDER_STEPS),
     },
     notDelivered: {
-      subject: 'Your order {order ID}: please send the delivery screenshot once it is delivered',
-      message: message(HELLO, '{what is wrong}', 'Once the order is delivered, please reply to this email with the delivery screenshot: a screenshot of this order on Flipkart that shows the word "Delivered" and the product.', DELIVERY_HOW),
+      subject: 'Order {order ID}: not delivered yet',
+      message: message(HELLO, checked('the delivery details you sent'), 'Once the order is delivered, please send a screenshot that shows "Delivered".', DELIVERY_STEPS),
     },
     notDeliveredCancelled: {
-      subject: 'Your order {order ID}: the screenshot says it was cancelled or returned',
-      message: message(HELLO, '{what is wrong}', 'If the order was in fact delivered, please reply to this email with the delivery screenshot: a screenshot of this order on Flipkart that shows the word "Delivered" and the product.', DELIVERY_HOW),
+      subject: 'Order {order ID}: cancelled or returned',
+      message: message(HELLO, checked('the delivery details you sent'), 'If the order was in fact delivered, please send a screenshot that shows "Delivered".', DELIVERY_STEPS),
     },
     productNotMatching: {
-      subject: 'Your order {order ID}: the product does not match',
-      message: message(HELLO, '{what is wrong}', 'Please reply to this email with the right screenshot, or with the review of the right product.', PURCHASE_HOW),
+      subject: 'Order {order ID}: product does not match',
+      message: message(HELLO, checked('the screenshots you sent'), 'Please send a screenshot of your Flipkart order for {product}.', ORDER_STEPS),
     },
     wrongReviewLink: {
-      subject: 'Your order {order ID}: please send the link to your review',
-      message: message(HELLO, 'The review link you gave does not open your review.', LINK_ASK, LINK_HOW, SHOT_HOW),
+      subject: 'Order {order ID}: review screenshot needed',
+      message: message(HELLO, checked('the review link you sent'), `${REVIEW_ASK} You do not need to send a link.`, REVIEW_HOW),
     },
     reviewNotLive: {
-      subject: 'Your order {order ID}: please send the link to your review',
-      message: message(HELLO, 'We could not find your review among the reviews of this product on Flipkart.', LINK_ASK, LINK_HOW, SHOT_HOW),
+      subject: 'Order {order ID}: review not found on Flipkart',
+      message: message(HELLO, LOOKED, REVIEW_ASK, REVIEW_HOW, 'If your review is still on the Pending tab, Flipkart has not published it yet. Please wait until it moves to Published, then send the screenshot.'),
     },
     reviewLinkNeeded: {
-      subject: 'Your order {order ID}: please send the link to your review',
-      message: message(HELLO, 'We could not find your review on Flipkart from what you sent, so we need the link to it.', LINK_ASK, LINK_HOW, SHOT_HOW),
+      subject: 'Order {order ID}: link to your review needed',
+      message: message(HELLO, LOOKED, 'Please send the link to your review.', LINK_HOW),
     },
     reviewerNotMatching: {
-      subject: 'Your order {order ID}: the name on the review is different',
-      message: message(HELLO, '{what is wrong}', 'Please reply to this email and tell us whose Flipkart account wrote the review, and why the name is different.'),
+      subject: 'Order {order ID}: names do not match',
+      message: message(HELLO, 'We checked your review of {product} on Flipkart, for your order {order ID}.', '{what is wrong}', 'So we cannot confirm that the review was written from your own Flipkart account.', `Please send a screenshot of the review from your own account:\n${REVIEW_STEPS}`, 'If someone else wrote the review from your account, please tell us.'),
     },
     reviewShotNotMatching: {
-      subject: 'Your order {order ID}: the review screenshot does not match',
-      message: message(HELLO, '{what is wrong}', 'Please reply to this email with a screenshot of your own review.'),
+      subject: 'Order {order ID}: review screenshot does not match',
+      message: message(HELLO, 'We compared the review screenshot you sent with your review of {product} on Flipkart, for your order {order ID}. {what is wrong}', REVIEW_ASK, REVIEW_HOW),
     },
     cannotAddReviews: {
-      subject: 'Your order {order ID}: please send the message Flipkart showed',
-      message: message(HELLO, 'Flipkart did not accept your review for this product.', 'If you have not sent it yet, please reply to this email with a screenshot of the message Flipkart showed about your review. It often says the review was not accepted, or that it does not follow Flipkart\'s guidelines.', 'If you have not sent them yet, please also send the purchase screenshot and the delivery screenshot of this order.'),
+      subject: 'Order {order ID}: review not accepted by Flipkart',
+      message: message(HELLO, checked('the review screenshot you sent'), 'If Flipkart publishes a review from you for this product later, please send a screenshot of it from the Published tab of My Reviews.', REVIEW_HOW),
     },
     somethingElse: {
-      subject: 'Your order {order ID}: we could not finish checking it',
-      message: message(HELLO, '{what is wrong}', 'Please reply to this email with a clear screenshot of this order and a screenshot of your review on Flipkart, and tell us anything that can help us check it.', PURCHASE_HOW, SHOT_HOW),
+      subject: 'Order {order ID}: please send two screenshots',
+      message: message(HELLO, checked('the screenshots and the review you sent'), 'Please send two screenshots:\n1. This order: in the Flipkart app, tap Account, then Orders, then this order.\n2. Your review: tap Account, then My Reviews (scroll down if needed), then the Published tab.'),
     },
   },
 };
@@ -182,13 +186,14 @@ export function emailKeyFor(typeKey, { row = null, result = null } = {}) {
   return typeKey;
 }
 
-/** "a", "a and b", "a, b and c". */
-function joinAnd(list) {
+/** "a", "a and b", "a, b and c"; with "or" in place of "and" when asked. */
+function joinAnd(list, word = 'and') {
   const l = list.filter(Boolean);
   if (l.length <= 1) return l[0] ?? '';
-  return `${l.slice(0, -1).join(', ')} and ${l[l.length - 1]}`;
+  return `${l.slice(0, -1).join(', ')} ${word} ${l[l.length - 1]}`;
 }
 const q = (t) => `"${clean(String(t ?? '').replace(/\s+/g, ' ').trim())}"`;
+const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
 const NOUN = { orderId: 'order ID', orderDate: 'order date', amount: 'amount', product: 'product' };
 const starsWord = (n) => (n === 1 ? '1 star' : `${n} stars`);
 /** The screenshots of a check whose detail k is in this state: [{ which, v }]. */
@@ -203,89 +208,127 @@ function shownOn(list, say) {
 }
 /** The cells whose pictures could not be had: their names, in the order they are checked. */
 function unopened(row, test) {
-  return ['order', 'delivery', 'review', 'reviewShot'].filter((w) => (row?.pictures?.[w] ?? []).some((p) => p?.problem && test(p.problem))).map((w) => WHICH[w]);
+  return [...new Set(['order', 'delivery', 'review', 'reviewShot'].filter((w) => (row?.pictures?.[w] ?? []).some((p) => p?.problem && test(p.problem))).map((w) => WHICH[w]))];
 }
-const theFiles = (names) => (names.length ? `the ${joinAnd([...new Set(names)])}` : 'the file');
+
+// "Delivered to <the person> at <the place>" on Flipkart's page of a delivered order (delivery-read.js); words such as "Customer" are not a name.
+const DELIVERED_TO = /(?:^|[^\p{L}])delivered\s+to\b[\s:]+(.+?)(?:\s+at(?:\s.*)?)?$/iu;
+const NOT_A_NAME = /^(?:(?:the|your|a|an|this|our|my)\b.*|customer\b.*|self|you|yourself|family(?:\s+member)?|relative|friend|neighbou?r|security(?:\s+guard)?|guard|reception(?:ist)?|colleague|office|home|front\s+door|door|flipkart\b.*)$/i;
+/** A name as a screenshot shows it, only when it was read clearly: one to four words made only of letters (an initial may have a full stop), and not a word such as "Customer"; null otherwise. */
+const clearName = (t) => {
+  const name = String(t ?? '').replace(/[\s,:;]+$/u, '').replace(/\s+/g, ' ').trim();
+  const words = name.split(' ');
+  const word = /^(?:\p{L}[\p{L}'’-]*\p{L}\.?|\p{Lu}\.?)$/u;
+  return name && name.length <= 40 && words.length <= 4 && words.every((w) => word.test(w)) && !NOT_A_NAME.test(name) ? name : null;
+};
 
 /**
- * What is wrong, for the row, in one or two plain sentences, from what its
- * check found (result: the row's last check, as kept with it) and what the
- * file says (row, reviewer). When the check's details are not known (a result
- * changed by staff, or a row checked before they were kept), a sentence that
- * is still true.
+ * The name the order was delivered to, from the delivery screenshot as read
+ * ("Delivered to Test Person at Home"), only when the screenshot shows one
+ * and it was read clearly; null otherwise.
+ */
+export function deliveredToName(delivery) {
+  if (!delivery?.ok) return null;
+  for (const line of String(delivery.text ?? '').split('\n')) {
+    const m = DELIVERED_TO.exec(line.trim());
+    if (m) return clearName(m[1]);
+  }
+  return null;
+}
+
+/**
+ * The names found for a row's review and where, for "Reviewer name is
+ * different": the name the order was delivered to (from the delivery
+ * screenshot), the name the user gave in the form, the name on the review on
+ * Flipkart and the name on the review screenshot; a name read from a
+ * screenshot only when it was read clearly. -> [{ where, name }]
+ */
+export function namesFound({ result = null, reviewer = null } = {}) {
+  const out = [];
+  const one = (t) => clean(String(t ?? '').replace(/\s+/g, ' ').trim()).slice(0, 60);
+  const delivered = deliveredToName(result?.delivery);
+  if (delivered) out.push({ where: 'Delivered to (on your delivery screenshot)', name: one(delivered) });
+  if (one(reviewer)) out.push({ where: 'In your form', name: one(reviewer) });
+  const f = result?.found ?? null;
+  if (f?.how === 'noName') out.push({ where: 'On the review on Flipkart', name: 'no name, only "Flipkart Customer"' });
+  else if (one(f?.review?.name)) out.push({ where: 'On the review on Flipkart', name: one(f.review.name) });
+  const shot = result?.review?.ok ? clearName(one(result.review.name)) : null;
+  if (shot) out.push({ where: 'On your review screenshot', name: shot });
+  return out;
+}
+
+/**
+ * What we found for the row, in a sentence or two, from what its check found
+ * (result: the row's last check, as kept with it) and what the file says
+ * (row, reviewer); for "Reviewer name is different", each name found and
+ * where. When the check's details are not known (a result changed by staff,
+ * or a row checked before they were kept), a sentence that is still true.
  */
 export function whatIsWrong(key, { row = null, result = null, reviewer = null } = {}) {
   const givenId = clean(String(row?.orderId?.text ?? '').trim());
   const product = clean(String(row?.product?.text ?? '').trim());
-  const wanted = product ? q(product) : 'the product you ordered';
   switch (key) {
     case 'orderIdNotMatching': {
       const diff = detailsOn(result, 'orderId', 'different');
-      if (diff.length && givenId) return `You gave order ID ${givenId}, but ${shownOn(diff, (v) => `order ID ${clean(v.shown)}`)}.`;
-      return givenId ? `The order ID you gave, ${givenId}, is not the order ID on your screenshot.` : 'The order ID you gave is not the order ID on your screenshot.';
+      if (diff.length && givenId) return `In the form you gave order ID ${givenId}, but ${shownOn(diff, (v) => `order ID ${clean(v.shown)}`)}.`;
+      return givenId ? `The order ID on your screenshot is not ${givenId}, the one in your form.` : 'The order ID on your screenshot is not the one in your form.';
     }
     case 'orderDetailsNotMatching': {
       const out = [];
       for (const k of ['orderDate', 'amount']) {
         const diff = detailsOn(result, k, 'different');
         if (!diff.length) continue;
-        const given = k === 'orderDate' ? (row?.orderDate?.value ? dayFirst(row.orderDate.value) : row?.orderDate?.text) : rupees(row?.amount?.value) || row?.amount?.text;
-        out.push(`The ${NOUN[k]} is different: you gave ${clean(String(given ?? '').trim()) || `${k === 'amount' ? 'an amount' : 'a date'}`}, but ${shownOn(diff, (v) => clean(v.shown))}.`);
+        const given = clean(String((k === 'orderDate' ? (row?.orderDate?.value ? dayFirst(row.orderDate.value) : row?.orderDate?.text) : rupees(row?.amount?.value) || row?.amount?.text) ?? '').trim());
+        const shown = shownOn(diff, (v) => clean(v.shown));
+        out.push(given ? `In the form you gave the ${NOUN[k]} ${given}, but ${shown}.` : `${cap(shown)}, which is not the ${NOUN[k]} in your form.`);
       }
-      return out.length ? out.join(' ') : 'The order date or the amount you gave is different from what your screenshot shows.';
+      return out.length ? out.join(' ') : 'The order date or the amount on your screenshot is not the one in your form.';
     }
     case 'productNotMatching': {
       const diff = detailsOn(result, 'product', 'different');
-      if (diff.length) return `${shownOn(diff, (v) => q(v.shown)).replace(/^your/, 'Your')}, but the product should be ${wanted}.`;
-      return `Your screenshot or your review shows a different product. The product should be ${wanted}.`;
+      if (diff.length) return `${cap(shownOn(diff, (v) => q(v.shown)))}, not ${product ? q(product) : 'the product of this offer'}.`;
+      return 'Your screenshot shows a different product.';
     }
     case 'notDelivered': {
       const word = notDeliveredWord(row, result);
       const cell = String(row?.shots?.delivery?.text ?? '').trim();
       if (result?.delivery && word) return `Your delivery screenshot says ${q(word)}, not "Delivered".`;
-      if (cell && !row?.shots?.delivery?.links?.length) return `You wrote ${q(cell)} in the form instead of giving a delivery screenshot.`;
+      if (cell && !row?.shots?.delivery?.links?.length) return `In the form you wrote ${q(cell)} instead of sending a delivery screenshot.`;
       return 'Your delivery screenshot does not show that the order was delivered.';
     }
     case 'notDeliveredCancelled': {
       const word = notDeliveredWord(row, result);
       const cell = String(row?.shots?.delivery?.text ?? '').trim();
-      if (result?.delivery && word) return `Your delivery screenshot says ${q(word)}, so it looks like the order was not delivered.`;
-      if (cell && !row?.shots?.delivery?.links?.length) return `You wrote ${q(cell)} in the form, so it looks like the order was not delivered.`;
-      return 'Your screenshot says the order was cancelled or returned, so it looks like it was not delivered.';
+      if (result?.delivery && word) return `Your delivery screenshot says ${q(word)}.`;
+      if (cell && !row?.shots?.delivery?.links?.length) return `In the form you wrote ${q(cell)}.`;
+      return 'Your screenshot says the order was cancelled or returned.';
     }
     case 'deliveryNotClear': {
       const d = result?.delivery;
       if (d && d.ok !== false && d.details) {
         const missing = [];
         if (!d.delivered) missing.push('the word "Delivered"');
-        if (d.details.orderId?.state === 'not shown') missing.push('the order ID');
         if (d.details.product?.state === 'not shown') missing.push('the product');
-        if (missing.length) return `The delivery screenshot you sent does not show ${joinAnd(missing)}, so it is not enough.`;
+        if (missing.length) return `It does not show ${joinAnd(missing, 'or')}.`;
       }
-      if (d && d.ok === false) return 'What you sent as the delivery screenshot could not be read (for example, a photo of the product is not enough).';
-      return 'What you sent as the delivery screenshot is not enough (for example, a photo of the product is not enough).';
+      if (d && d.ok === false) return 'We could not read it.';
+      return 'It does not show that this order was delivered.';
     }
     case 'orderNotClear': {
       const o = result?.order;
       if (o && o.ok !== false && o.details) {
         const missing = ['orderId', 'amount', 'product', 'orderDate'].filter((k) => o.details[k]?.state === 'not shown').map((k) => `the ${NOUN[k]}`);
-        if (missing.length) return `On the purchase screenshot you sent, we could not see ${joinAnd(missing)}.`;
+        if (missing.length) return `We could not see ${joinAnd(missing, 'or')} on it.`;
       }
-      if (o && o.ok === false) return 'The purchase screenshot you sent could not be read.';
-      return 'On the purchase screenshot you sent, we could not see the order ID, the amount or the product.';
+      if (o && o.ok === false) return 'We could not read it.';
+      return 'We could not see the order ID, the amount or the product on it.';
     }
     case 'reviewerNotMatching': {
-      // On Flipkart the review is found among its reviews by the review screenshot's words, under the name on the screenshot or the one in the file.
-      const f = result?.found ?? null;
-      const onFlipkart = clean(String(f?.review?.name ?? '').trim());
-      const onShot = clean(String(result?.review?.name ?? '').trim());
-      const given = clean(String(reviewer ?? '').trim());
-      if (f?.how === 'noName') return 'Your review on Flipkart shows "Flipkart Customer" instead of a name, so we could not see that it is yours.';
-      if (f?.how === 'noNameToCheck') return 'No name came with your review screenshot or in the form, so we could not see that the review on Flipkart is yours.';
-      const shotName = (f?.how === 'otherName' && f?.nameFrom === 'screenshot') || !given;
-      const mine = shotName ? onShot : given;
-      if (onFlipkart && mine) return `The name on the review on Flipkart is ${q(onFlipkart)}, but ${shotName ? 'the name on your review screenshot' : 'the name you gave'} is ${q(mine)}.`;
-      return 'The name on the review is not the name you gave.';
+      const names = namesFound({ result, reviewer });
+      const lines = names.map((n) => `- ${n.where}: ${n.name}`).join('\n');
+      if (names.length > 1) return `The names we found do not match:\n${lines}`;
+      if (names.length === 1) return `We found only one name, so we could not match it:\n${lines}`;
+      return 'The name on the review is not the name in your form.';
     }
     case 'reviewShotNotMatching': {
       const a = result?.review?.stars;
@@ -293,30 +336,47 @@ export function whatIsWrong(key, { row = null, result = null, reviewer = null } 
       if (Number.isInteger(a) && Number.isInteger(b) && a !== b) return `Your review screenshot shows ${starsWord(a)}, but your review on Flipkart has ${starsWord(b)}.`;
       return 'Your review screenshot does not match your review on Flipkart.';
     }
+    case 'reviewNotLive': {
+      const v = result?.review ?? null;
+      const f = result?.found ?? null;
+      const day = result?.reviewsFrom?.day ?? null;
+      const oldest = result?.flipkart?.oldest ?? null;
+      const among = `it is not among the reviews Flipkart shows for this product${oldest ? `, which we checked back to ${dayFirst(oldest)}` : ''}.`;
+      if (v?.tab === 'pending') return 'Your review screenshot shows it on the Pending tab of My Reviews, so Flipkart had not published it yet.';
+      if (f?.before && day) return `We found ${f.before === 1 ? 'a review' : `${f.before} reviews`} with the same words, but ${f.before === 1 ? 'it was' : 'they were'} posted before your order was ${result.reviewsFrom.from === 'order' ? 'placed' : 'delivered'} on ${dayFirst(day)}, so ${f.before === 1 ? 'it does' : 'they do'} not count for this order.`;
+      if (v?.tab === 'published') return `Your review screenshot shows it on the Published tab, but ${among}`;
+      if (v?.form) return `Your review screenshot shows the review being written, not posted, and ${among}`;
+      return cap(among);
+    }
+    case 'reviewLinkNeeded': {
+      const f = result?.found;
+      if (f?.how === 'several' && f.count > 1) return `We found ${f.count} reviews on Flipkart with the same words, so we cannot tell which one is yours.`;
+      return 'We could not find your review on Flipkart from what you sent, so we need its link.';
+    }
     case 'reviewNotClear':
-      return 'We could not read the review screenshot you sent.';
-    case 'needDriveAccess':
-      return `We could not open ${theFiles(unopened(row, (p) => p.noAccess || p.kind === 'drive'))} you sent on Google Drive.`;
-    case 'needAccess':
-      return `We could not open ${theFiles(unopened(row, () => true))} you sent.`;
+      return 'We could not read it clearly.';
+    case 'needDriveAccess': {
+      const names = unopened(row, (p) => p.noAccess || p.kind === 'drive');
+      return names.length ? `We could not open your ${joinAnd(names)} on Google Drive.` : 'We could not open the screenshot you sent on Google Drive.';
+    }
+    case 'needAccess': {
+      const names = unopened(row, () => true);
+      return names.length ? `We could not open your ${joinAnd(names)}.` : 'We could not open the screenshot you sent.';
+    }
     case 'duplicate':
-      return 'The same order, screenshot or review was already sent for another entry.';
+      return 'This order, screenshot or review was already sent in another entry, so it cannot count again.';
     case 'orderShotMissing':
-      return 'The purchase screenshot was not added in the form, so we cannot see the order.';
+      return 'There was no purchase screenshot in it.';
     case 'deliveryShotMissing':
-      return 'The delivery screenshot was not added in the form, so we cannot see that the order was delivered.';
+      return 'There was no delivery screenshot in it.';
     case 'reviewLinkMissing':
-      return 'The link to your review and the screenshot of it were not added in the form, so we cannot see your review.';
+      return 'There was no review screenshot or review link in it.';
     case 'wrongReviewLink':
-      return 'The review link you gave does not open your review.';
-    case 'reviewNotLive':
-      return 'We could not find your review among the reviews of this product on Flipkart.';
-    case 'reviewLinkNeeded':
-      return 'We could not find your review on Flipkart from what you sent, so we need the link to it.';
+      return 'It does not open your review.';
     case 'cannotAddReviews':
-      return 'Flipkart did not accept your review for this product.';
+      return 'It shows a message from Flipkart that your review was not accepted.';
     case 'somethingElse':
-      return 'We could not finish checking your order from what you sent.';
+      return 'Some of it was not clear enough for us to finish.';
     default:
       return '';
   }
@@ -325,8 +385,9 @@ export function whatIsWrong(key, { row = null, result = null, reviewer = null } 
 /**
  * Some words with their placeholders filled in, as on Amazon. A blank name or
  * order ID goes with the space before it ("Hello {name}," becomes "Hello,");
- * a blank product becomes "this product"; a blank {what is wrong} goes with
- * its line. The sign-off is added at the end when the words do not place it.
+ * a blank product goes with its brackets, or else becomes "this product"; a
+ * blank {what is wrong} goes with its line. The sign-off is added at the end
+ * when the words do not place it.
  */
 export function fill(text, { name = '', orderId = '', product = '', whatIsWrong: wrong = '', signOff = '' } = {}, { addSignOff = false } = {}) {
   let out = String(text ?? '');
@@ -336,6 +397,7 @@ export function fill(text, { name = '', orderId = '', product = '', whatIsWrong:
   };
   blankGoes('{name}', one(name));
   blankGoes('{order ID}', one(orderId));
+  if (!one(product)) out = out.split(' ({product})').join('');
   out = out.split('{product}').join(one(product) || 'this product');
   const w = clean(String(wrong ?? '').trim());
   out = w ? out.split('{what is wrong}').join(w) : out.replace(/[ \t]*\{what is wrong\}[ \t]*\n?/g, '');
@@ -346,10 +408,10 @@ export function fill(text, { name = '', orderId = '', product = '', whatIsWrong:
 }
 
 /**
- * The email for a row, as on Amazon: its key and name, and its subject and
- * message filled in for the row. Null when the row's Type has no email.
- * typeKey is the row's Type; result is its last check, as kept with the row
- * (or null); reviewer is the name in the Reviewer Name column.
+ * The email for a row: its key and name, and its subject and message filled
+ * in for the row. Null when the row's Type has no email. typeKey is the row's
+ * Type; result is its last check, as kept with the row (or null); reviewer is
+ * the name in the Reviewer Name column.
  */
 export function emailFor({ typeKey, row, result = null, reviewer = null }) {
   const key = emailKeyFor(typeKey, { row, result });
