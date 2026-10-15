@@ -37,7 +37,7 @@
 // reason, the Type and the Note, the row's details, with its screenshots as
 // small pictures that open large when clicked (or why one could not be had,
 // in the Amazon words), what was read from each screenshot and found on
-// Flipkart, and a check's nine steps, shown live as each one runs and still
+// Flipkart, and a check's ten steps (the Amazon check's, duplicates first), shown live as each one runs and still
 // shown after a reload. A row's Status shows in the table and on its page as
 // soon as its check finishes. As on Amazon, above the table: the four Status
 // cards (Pass, Fail, Needs Manual Staff Checking and Not checked yet, each
@@ -94,6 +94,7 @@ export const GOOGLE_WORDS = {
 
 /** A check's steps: the Amazon check's, in the same order, changed to the Flipkart way of checking (flipkart/check.js). */
 export const STEP_NAMES = [
+  'Duplicates and links in the sheet',
   'Opening the purchase screenshot',
   'Reading the purchase screenshot and comparing it with the sheet',
   'Opening the delivery screenshot',

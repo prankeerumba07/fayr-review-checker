@@ -8,7 +8,8 @@
 // the Google login, for the top bar), /local/flipkart/rows/… (GET a row's
 // page, with its last check, and its pictures; POST …/check to check it, as on
 // Amazon, the steps streamed as they run, ending with the row's Status, Type
-// and Note, kept with the row; POST …/result for a result a staff member
+// and Note, kept with the row, and, as on Amazon, each later row it found to
+// share its screenshot or review marked Duplicate; POST …/result for a result a staff member
 // chose, and …/right for "The result is right", as on Amazon; GET …/email
 // for "Prepare email": the email for the row, filled in as on Amazon, which
 // is never sent from here), /local/flipkart/sheet/checked.xlsx (GET: "The
@@ -47,7 +48,7 @@ import { emailFor, hasEmail } from './emails.js';
 import { writeCells, headingStyle, WriteError } from './xlsx-write.js';
 import { readZip } from './zip.js';
 import { createScreenshots, downloadable } from './screenshots.js';
-import { runCheck, PAUSE_SAYS, keptDay, clean } from './check.js';
+import { runCheck, PAUSE_SAYS, keptDay, clean, newCheckId } from './check.js';
 import { CAMPAIGN_KEY, newCampaignKey, productLines, usable, confirmProducts, needsReading, readProduct, campaignsFound, campaignsFor, brandIn, startDayFrom, startDayOf } from './campaigns.js';
 import { readOrderShot, readDeliveryShot } from './shot-read.js';
 import { readReviewShot } from './review-read.js';
@@ -813,6 +814,24 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
   };
 
   /**
+   * The later rows a check found to share its row's screenshot or review
+   * (check.js alsoDuplicate): each is marked Duplicate, a Fail, with its own
+   * Note naming the row checked, as on Amazon; the review found for it before
+   * is kept with it. A result a staff member changed by hand is kept (one only
+   * marked right by staff is not: the mark goes). -> the rows marked.
+   */
+  async function markDuplicates(result) {
+    const marked = [];
+    for (const d of result.alsoDuplicate ?? []) {
+      const twin = d?.id ? await store.row(d.id) : null;
+      if (!twin || (twin.check?.staff && !twin.check.staff.right)) continue;
+      const at = now().toISOString();
+      marked.push(await store.saveCheck(d.id, { checkId: newCheckId(now()), startedAt: at, finishedAt: at, seconds: 0, steps: [], final: 'fail', typeKey: 'duplicate', note: d.note, finalSays: d.finalSays, found: twin.check?.found ?? null }));
+    }
+    return marked;
+  }
+
+  /**
    * "Check" (or "Check again"): one row's check, its steps streamed as they
    * run, as on Amazon. One check at a time, never while a campaign's products
    * are read. A row with a Google Drive screenshot to download while a login
@@ -841,9 +860,13 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       const before = googleBefore(row);
       if (before) return pause(before.kind, before.says);
       const saved = await store.sheet();
-      const result = await runCheck({ row, has: hasColumns(saved?.sheet?.mapping), screenshots, marks, campaigns: campaignsOf(row, saved, await store.campaigns()), readOrder, readDelivery, readReview, reviewer: reviewerOf(row, saved), reviews: reviewsSource(), emit, signal: run.stop.signal, now });
+      const others = (saved?.rows ?? []).filter((r) => r.id !== row.id);
+      const result = await runCheck({ row, others, has: hasColumns(saved?.sheet?.mapping), screenshots, marks, campaigns: campaignsOf(row, saved, await store.campaigns()), readOrder, readDelivery, readReview, reviewer: reviewerOf(row, saved), reviews: reviewsSource(), emit, signal: run.stop.signal, now });
       if (result.paused) pause(result.paused.kind, result.paused.says);
-      else if (!result.stopped) await store.saveCheck(id, result);
+      else if (!result.stopped) {
+        await store.saveCheck(id, result);
+        await markDuplicates(result);
+      }
     } catch (err) {
       log(`Flipkart check failed: ${err?.name ?? 'Error'}`);
       emit({ event: 'failed', says: `Something went wrong on this computer part way through the check. Nothing was saved for it; press ${button} to try again.` });
@@ -922,14 +945,15 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
         // A row with a Google Drive screenshot to download, while a login is using the Live Amazon Browser or no one is logged in to Google: checking pauses before it.
         const before = googleBefore(r);
         if (before) return paused(before.kind, before.says);
-        const result = await runCheck({ row: r, has, screenshots, marks, campaigns: campaignsOf(r, saved, campaigns), readOrder, readDelivery, readReview, reviewer: reviewerOf(r, saved), reviews, emit, signal: run.stop.signal, now });
+        const result = await runCheck({ row: r, others: rows.filter((x) => x.id !== r.id), has, screenshots, marks, campaigns: campaignsOf(r, saved, campaigns), readOrder, readDelivery, readReview, reviewer: reviewerOf(r, saved), reviews, emit, signal: run.stop.signal, now });
         if (result.stopped) break;
         if (result.paused) return paused(result.paused.kind, result.paused.says);
         const kept = await store.saveCheck(r.id, result);
+        const twins = await markDuplicates(result);
         checked++;
         rows = await keptRows();
-        // The row's new line for the table, before the next row starts.
-        emit({ event: 'row-done', rowId: r.id, label: labelOf(r), seconds: result.seconds, rows: [rowView(kept)], ...tally(rows) });
+        // The row's new line for the table, and the line of each row it made Duplicate, before the next row starts.
+        emit({ event: 'row-done', rowId: r.id, label: labelOf(r), seconds: result.seconds, rows: [rowView(kept), ...twins.map(rowView)], ...tally(rows) });
       }
       rows = await keptRows();
       emit({ event: run.stop.signal.aborted ? 'run-stopped' : 'run-done', checked, ...tally(rows) });

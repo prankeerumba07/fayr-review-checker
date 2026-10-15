@@ -181,6 +181,8 @@ test('"Possible misuse": in polite words, only what came before the day the offe
   const fact = (m) => whatIsWrong('possibleMisuse', { row: row(), result: m === null ? null : misuse(m) });
   assert.equal(fact({ posted: { date: '2026-07-28', dateLatest: '2026-07-28', dateSaid: '28 Jul, 2026' } }), 'This offer started on 01-08-2026. Your review of this product on Flipkart was posted on 28-07-2026, before that day.');
   assert.equal(fact({ delivered: '2026-07-23', posted: { date: '2026-06-14', dateLatest: '2026-06-29', dateSaid: '1 month ago' } }), 'This offer started on 01-08-2026. Your delivery screenshot shows the order was delivered on 23-07-2026 and your review of this product on Flipkart was posted by 29-06-2026, both before that day.');
+  // The full date the review screenshot shows, when the review was not found on Flipkart.
+  assert.equal(fact({ shot: '2026-07-10' }), 'This offer started on 01-08-2026. Your review screenshot shows your review was posted on 10-07-2026, before that day.');
   assert.equal(fact({ placed: '2026-07-20', delivered: '2026-07-23', posted: { date: '2026-07-28', dateLatest: '2026-07-28' } }), 'This offer started on 01-08-2026. Your purchase screenshot shows the order was placed on 20-07-2026, your delivery screenshot shows it was delivered on 23-07-2026 and your review of this product on Flipkart was posted on 28-07-2026, all before that day.');
   // A result a staff member chose: a sentence that is still true.
   assert.deepEqual([fact(null), fact({})], ['Some dates for this order are before the day this offer started.', 'Some dates for this order are before the day this offer started.']);

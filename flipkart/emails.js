@@ -389,6 +389,7 @@ export function whatIsWrong(key, { row = null, result = null, reviewer = null } 
         x?.placed ? `your purchase screenshot shows the order was placed on ${dayFirst(x.placed)}` : null,
         x?.delivered ? `your delivery screenshot shows ${x.placed ? 'it' : 'the order'} was delivered on ${dayFirst(x.delivered)}` : null,
         p?.dateLatest ? `your review of this product on Flipkart was posted ${p.date === p.dateLatest ? 'on' : 'by'} ${dayFirst(p.dateLatest)}` : null,
+        x?.shot ? `your review screenshot shows your review was posted on ${dayFirst(x.shot)}` : null,
       ].filter(Boolean);
       if (!x?.start || !parts.length) return 'Some dates for this order are before the day this offer started.';
       return `This offer started on ${dayFirst(x.start)}. ${cap(joinAnd(parts))}, ${['', 'before that day', 'both before that day', 'all before that day'][parts.length]}.`;

@@ -1,24 +1,31 @@
 // A Flipkart row's check, in steps a person can watch, the way the Amazon
 // checker checks a row (amazon/check.js), copied and changed for Flipkart.
 // Its steps are the Amazon check's, in the same order, changed to the Flipkart
-// way of checking (FLIPKART-PLAN.md point 8): the purchase screenshot, the
+// way of checking (FLIPKART-PLAN.md point 8): duplicates first, as on Amazon
+// (the same order ID, the same screenshot or review link, or the same picture
+// as another row of the file: of the rows that share one, only the first in
+// the file's order is checked, and the later ones are Duplicate, a Fail; the
+// same picture is the same file, or one that looks the same and reads the
+// same, found again once each screenshot is read; and the review found on
+// Flipkart that another row's check found too is the same review), then the
+// purchase screenshot, the
 // delivery screenshot, the review screenshot (the main proof on Flipkart,
 // where many rows have no review link), finding the review among Flipkart's
 // public reviews, comparing the reviewer's name and the review's words, and
 // the Status, Type and Note. The steps that get the screenshots
 // (screenshots.js) download each one's pictures, or keep the reason they
-// could not be had, said in the Amazon checker's words; step 2 reads the
+// could not be had, said in the Amazon checker's words; step 3 reads the
 // purchase screenshot on this computer (shot-read.js) and compares it with
 // the sheet, as the Amazon checker's step 3 does: the order ID, the order date
 // (only when the file has that column), the amount and the product are each
-// the same, different or not shown; step 4 reads the delivery screenshot the
+// the same, different or not shown; step 5 reads the delivery screenshot the
 // same way, as the Amazon checker's step 5 does: it must say Delivered, and
 // when the two screenshots show different order IDs, it says both
-// (FLIPKART-PLAN.md point 6); step 6 reads the review screenshot
+// (FLIPKART-PLAN.md point 6); step 7 reads the review screenshot
 // (review-read.js), as the Amazon checker's step 7 reads one: the rating, the
 // review's title and words, the reviewer's name and the date, or Flipkart's
 // message that the review was not accepted or that only a rating was given;
-// of several reviews, only the user's; step 7 finds the review among
+// of several reviews, only the user's; step 8 finds the review among
 // Flipkart's public reviews: the campaign product's own page on Flipkart,
 // then "See all reviews", newest first, read once in a checking run and kept
 // on this computer for every row (routes.js, reviews.js), back to the
@@ -27,15 +34,17 @@
 // else the order day), together with the reviews since the start date kept
 // from earlier readings (kept-reviews.js; one of those counts only when
 // today's reading does not reach back to its day, and when it does and the
-// review is not there, it may have been removed); step 8 compares the review
+// review is not there, it may have been removed); step 9 compares the review
 // found with the review screenshot, as the Amazon checker compares a review
 // with its screenshot and with the Reviewer Name column: the name, the words,
-// the stars and the day it was posted; and step 9 gives the row its Status
+// the stars and the day it was posted; and step 10 gives the row its Status
 // (Pass, Fail or Needs Manual Staff Checking), its Type and its Note, with
 // the Amazon checker's words and rules (final.js): the screenshots' problems
 // first, in the Amazon order, then the review's; but the review, or the order
 // on its screenshots, before the campaign's start date is Possible misuse,
-// for a staff member, unless a problem fails the row. It passes only when both
+// for a staff member, unless a problem fails the row (a review screenshot
+// that clearly shows a full date before it counts too, when the review is not
+// found on Flipkart). It passes only when both
 // screenshots match the sheet and the review is live on Flipkart under the
 // user's name with the review screenshot's words, posted on or after the
 // delivery day, or, as on Amazon, when the review screenshot shows a star
@@ -62,8 +71,9 @@ import { NOT_DELIVERED_WORDS, parseDelivery } from './delivery-read.js';
 import { readReviewShot, nameFits } from './review-read.js';
 import { matchReview, shotWords } from './review-match.js';
 import { reachOf, reaches, keptNotRead } from './kept-reviews.js';
-import { indiaDay, plainText } from './review-page.js';
-import { linkLabel, isShortLink, reviewPageLink } from './links.js';
+import { indiaDay, plainText, dateFromWords } from './review-page.js';
+import { linkLabel, isShortLink, reviewPageLink, linkKey, reviewIdFrom } from './links.js';
+import { PICTURE_CELLS, before, firstOf, rowName, rowsNamed, samePictures, lookAlikes } from './duplicates.js';
 import { DEFAULT_MARKS } from './settings.js';
 import { shortName } from './campaigns.js';
 import { wordsOf, productWords, overlapScore } from './text.js';
@@ -71,6 +81,7 @@ import { FINAL_WORDS, TYPE_FINAL, typeWord, finalSentence, lowerFirst, oneDigitO
 import { sameDay, amountMatch, totalRead, totalShown, priceDetailsShown, partialOrderId, rupees, productShown, holdsWord, dayFirst, nameStartShown, enoughOfName, nameLineStarting, brandWordsAtStart, nameCouldBe, datesOnce, nameAsShown, productNames, sameStart } from './screen-text.js';
 
 export const STEP_NAMES = [
+  'Duplicates and links in the sheet',
   'Opening the purchase screenshot',
   'Reading the purchase screenshot and comparing it with the sheet',
   'Opening the delivery screenshot',
@@ -81,18 +92,18 @@ export const STEP_NAMES = [
   "Comparing the reviewer's name and the review's words",
   'Status, Type and Note',
 ];
-/** The steps that open a screenshot, with its cell, and the steps that read one; steps 6 to 9 are the review's and the Status's own. */
-const OPENS = { 1: 'order', 3: 'delivery', 5: 'reviewShot' };
-const READS = { 2: 'order', 4: 'delivery' };
+/** The steps that open a screenshot, with its cell, and the steps that read one; step 1 is the duplicates', and steps 7 to 10 are the review's and the Status's own. */
+const OPENS = { 2: 'order', 4: 'delivery', 6: 'reviewShot' };
+const READS = { 3: 'order', 5: 'delivery' };
 /** What each step was doing, for "Something went wrong on this computer while …". */
-const STEP_DOING = ['opening the purchase screenshot', 'reading the purchase screenshot', 'opening the delivery screenshot', 'reading the delivery screenshot', 'opening the review screenshot', 'reading the review screenshot', "finding the review among Flipkart's public reviews", "comparing the reviewer's name and the review's words", 'writing the Status, Type and Note'];
+const STEP_DOING = ['looking for duplicates and links in the sheet', 'opening the purchase screenshot', 'reading the purchase screenshot', 'opening the delivery screenshot', 'reading the delivery screenshot', 'opening the review screenshot', 'reading the review screenshot', "finding the review among Flipkart's public reviews", "comparing the reviewer's name and the review's words", 'writing the Status, Type and Note'];
 /** The Amazon checker's words for a check paused by a download (amazon/check.js): the screenshots on Google Drive are downloaded through the same Google login. */
 export const PAUSE_SAYS = {
   'google-out': 'No one is logged in to Google, so the screenshots on Google Drive cannot be downloaded. Press "Log in to Google" in the top bar and log in there, then press "Carry on checking".',
   'google-signin': 'Google asked to log in, so the screenshots on Google Drive cannot be downloaded. Press "Log in to Google" in the top bar and log in there, then press "Carry on checking".',
   'google-robot': 'Google showed a robot check while a screenshot was being downloaded. This dashboard never answers a robot check. Press "Carry on checking" when you are ready.',
   'google-blocked': 'Google Drive refused to give a screenshot just now. Wait a while, then press "Carry on checking".',
-  // While Flipkart's reviews are read in the Live Flipkart Browser (step 7), as the Amazon checker pauses for Amazon's pages.
+  // While Flipkart's reviews are read in the Live Flipkart Browser (step 8), as the Amazon checker pauses for Amazon's pages.
   'flipkart-captcha': 'Flipkart showed a robot check. This dashboard never answers a robot check. Press "Carry on checking" when you are ready.',
   'flipkart-blocked': 'Flipkart refused a page. Wait a while, then press "Carry on checking".',
   'flipkart-error': 'Flipkart showed an error page. Wait a while, then press "Carry on checking".',
@@ -104,6 +115,8 @@ export const PAUSE_SAYS = {
 /** The pause for each way a reading of Flipkart's reviews can stop part way (reviews.js). */
 const READING_PAUSES = { slow: 'flipkart-slow', closed: 'flipkart-closed', network: 'flipkart-network', elsewhere: 'flipkart-elsewhere' };
 const WHAT = { order: 'purchase screenshot', delivery: 'delivery screenshot', review: 'review screenshot', reviewShot: 'review screenshot' };
+/** Each cell, as a duplicate's Note names the ones missing. */
+const CELL_WORDS = { order: 'purchase screenshot', delivery: 'delivery screenshot', review: 'review link', reviewShot: 'review screenshot' };
 /** Each cell's column, as the file's columns are named (workbook.js). */
 const SHOT_COLUMN = { order: 'orderShot', delivery: 'deliveryShot', review: 'reviewLink', reviewShot: 'reviewShot' };
 /** The two screenshots compared with the sheet. */
@@ -198,7 +211,7 @@ function keptDate(w) {
 }
 /**
  * From which day a review on Flipkart can be the user's, as a row's last
- * check found it: step 7's own day, else the day on the delivery screenshot's
+ * check found it: step 8's own day, else the day on the delivery screenshot's
  * Delivered line, else the earliest order day on the purchase screenshot (a
  * day with no year: the most recent such day by the time of the check). For
  * how far back Flipkart's reviews are read (routes.js). -> YYYY-MM-DD, or
@@ -275,7 +288,7 @@ class Paused extends Error {
 
 /**
  * Run one row's check.
- *   row — the row as kept (store.js)
+ *   row — the row as kept (store.js); others — every other row of the file, as kept, each with its last check (check), for the duplicates
  *   has — the columns the file has: { orderDate, amount, product, orderShot, deliveryShot, reviewShot, reviewLink }, each true unless false
  *   screenshots — screenshots.js: forCell(rowId, which, { signal })
  *   marks — Flipkart's passing marks (settings.js): { productNameShare, amountDifferenceRupees, feeAllowanceRupees }
@@ -286,9 +299,9 @@ class Paused extends Error {
  *   reviewer — the reviewer named in the sheet (null when the file has no Reviewer Name column, or the cell is empty), which finds the user's review among several on the review screenshot, and is compared with the name on Flipkart (step 8)
  *   reviews(pid, { rowId, day, start, onPage, signal }) — Flipkart's public reviews of a campaign's product, read once in a checking run and kept on this computer (routes.js, reviews.js readProductReviews); day is the oldest day this row needs; start is the day the product's campaign started (or null): the reviews are read back to it, and the answer carries the reviews since it kept from earlier readings (kept)
  *   emit(event) — started, action, step and done lines for the screen; a step's line carries what was read so far (partial)
- * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, status, type, typeKey, note, final, finalSays, steps, sheet, order, delivery, review, reviewsFrom, flipkart, found, misuse, compared, shotsHad, comparison, paused, stopped }
+ * -> the result: { checkId, rowId, n, name, startedAt, finishedAt, seconds, status, type, typeKey, note, final, finalSays, steps, sheet, order, delivery, review, reviewsFrom, flipkart, found, misuse, compared, shotsHad, comparison, alsoDuplicate, paused, stopped }; alsoDuplicate: the later rows this check found to share its order's screenshot or review, each { id, note, final, finalSays }, to be marked Duplicate (routes.js)
  */
-export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_MARKS, campaigns = [], readOrder = readOrderShot, readDelivery = readDeliveryShot, readReview = readReviewShot, reviewer = null, reviews = null, emit = () => {}, signal = null, checkId = newCheckId(), now = () => new Date() }) {
+export async function runCheck({ row, others = [], has = null, screenshots, marks = DEFAULT_MARKS, campaigns = [], readOrder = readOrderShot, readDelivery = readDeliveryShot, readReview = readReviewShot, reviewer = null, reviews = null, emit = () => {}, signal = null, checkId = newCheckId(), now = () => new Date() }) {
   const had = { orderDate: true, amount: true, product: true, orderShot: true, deliveryShot: true, reviewShot: true, reviewLink: true, ...Object.fromEntries(Object.entries(has ?? {}).map(([k, v]) => [k, v !== false])) };
   /** A detail with no column in the file is not compared at all. */
   const compared = DETAILS.filter((k) => k === 'orderId' || had[k]);
@@ -306,7 +319,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     startedAt: now().toISOString(),
     finishedAt: null,
     seconds: null,
-    // Step 9: the Status (final: 'pass', 'fail' or 'manual'; status: its word), the Type (typeKey, and its words), the Note, and the Status's reason (finalSays, the Note's first sentence). None for a check that paused or was stopped.
+    // Step 10: the Status (final: 'pass', 'fail' or 'manual'; status: its word), the Type (typeKey, and its words), the Note, and the Status's reason (finalSays, the Note's first sentence). None for a check that paused or was stopped.
     status: null,
     type: null,
     typeKey: null,
@@ -316,22 +329,24 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     steps: STEP_NAMES.map((name, i) => ({ n: i + 1, name, state: 'waiting', detail: null })),
     // What the sheet says of the details compared, as it is written there, for the comparison table.
     sheet: { orderId: row.orderId?.text ?? '', orderDate: row.orderDate?.text ?? '', amount: row.amount?.text ?? '', product: label },
-    // What each screenshot says, as read on this computer, with each detail compared (steps 2 and 4).
+    // What each screenshot says, as read on this computer, with each detail compared (steps 3 and 5).
     order: null,
     delivery: null,
-    // What the review screenshot says, as read on this computer (step 6).
+    // What the review screenshot says, as read on this computer (step 7).
     review: null,
-    // From which day a review can be the user's, and Flipkart's reviews as read for this row (step 7).
+    // From which day a review can be the user's, and Flipkart's reviews as read for this row (step 8).
     reviewsFrom: null,
     flipkart: null,
     found: null,
-    // What came before the campaign's start date (step 9, misuseOf): { start, placed, delivered, posted }, or null.
+    // What came before the campaign's start date (step 10, misuseOf): { start, placed, delivered, posted }, or null.
     misuse: null,
     // What was compared, and the screenshots the file has: the comparison shows only those.
     compared,
     shotsHad: SHOTS.filter((w) => had[SHOT_COLUMN[w]]),
     // The sheet and the two screenshots side by side (buildComparison), once the check has finished.
     comparison: [],
+    // The later rows found to share this row's screenshot or review once their pictures or reviews were known: Duplicate, each with its own Note.
+    alsoDuplicate: [],
     paused: null,
     stopped: false,
   };
@@ -350,10 +365,10 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const s = result.steps[n - 1];
     s.state = state;
     s.detail = detail ? clean(detail) : null;
-    // What was read so far for the row's page; what step 7 read and found once it has.
+    // What was read so far for the row's page; what step 8 read and found once it has.
     emit({ event: 'step', step: { ...s }, partial: { order: result.order, delivery: result.delivery, review: result.review, ...(result.flipkart ? { flipkart: result.flipkart } : {}), ...(result.found ? { found: result.found } : {}) } });
   }
-  /** A step that cannot run in this check (step 7 with no way to read Flipkart's reviews): it says it comes in a later step. */
+  /** A step that cannot run in this check (step 8 with no way to read Flipkart's reviews): it says it comes in a later step. */
   function later(n) {
     checkStop();
     finish(n, 'later', null);
@@ -389,7 +404,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
   const reads = {};
   /** Sentences near the end of the Note that are not a Type: a screenshot of several that could not be opened. */
   const warnings = [];
-  /** The days steps 2 and 4 read: { order: the purchase screenshot's dates that can be the order's, delivery: the Delivered line's date }. */
+  /** The days steps 3 and 5 read: { order: the purchase screenshot's dates that can be the order's, delivery: the Delivered line's date }. */
   const daysRead = {};
   /** A cell's pictures, downloading again any that could not be had; a download that cannot be made just now pauses the check here. */
   async function fetchCell(n, which) {
@@ -399,10 +414,224 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       const says = g.says ?? PAUSE_SAYS[g.pause] ?? 'The screenshot could not be downloaded just now.';
       pauseAt(n, g.pause, says, `${says.split('. ')[0].replace(/\.$/, '')}. The check paused here, before the ${WHAT[which]} was downloaded; nothing was got around.`);
     }
+    // The cell's pictures as they are now, so a picture just downloaded is compared with other rows' too.
+    if (Array.isArray(g?.records)) current.pictures[which] = g.records;
     return g;
   }
 
-  /** Steps 1, 3 and 5: a screenshot's cell, and its pictures downloaded (amazon/check.js openShot). */
+  // ---- duplicates (copied from the Amazon checker, amazon/check.js, and changed for Flipkart) ----
+
+  /** The duplicate this check found: { line (what this row shares, and which row is the one checked), why (for the step's line), step }; null when none. */
+  let duplicate = null;
+  /** This row's pictures as they are now: a picture downloaded during the check replaces the one kept before. */
+  const current = { ...row, pictures: Object.fromEntries(PICTURE_CELLS.map((w) => [w, [...(row.pictures?.[w] ?? [])]])) };
+  /** Sentences that end the Note of the first row: the later rows that share something with it. */
+  const afterWhy = new Set();
+  const isReview = (which) => which === 'review' || which === 'reviewShot';
+  /** True when one of these rows is nearer the top of the file than this one, so this row is the later one: a duplicate. */
+  const isLater = (group) => group.some((o) => before(o, row));
+  /** A duplicate's first sentence: "This transaction failed because it is a duplicate: …". */
+  const duplicateSays = (line) => finalSentence('fail', `it is a duplicate: ${lowerFirst(line)}`);
+  /** Another row this check makes Duplicate, with its own Note, which says which row is the one checked. */
+  const alsoDuplicate = (o, line) => {
+    if (!result.alsoDuplicate.some((d) => d.id === o.id)) result.alsoDuplicate.push({ id: o.id, note: noteOf([duplicateSays(line)]), final: 'fail', finalSays: clean(duplicateSays(line)) });
+  };
+  /** "which was already checked", or "and row 2 is the one that will be checked". */
+  const firstSaid = (first) => (first.check ? 'which was already checked' : `and ${rowName(first)} is the one that will be checked`);
+  /** The sentences that end the first row's Note: which later rows share it, and that they were not checked. */
+  const laterSaid = (what, rows) => afterWhy.add(`The same ${what} is also in ${rowsNamed(rows)}. ${rows.length === 1 ? 'That row is a duplicate and was' : 'Those rows are duplicates and were'} not checked.`);
+  /** Stops the check as Duplicate, as on Amazon: the line that says what this row shares and which row is the one checked, and why that makes it a duplicate (the step's line). */
+  function dup(n, line, why) {
+    duplicate = { line: clean(line), why, step: n };
+    finish(n, 'fail', `${cap(why)}.`);
+    return true;
+  }
+  /** What another row's last check read from one of its cells, to tell the same picture from one that only looks the same: { orderIds, text }, or null. */
+  function seenOf(o, which) {
+    const c = o?.check;
+    if (!c) return null;
+    if (!isReview(which)) return c[which]?.ok && c[which].text ? { orderIds: c[which].orderIds ?? [], text: c[which].text } : null;
+    return c.review?.ok && c.review.text && which === reviewCell(o, had) ? { orderIds: [], text: c.review.text } : null;
+  }
+  /** True when a row's review picture showed Flipkart's message that the review was not accepted (what its check read, or the Type it gave). */
+  const refusalShown = (o, which) => o?.check?.typeKey === 'cannotAddReviews' || (o?.check?.review?.kind === 'refused' && which === reviewCell(o, had));
+  /**
+   * Of the rows whose picture is this cell's, those that are not the same
+   * thing after all (read: what this cell's picture says), as on Amazon:
+   * Flipkart's message that a review was not accepted, sent for two orders of
+   * one account, is the same message, not the same review; and a row is never
+   * the duplicate of a screenshot that shows its own order and not the other
+   * row's: it is that row's screenshot, and the row nearer the top that gave
+   * it for another order is told so by its own check (a different order ID).
+   */
+  function notSame(which, hits, read) {
+    if (isReview(which)) {
+      if (refusalShown(row, which) || read?.refused) return [];
+      return hits.filter((h) => !refusalShown(h.o, h.which));
+    }
+    if (!sheetId || !read) return hits;
+    const ids = read.orderIds ?? [];
+    const mine = ids.includes(sheetId);
+    return hits.filter((h) => {
+      const theirs = ids.includes(h.o.orderId?.value ?? '');
+      // A row nearer the top: this row is not its duplicate when the picture shows this row's order and not that row's.
+      if (before(h.o, row)) return !(mine && !theirs);
+      // A later row: it is not made a duplicate when the picture shows its order and not this row's.
+      return !(theirs && !mine);
+    });
+  }
+  /** What a cell's picture says, for comparing it with another row's: its order IDs (none on a review) and all its words. */
+  const wordsRead = (which, r) => ({ orderIds: isReview(which) ? [] : r.orderIds ?? [], text: clean(r.text ?? ''), ...(isReview(which) ? { refused: r.kind === 'refused' } : {}) });
+  /** This row shares a picture with rows nearer the top, so it is the later one: Duplicate of the first. */
+  function samePictureStop(n, which, hits) {
+    const first = firstOf(hits.map((x) => x.o).filter((o) => before(o, row)));
+    const h = hits.find((x) => x.o === first) ?? hits[0];
+    return dup(n, `The ${WHAT[which]} in this row is the same picture as the ${WHAT[h.which]} in ${rowName(h.o)}, ${firstSaid(h.o)}.`, `two different orders cannot share one screenshot, so this row is a duplicate and was not checked${h.o.check ? ' again' : ''}`);
+  }
+  /** The later rows that share this row's picture: this row is the first, so they are Duplicate. */
+  function markLater(hits, which) {
+    for (const h of hits) alsoDuplicate(h.o, `The ${WHAT[h.which]} in this row is the same picture as the ${WHAT[which]} in ${rowName(row)}, which is the one checked.`);
+    laterSaid(WHAT[which], hits.map((h) => h.o));
+  }
+  /** Once a cell's pictures are read: another row's picture that is the same file, or looks the same and reads the same, is the same picture. -> true when this row is the later one (a duplicate). */
+  function samePictureAfterReading(n, which, read) {
+    const hits = notSame(which, samePictures(current, others, { which, read }, seenOf)[which], read);
+    if (!hits.length) return false;
+    if (!isLater(hits.map((h) => h.o))) {
+      markLater(hits, which);
+      return false;
+    }
+    return samePictureStop(n, which, hits);
+  }
+  /** Two reviews found on Flipkart with no ID that show the same name, stars, title and start of their words. */
+  const sameFound = (a, b) => {
+    const norm = (t) => String(t ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+    return Boolean(norm(a?.text) || norm(a?.title)) && norm(a?.name) === norm(b?.name) && (a?.stars ?? null) === (b?.stars ?? null) && norm(a?.title) === norm(b?.title) && norm(a?.text).slice(0, 200) === norm(b?.text).slice(0, 200);
+  };
+  /**
+   * A review that is also another row's, as on Amazon: the same review on
+   * Flipkart that the other row's check found (by its own ID, or, with none,
+   * by its name, stars and words), or that the other row's review link opens.
+   * This row the later one: Duplicate of the first (true). This row the first:
+   * the later rows are Duplicate, and this row's Note says so (false).
+   */
+  function sameReviewDuplicate(n, r) {
+    const id = r?.id ? String(r.id).toLowerCase() : null;
+    const same = others.filter((o) => {
+      const f = o.check?.found;
+      const theirs = f?.how === 'found' || f?.how === 'gone' ? f.review : null;
+      if (id && theirs?.id) return String(theirs.id).toLowerCase() === id;
+      if (id && (o.shots?.review?.links ?? []).some((l) => linkKey(l) === `review:${id}`)) return true;
+      return Boolean(theirs && !id && !theirs.id && sameFound(theirs, r));
+    });
+    if (!same.length) return false;
+    const laterOnes = same.filter((o) => before(row, o));
+    if (laterOnes.length < same.length) {
+      const first = firstOf(same.filter((o) => before(o, row)));
+      return dup(n, `The review in this row is the same review on Flipkart as in ${rowName(first)}, ${firstSaid(first)}.`, 'two different orders cannot share one review, so this row is a duplicate and was not checked further');
+    }
+    for (const o of laterOnes) alsoDuplicate(o, `The review in this row is the same review on Flipkart as in ${rowName(row)}, which is the one checked.`);
+    laterSaid('review', laterOnes);
+    return false;
+  }
+  /** What a cell's picture says, read in step 1 to see whose order it shows or whether it is another row's picture; a screenshot's reading is used again by its own step. */
+  const early = {};
+  async function readEarly(n, which) {
+    const g = await fetchCell(n, which);
+    if (!g.files.length) return null;
+    let r;
+    if (isReview(which)) r = await readReview(g.files, { reviewer: reviewer || null, productIs });
+    else {
+      const want = { orderId: sheetId || null, amount: sheetAmount, tolerance, allowance, product: which === 'order' && had.product ? productTold : null };
+      r = early[which] = await (which === 'order' ? readOrder : readDelivery)(g.files, { want });
+    }
+    checkStop();
+    return r;
+  }
+
+  /**
+   * Step 1: duplicates and links in the sheet, as on Amazon (amazon/check.js
+   * step 1): the same order ID as another row, the same screenshot link or
+   * review link (only a picture or one review counts), the same picture file,
+   * and a picture that looks like another row's and reads the same. Of the
+   * rows that share one, only the first in the file's order is checked; this
+   * row the later one, it is Duplicate and nothing more is checked. This row
+   * the first, its Note names the later ones.
+   */
+  async function duplicatesStep(n) {
+    start(n, 'Looking for the same order, links and pictures in other rows');
+    // The same order ID in another row: only the first of them is checked.
+    if (sheetId) {
+      const same = others.filter((o) => o.orderId?.value && o.orderId.value === sheetId);
+      if (same.length && isLater(same)) {
+        const first = firstOf(same.filter((o) => before(o, row)));
+        return dup(n, first.check ? `Order ID ${sheetId} was already checked in ${rowName(first)}.` : `Order ID ${sheetId} is also in ${rowName(first)}, and ${rowName(first)} is the one that will be checked.`, `this row has the same order ID, so it is a duplicate and was not checked${first.check ? ' again' : ''}`);
+      }
+      if (same.length) laterSaid('order ID', same);
+    }
+    // The same screenshot or review link as another row's, by where the link goes. Only a picture or one review counts: never words, a product's
+    // page or its reviews, a short link, an app store's page or another Flipkart page.
+    const sharable = (which, link) => which !== 'review' || downloadable('review', link) || linkLabel(link) === 'Flipkart review';
+    const theirs = new Map();
+    for (const o of others) {
+      for (const which of PICTURE_CELLS) {
+        for (const link of o.shots?.[which]?.links ?? []) {
+          const key = sharable(which, link) ? linkKey(link) : null;
+          if (!key) continue;
+          if (!theirs.has(key)) theirs.set(key, []);
+          if (!theirs.get(key).some((x) => x.o === o)) theirs.get(key).push({ o, which });
+        }
+      }
+    }
+    for (const which of PICTURE_CELLS) {
+      for (const link of row.shots?.[which]?.links ?? []) {
+        if (!sharable(which, link)) continue;
+        // Flipkart's message that a review was not accepted, given by the same link for two orders of one account, is the same message, not the same review.
+        const hits = (theirs.get(linkKey(link)) ?? []).filter((h) => !(isReview(which) && (refusalShown(row, which) || refusalShown(h.o, h.which))));
+        if (!hits.length) continue;
+        const what = which === 'review' ? 'review link' : WHAT[which];
+        const share = which === 'review' ? 'two different orders cannot share one review' : 'two different orders cannot share one screenshot';
+        if (!isLater(hits.map((h) => h.o))) {
+          laterSaid(what, hits.map((h) => h.o));
+          continue;
+        }
+        const first = firstOf(hits.map((h) => h.o).filter((o) => before(o, row)));
+        return dup(n, `This row uses the same ${what} as ${rowName(first)}, ${firstSaid(first)}.`, `${share}, so this row is a duplicate and was not checked${first.check ? ' again' : ''}`);
+      }
+    }
+    // The review link opens one review that another row's check found on Flipkart.
+    const linked = had.reviewLink ? (row.shots?.review?.links ?? []).map(reviewIdFrom).find(Boolean) : null;
+    if (linked && sameReviewDuplicate(n, { id: linked })) return;
+    // The very same picture file as another row's.
+    const sameFile = samePictures(current, others, null, seenOf);
+    for (const which of PICTURE_CELLS) {
+      let hits = sameFile[which];
+      if (!hits.length) continue;
+      // A screenshot is read first, to see whose order it shows (notSame).
+      if (!isReview(which) && sheetId) {
+        const r = await readEarly(n, which);
+        hits = notSame(which, hits, r ? { orderIds: r.ok === false ? [] : r.orderIds ?? [], text: r.text ?? '' } : null);
+      } else hits = notSame(which, hits, null);
+      if (!hits.length) continue;
+      if (!isLater(hits.map((h) => h.o))) {
+        markLater(hits, which);
+        continue;
+      }
+      return samePictureStop(n, which, hits);
+    }
+    // A picture that looks like another row's: read now, so the same picture is found before anything else.
+    for (const which of PICTURE_CELLS) {
+      if (!lookAlikes(current, others, which, seenOf).length) continue;
+      say(`Reading the ${WHAT[which]}, which looks like another row's`);
+      const r = await readEarly(n, which);
+      if (!r || r.ok === false || !r.text) continue;
+      if (samePictureAfterReading(n, which, wordsRead(which, r))) return;
+    }
+    // This row the first: its line names the later rows that share something with it, as its Note does.
+    return finish(n, 'pass', afterWhy.size ? [...afterWhy].join(' ') : 'No other row has this order ID, these links or these pictures.');
+  }
+
+  /** Steps 2, 4 and 6: a screenshot's cell, and its pictures downloaded (amazon/check.js openShot). */
   async function openShot(n, which) {
     start(n, `Opening the ${WHAT[which]}`);
     if (!had[SHOT_COLUMN[which]]) {
@@ -430,7 +659,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     return finish(n, 'pass', `Opened ${g.files.length === 1 ? `the ${WHAT[which]}` : `${g.files.length} ${WHAT[which]}s`}.`);
   }
 
-  // ---- steps 2 and 4: each screenshot read, and each detail compared with the sheet (amazon/check.js readShot and detailsOf) ----
+  // ---- steps 3 and 5: each screenshot read, and each detail compared with the sheet (amazon/check.js readShot and detailsOf) ----
   const mark = marks.productNameShare;
   const tolerance = marks.amountDifferenceRupees;
   /** Up to this many rupees of Flipkart's fees may be missing from a screenshot that shows no total. */
@@ -595,7 +824,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     return order && delivery && order !== delivery ? { order, delivery } : null;
   }
 
-  /** Steps 2 and 4: the screenshot read on this computer, and each detail compared with the sheet. */
+  /** Steps 3 and 5: the screenshot read on this computer, and each detail compared with the sheet. */
   async function readShot(n, which) {
     const was = shot[which]?.state;
     if (was !== 'opened') {
@@ -605,9 +834,10 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     start(n, `Reading the ${WHAT[which]}`);
     // A screenshot is read again the other ways when it lacks what the sheet gives: the order ID, the amount, and on the purchase screenshot the product.
     const want = { orderId: sheetId || null, amount: sheetAmount, tolerance, allowance, product: which === 'order' && had.product ? productTold : null };
-    const r = await (which === 'order' ? readOrder : readDelivery)(shot[which].files, { want });
+    // Read already in step 1, when it looked like another row's picture.
+    const r = early[which] ?? (await (which === 'order' ? readOrder : readDelivery)(shot[which].files, { want }));
     checkStop();
-    // The days read, for step 7: the order's on the purchase screenshot, the delivery's on the delivery screenshot.
+    // The days read, for step 8: the order's on the purchase screenshot, the delivery's on the delivery screenshot.
     daysRead[which] = which === 'order' ? orderDates('order', r.dates ?? []) : r.deliveredOn ?? null;
     const near = (v) => sheetAmount !== null && Number.isFinite(v) && Math.abs(v - sheetAmount) <= tolerance + 1e-9;
     // A number read with no rupee sign and no label is shown only when it is the sheet's amount, the only time it counts.
@@ -644,6 +874,8 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       shot[which] = { ...shot[which], state: 'unreadable', problem: r.problem ?? 'its words are not clear enough to read' };
       return finish(n, 'fail', `It could not be read: ${shot[which].problem}.`);
     }
+    // Once read: the same picture as another row's, as on Amazon (the same file, or one that looks the same and reads the same).
+    if (samePictureAfterReading(n, which, wordsRead(which, r))) return;
     const details = detailsOf(which, r);
     record.details = details;
     reads[which] = r;
@@ -668,7 +900,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
   }
 
   /**
-   * Step 6: the review screenshot read on this computer, as the Amazon
+   * Step 7: the review screenshot read on this computer, as the Amazon
    * checker reads one in its step 7 (amazon/check.js): the rating, the
    * review's title and words, the reviewer's name and the date, or Flipkart's
    * message that the review was not accepted or that only a rating was given.
@@ -709,6 +941,8 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     };
     const v = result.review;
     if (!r.ok) return finish(n, 'fail', `It could not be read: ${r.problem ?? 'its words are not clear enough to read'}.`);
+    // Once read: the same picture as another row's, as on Amazon; never Flipkart's message that a review was not accepted, the same for two orders.
+    if (r.text && v.kind !== 'refused' && samePictureAfterReading(n, which, wordsRead(which, r))) return;
     if (v.kind === 'refused') return finish(n, 'fail', `It shows a message from Flipkart that the review was not accepted: ${quoted(v.message, 200)}.`);
     // What the screen shows or does not show ("My Reviews": its Published tab, else it lists pending reviews too; the review being written is not posted) ends the line.
     const note = v.note ? ` ${v.note}` : '';
@@ -726,10 +960,10 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     return finish(n, 'fail', `It does not clearly show a written review, a star rating only or a message from Flipkart, because ${v.why}.${note}`);
   }
 
-  /** True when the review screenshot shows a star rating with no words (step 6): Rating Only, as on Amazon. */
+  /** True when the review screenshot shows a star rating with no words (step 7): Rating Only, as on Amazon. */
   let ratingOnly = false;
 
-  // ---- step 7: finding the review among Flipkart's public reviews (FLIPKART-PLAN.md point 4) ----
+  // ---- step 8: finding the review among Flipkart's public reviews (FLIPKART-PLAN.md point 4) ----
 
   /**
    * From which day a review on Flipkart can be the user's: the day the order
@@ -788,7 +1022,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
   }
 
   /**
-   * Step 7: finding the review among Flipkart's public reviews, as staff
+   * Step 8: finding the review among Flipkart's public reviews, as staff
    * would: the campaign product's own page on Flipkart, then "See all
    * reviews", newest first (reviews.js readProductReviews), read once in a
    * checking run and kept on this computer for every row (routes.js); then
@@ -802,7 +1036,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
    * page that takes too long pauses the check, as on Amazon, and nothing is
    * got around; but a review found among the pages read before it is found.
    */
-  /** What step 7 did, for the Status: why it searched nothing (skip: 'later', 'nothing', 'noCampaign' or 'noProduct'), and what it read (got) and found (m). */
+  /** What step 8 did, for the Status: why it searched nothing (skip: 'later', 'nothing', 'noCampaign' or 'noProduct'), and what it read (got) and found (m). */
   const seven = { skip: null, got: null, m: null };
   async function findReviewStep(n) {
     if (!reviews) {
@@ -853,6 +1087,8 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     result.found = m ? { how: m.how, count: m.count, nameFrom: m.name.from, counted: m.counted, nameOnly: m.nameOnly, before: m.before, share: m.share, rareShare: m.rareShare, review: m.review ? { id: m.review.id ?? null, name: m.review.name ?? null, stars: m.review.stars ?? null, title: m.review.title ?? null, text: m.review.text ?? null, dateSaid: m.review.dateSaid ?? null, date: m.review.date ?? null, dateLatest: m.review.dateLatest ?? null, link: reviewPageLink(m.review.link, m.review.id) } : null, ...(m.review?.kept ? { kept: true, lastSeen: m.review.lastSeen ?? null } : {}) } : null;
     seven.got = got;
     seven.m = m;
+    // The same review on Flipkart as another row's: of the two, only the first in the file's order counts; this row the later one, it is Duplicate.
+    if ((m?.how === 'found' || m?.how === 'gone') && sameReviewDuplicate(n, m.review)) return;
     // Flipkart stopping the reading (a robot check, a refused page, an error page, a page too slow), or the Live Flipkart Browser closed, offline or
     // led to another website, before the review was found pauses the check, as on Amazon: nothing is got around, and the reading goes on from there later.
     // A review kept from earlier readings and gone from the reviews read today would not be among the older ones still to read.
@@ -873,7 +1109,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const [state, said] = foundSaid(m, got, oldest);
     return finish(n, state, `${said} ${reading}${keptSaid} ${rule}`);
   }
-  /** Step 7's result, in plain words, never a review's words: [state, sentence]. */
+  /** Step 8's result, in plain words, never a review's words: [state, sentence]. */
   function foundSaid(m, got, oldest) {
     const v = result.review;
     const r = m.review;
@@ -920,15 +1156,15 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     if (!begun || !oldest || oldest <= begun || got?.end !== 'last page' || (Number.isInteger(got.total) && got.total <= list.length)) return null;
     const rough = list.some((r) => r.date === oldest && r.dateLatest !== r.date);
     const counted = Number.isInteger(got.total) ? ` of the ${got.total.toLocaleString('en-IN')} reviews it counts` : ' reviews';
-    return `Flipkart's list of the product's reviews ends at ${rough ? 'about ' : ''}${dayFirst(oldest)}, before the campaign's start date, ${dayFirst(begun)}, as it shows only the newest ${list.length}${counted}.`;
+    return `Flipkart shows only the newest ${list.length}${counted}, so its list stops at ${rough ? 'about ' : ''}${dayFirst(oldest)} and does not reach back to the campaign's start date, ${dayFirst(begun)}.`;
   }
 
-  // ---- step 8: comparing the reviewer's name and the review's words (amazon/check.js reviewShotCheck and reviewerCheck) ----
+  // ---- step 9: comparing the reviewer's name and the review's words (amazon/check.js reviewShotCheck and reviewerCheck) ----
 
-  /** Problems step 8 finds that a staff member must look at: { type, says, then }. They never fail the transaction. */
+  /** Problems step 9 finds that a staff member must look at: { type, says, then }. They never fail the transaction. */
   const flags = [];
   const flag = (type, says, then) => flags.push({ type, says, then });
-  /** Step 8's sentences for the Note when what it compared matches. */
+  /** Step 9's sentences for the Note when what it compared matches. */
   const reviewNotes = [];
   /** Two names written the same, but for small and capital letters, spaces and marks. */
   const sameName = (a, b) => {
@@ -938,7 +1174,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
   const starsWord = (k) => `${k} ${k === 1 ? 'star' : 'stars'}`;
 
   /**
-   * Step 8: the review found on Flipkart (step 7) against the review
+   * Step 9: the review found on Flipkart (step 8) against the review
    * screenshot, as the Amazon checker compares a review with the review
    * screenshot and with the Reviewer Name column: the name on the review
    * screenshot (else the reviewer's name in the sheet) against the name on
@@ -968,7 +1204,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
       else if (nameFits(column, r.name)) said.push(sameName(column, r.name) ? 'It is the name in the Reviewer Name column too.' : `It fits the name in the Reviewer Name column, ${quoted(column, 40)}, too.`);
       else flag('reviewerNotMatching', `The reviewer's name on Flipkart, ${quoted(r.name, 40)}, is not the name in the Reviewer Name column, ${quoted(column, 40)}.`, 'A staff member must check whose review it is.');
     }
-    // The words: the screenshot's are in the review (step 7 found them there); it may show only part of the review's.
+    // The words: the screenshot's are in the review (step 8 found them there); it may show only part of the review's.
     const ofFlipkart = overlapScore(r.text || r.title || '', shotWords(v)) ?? 0;
     said.push(ofFlipkart < 0.85 ? "The review screenshot shows part of the review's words on Flipkart." : 'The review screenshot shows the same words as the review on Flipkart.');
     // The stars, when both show them.
@@ -987,7 +1223,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     return finish(n, flags.length ? 'fail' : 'pass', [...said, ...flags.map((x) => x.says)].join(' '));
   }
 
-  // ---- step 9: Status, Type and Note (amazon/check.js, its step 10, with its words and rules) ----
+  // ---- step 10: Status, Type and Note (amazon/check.js, its step 10, with its words and rules) ----
 
   /** The campaigns named in a sentence: "the campaign "Test Brand Bottles"", or "the campaigns "A" and "B"". */
   const named = campaigns.filter((c) => c.products?.length);
@@ -1113,10 +1349,10 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
   function judgeShots() {
     problems = judge();
     const neither = problems.filter((p) => p.kind === 'not shown' && p.which.length === 2).map((p) => `Neither screenshot shows ${p.detail === 'orderId' ? 'an order ID' : `the ${NOUN[p.detail]}`}.`);
-    const s4 = result.steps[3];
-    if (neither.length && s4.state !== 'not-reached') finish(4, 'fail', `${s4.detail ?? ''} ${neither.join(' ')}`.trim());
+    const s5 = result.steps[4];
+    if (neither.length && s5.state !== 'not-reached') finish(5, 'fail', `${s5.detail ?? ''} ${neither.join(' ')}`.trim());
     for (const p of problems.filter((x) => (x.kind === 'not shown' || x.kind === 'no details' || x.kind === 'mismatch') && x.which.length === 1)) {
-      const k = p.which[0] === 'order' ? 2 : 4;
+      const k = p.which[0] === 'order' ? 3 : 5;
       const s = result.steps[k - 1];
       if (s.state === 'pass') finish(k, 'fail', `${s.detail ?? ''} ${cap(notShownClause(p))}.`.trim());
     }
@@ -1228,7 +1464,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     if (!had.reviewShot) return 'The user did not give a review link in the form.';
     return 'The user did not give a review link or a review screenshot in the form.';
   }
-  /** "the 150 reviews Flipkart shows for the product": the reviews step 7 read, in a few words. */
+  /** "the 150 reviews Flipkart shows for the product": the reviews step 8 read, in a few words. */
   function reviewsReadSaid(got) {
     const k = (got.reviews ?? []).length;
     const reviewsSaid = k === 1 ? 'the 1 review' : `the ${k} reviews`;
@@ -1269,7 +1505,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     if (v.kind === 'refused') return { type: 'cannotAddReviews', says: [`The review screenshot shows a message from Flipkart that the review was not accepted: ${quoted(String(v.message ?? '').replace(/[.!?]+\s*$/, ''), 200)}.`] };
     if (v.kind === 'rating') return null;
     if (v.kind !== 'written' || !(v.body || v.title)) return { type: 'somethingElse', says: [`The review screenshot does not clearly show a written review, a star rating only or a message from Flipkart, because ${v.why ?? 'none could be read'}.`, linked ? 'The review link is not opened by the dashboard yet.' : null].filter(Boolean), then: 'Open it by hand.' };
-    // A written review: what step 7 found among Flipkart's reviews.
+    // A written review: what step 8 found among Flipkart's reviews.
     const g = seven.got;
     const m = seven.m;
     if (seven.skip === 'noCampaign') return { type: 'reviewLinkNeeded', says: ['The review screenshot shows a written review, but the row uses no live campaign with a product read from Flipkart, so the review could not be looked for on Flipkart.'], then: "Add a campaign for this brand with its products, or ask the user for the review's link, then check this row again." };
@@ -1319,14 +1555,24 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     return { type: 'reviewNotLive', says: [first, ...notes].filter(Boolean), then: m.before ? 'A staff member must check whether that review is for this order.' : 'It may not be public yet.' };
   }
 
+  /** The full day a review screenshot clearly shows, its day, month and year ("12 Sep, 2026"), as YYYY-MM-DD; null for a date with no day or year ("Sep, 2026", "3 days ago"), or a screenshot not read clearly. */
+  function shotDay() {
+    const v = result.review;
+    const t = String(v?.dateText ?? '').replace(/\s+/g, ' ').trim();
+    if (!v?.ok || !/^\d{1,2} [a-z]{3,9},? \d{4}$/i.test(t)) return null;
+    const d = dateFromWords(t, indiaDay(now()));
+    return d?.date && d.date === d.latest ? d.date : null;
+  }
   /**
    * What came before the day the row's campaign started (startDay), for
    * Possible misuse: the day the order was placed (on the purchase
    * screenshot), the day it was delivered (on the delivery screenshot), and
    * when the review on the review screenshot was posted on Flipkart (found, or
    * found only before the day the order was delivered), each only when it
-   * surely came before that day. -> { start, placed, delivered, posted: {
-   * date, dateLatest, dateSaid }, says (the reason: words that follow
+   * surely came before that day; and, when the review is not found on
+   * Flipkart, the full date the review screenshot clearly shows (shotDay),
+   * when it came before that day. -> { start, placed, delivered, posted: {
+   * date, dateLatest, dateSaid }, shot, says (the reason: words that follow
    * "because") }, or null when nothing came before it, or the campaign has no
    * start date.
    */
@@ -1339,13 +1585,30 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const delivered = dayOf(daysRead.delivery, today);
     const m = seven.m;
     const r = m?.how === 'found' || m?.how === 'gone' ? m.review : m?.how === 'notFound' ? m.earlier : null;
-    const out = { start: begun, placed: placed && placed < begun ? placed : null, delivered: delivered && delivered < begun ? delivered : null, posted: r?.dateLatest && r.dateLatest < begun ? { date: r.date ?? null, dateLatest: r.dateLatest, dateSaid: r.dateSaid ?? null } : null };
-    if (!out.placed && !out.delivered && !out.posted) return null;
+    const out = { start: begun, placed: placed && placed < begun ? placed : null, delivered: delivered && delivered < begun ? delivered : null, posted: r?.dateLatest && r.dateLatest < begun ? { date: r.date ?? null, dateLatest: r.dateLatest, dateSaid: r.dateSaid ?? null } : null, shot: null };
+    // Not found on Flipkart: the day the review screenshot shows, when it is a full date before the start date.
+    const shown = !out.posted && m?.how !== 'found' && m?.how !== 'gone' ? shotDay() : null;
+    if (shown && shown < begun) out.shot = shown;
+    if (!out.placed && !out.delivered && !out.posted && !out.shot) return null;
     const p = out.posted;
     const when = !p ? null : p.date === p.dateLatest ? `on ${dayFirst(p.date)}` : `${p.dateSaid ? quoted(p.dateSaid, 30) : 'on a day not shown'} (by ${dayFirst(p.dateLatest)} at the latest)`;
-    const parts = [out.placed ? `the purchase screenshot shows the order was placed on ${dayFirst(out.placed)}` : null, out.delivered ? `the delivery screenshot shows ${out.placed ? 'it' : 'the order'} was delivered on ${dayFirst(out.delivered)}` : null, p ? `the review on Flipkart was posted ${when}` : null].filter(Boolean);
+    const parts = [out.placed ? `the purchase screenshot shows the order was placed on ${dayFirst(out.placed)}` : null, out.delivered ? `the delivery screenshot shows ${out.placed ? 'it' : 'the order'} was delivered on ${dayFirst(out.delivered)}` : null, p ? `the review on Flipkart was posted ${when}` : null, out.shot ? `the review screenshot shows the review was posted on ${dayFirst(out.shot)}` : null].filter(Boolean);
     const campaign = named.length ? theCampaign : 'the campaign';
     return { ...out, says: `${joinAnd(parts)}, ${['', 'before', 'both before', 'all before'][parts.length]} ${campaign} started on ${dayFirst(begun)}` };
+  }
+
+  /** What a duplicate's Note says after its reason, as on Amazon: anything else known to be missing (not the cell it shares), then the later rows that share something with it. */
+  function duplicateRest() {
+    const rw = reviewCell(row, had);
+    const subject = { 2: 'order', 3: 'order', 4: 'delivery', 5: 'delivery', 6: rw, 7: rw }[duplicate.step];
+    const missing = [];
+    for (const which of ['order', 'delivery', rw].filter((w) => had[SHOT_COLUMN[w]])) {
+      if (which === subject) continue;
+      const c = row.shots?.[which] ?? {};
+      if (!c.links?.length && !c.picture) missing.push(`the ${CELL_WORDS[which]} (${c.text ? `the cell says ${quoted(c.text, 30)}` : 'the cell is empty'})`);
+      else if ((current.pictures[which] ?? []).length && current.pictures[which].every((p) => p.problem)) missing.push(`the ${WHAT[which]}, which could not be opened`);
+    }
+    return [missing.length ? `Also missing: ${joinAnd(missing)}.` : null, ...afterWhy];
   }
 
   /** Writes the row's Status, Type and Note: the Note starts with the Status and its reason, then says the rest once. */
@@ -1359,7 +1622,7 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
   }
 
   /**
-   * Step 9: the Status, Type and Note, with the Amazon checker's words and
+   * Step 10: the Status, Type and Note, with the Amazon checker's words and
    * rules: the screenshots' problems first, in the Amazon order (the first
    * that fails the transaction gives the Status, else the first of all), then
    * the review's own failing problem (none given, a wrong link, Flipkart not
@@ -1368,43 +1631,48 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
    */
   function statusStep(n) {
     start(n, 'Writing the Status, Type and Note');
-    // Something that went wrong on this computer while the screenshots were read is said first; in a later step, it is the review's problem.
-    const early = trouble && trouble.n <= 4 ? trouble : null;
-    const review = trouble && trouble.n > 4 ? { type: 'somethingElse', says: [trouble.says], then: trouble.then } : reviewProblem();
+    // A duplicate, as on Amazon: what it shares and which row is the one checked, then anything else known to be missing.
+    if (duplicate) {
+      writeResult('fail', 'duplicate', `it is a duplicate: ${lowerFirst(duplicate.line)}`, duplicateRest());
+      return finish(n, 'fail', `${result.status}: ${result.type}.`);
+    }
+    // Something that went wrong on this computer while the duplicates were looked for or the screenshots were read is said first; in a later step, it is the review's problem.
+    const trouble1 = trouble && trouble.n <= 5 ? trouble : null;
+    const review = trouble && trouble.n > 5 ? { type: 'somethingElse', says: [trouble.says], then: trouble.then } : reviewProblem();
     const failing = problems.find((p) => p.final === 'fail');
     const reviewFails = Boolean(review && TYPE_FINAL[review.type] === 'fail');
     /** The review's problems, one sentence each, said after a screenshot's; not that the product bought could not be told, which only follows from the screenshot's. */
     const reviewSaid = [seven.skip === 'noProduct' ? null : review?.says[0], ...flags.map((f) => f.says)];
     // The review, or the order on its screenshots, before the campaign's start date: Possible misuse, unless a problem fails the row.
     const misuse = misuseOf();
-    result.misuse = misuse ? { start: misuse.start, placed: misuse.placed, delivered: misuse.delivered, posted: misuse.posted } : null;
+    result.misuse = misuse ? { start: misuse.start, placed: misuse.placed, delivered: misuse.delivered, posted: misuse.posted, shot: misuse.shot } : null;
     const misuseSaid = misuse ? `${cap(misuse.says)}.` : null;
     let final;
     let typeKey;
     let reason;
     let rest;
-    // What step 8 found that matches is said only when the Status comes from the review, or for a Pass: after a screenshot's problem, only problems are said.
+    // What step 9 found that matches is said only when the Status comes from the review, or for a Pass: after a screenshot's problem, only problems are said.
     let reviewTold = false;
     if (failing) {
       final = 'fail';
       typeKey = failing.type;
       reason = reasonOf(failing);
-      rest = [...detailOf(failing), ...problems.filter((p) => p !== failing).map(problemSaid), misuseSaid, early?.says, ...reviewSaid];
+      rest = [...detailOf(failing), ...problems.filter((p) => p !== failing).map(problemSaid), misuseSaid, trouble1?.says, ...reviewSaid];
     } else if (reviewFails) {
       final = 'fail';
       typeKey = review.type;
       reason = lowerFirst(review.says[0]);
-      rest = [...review.says.slice(1), ...problems.map(problemSaid), misuseSaid, early?.says];
+      rest = [...review.says.slice(1), ...problems.map(problemSaid), misuseSaid, trouble1?.says];
     } else if (misuse) {
       final = 'manual';
       typeKey = 'possibleMisuse';
       reason = misuse.says;
-      rest = ['A staff member must check whether this order can count for the campaign.', early?.says, ...problems.map(problemSaid), ...reviewSaid];
-    } else if (early) {
+      rest = ['A staff member must check whether this order can count for the campaign.', trouble1?.says, ...problems.map(problemSaid), ...reviewSaid];
+    } else if (trouble1) {
       final = 'manual';
       typeKey = 'somethingElse';
-      reason = lowerFirst(early.says);
-      rest = [early.then, ...problems.map(problemSaid), ...reviewSaid];
+      reason = lowerFirst(trouble1.says);
+      rest = [trouble1.then, ...problems.map(problemSaid), ...reviewSaid];
     } else if (problems.length) {
       const main = problems[0];
       final = 'manual';
@@ -1438,29 +1706,39 @@ export async function runCheck({ row, has = null, screenshots, marks = DEFAULT_M
     const saidNoCampaign = [reason, ...rest].some((t) => /no (?:live )?campaign/.test(String(t ?? '')));
     const sheetNameSaid = !bySheetName ? null : campaigns.length ? `${cap(joinAnd(campaigns.map((c) => `the campaign "${clean(c.name)}"`)))} ${campaigns.length > 1 ? 'have' : 'has'} no product read from Flipkart, so the product was compared with the product name in the sheet.` : saidNoCampaign ? 'The product was compared with the product name in the sheet.' : "There is no campaign for this product's brand, so the product was compared with the product name in the sheet.";
     const flagged = new Set(flags.map((f) => f.says));
-    writeResult(final, typeKey, reason, [...rest, ...judgeNotes, ...(reviewTold ? reviewNotes.filter((t) => !flagged.has(t)) : []), ...warnings, sheetNameSaid]);
+    writeResult(final, typeKey, reason, [...rest, ...judgeNotes, ...(reviewTold ? reviewNotes.filter((t) => !flagged.has(t)) : []), ...warnings, sheetNameSaid, ...afterWhy]);
     return finish(n, final === 'pass' ? 'pass' : 'fail', `${result.status}: ${result.type}.`);
   }
 
   emit({ event: 'started', checkId, steps: STEP_NAMES, rowId: row.id, row: row.row ?? null, name: result.name });
   try {
     for (let n = 1; n <= STEP_NAMES.length; n++) {
-      const which = n === 5 ? reviewCell(row, had) : OPENS[n];
-      if (which) await step(n, () => openShot(n, which));
+      // A duplicate is not checked further, as on Amazon: the steps after the one that found it are not run, and the last gives its Status.
+      if (duplicate && n < STEP_NAMES.length) {
+        const s = result.steps[n - 1];
+        if (s.state === 'waiting') {
+          Object.assign(s, { state: 'not-reached', detail: `Step ${duplicate.step} found that this row is a duplicate, so this step was not run.` });
+          emit({ event: 'step', step: { ...s } });
+        }
+        continue;
+      }
+      const which = n === 6 ? reviewCell(row, had) : OPENS[n];
+      if (n === 1) await step(n, () => duplicatesStep(n));
+      else if (which) await step(n, () => openShot(n, which));
       else if (READS[n]) await step(n, () => readShot(n, READS[n]));
-      else if (n === 6) await step(n, () => readReviewStep(n, reviewCell(row, had)));
-      else if (n === 7) await step(n, () => findReviewStep(n));
-      else if (n === 8) await step(n, () => compareStep(n));
+      else if (n === 7) await step(n, () => readReviewStep(n, reviewCell(row, had)));
+      else if (n === 8) await step(n, () => findReviewStep(n));
+      else if (n === 9) await step(n, () => compareStep(n));
       else await step(n, () => statusStep(n));
       // Both screenshots read: their problems are judged at once, as on Amazon, and their steps say what the judging found.
-      if (n === 4) await step(4, () => judgeShots());
+      if (n === 5 && !duplicate) await step(5, () => judgeShots());
     }
   } catch (err) {
     if (err instanceof Stopped) result.stopped = true;
     else if (!(err instanceof Paused)) throw err;
   }
   // A Status even when writing it went wrong on this computer: a staff member looks.
-  if (!result.paused && !result.stopped && !result.final) writeResult('manual', 'somethingElse', lowerFirst(trouble?.says ?? `Something went wrong on this computer while ${STEP_DOING[8]}`), [trouble?.then ?? 'Check this row again.']);
+  if (!result.paused && !result.stopped && !result.final) writeResult('manual', 'somethingElse', lowerFirst(trouble?.says ?? `Something went wrong on this computer while ${STEP_DOING[9]}`), [trouble?.then ?? 'Check this row again.']);
   // The sheet and the two screenshots side by side, as the Amazon checker's comparison table shows them.
   result.comparison = buildComparison(result);
   result.finishedAt = now().toISOString();

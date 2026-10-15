@@ -156,12 +156,12 @@ function keptFound(o) {
     ...(o.kept === true && DAY.test(String(o.lastSeen ?? '')) ? { kept: true, lastSeen: o.lastSeen } : {}),
   };
 }
-/** What came before the campaign's start date (check.js misuseOf), as kept with the row's last check: the start date, and the day the order was placed and delivered, and when the review was posted, each only when it came before it. */
+/** What came before the campaign's start date (check.js misuseOf), as kept with the row's last check: the start date, and the day the order was placed and delivered, when the review was posted, and the full date the review screenshot shows, each only when it came before it. */
 function keptMisuse(o) {
   if (!o || typeof o !== 'object' || !DAY.test(String(o.start ?? ''))) return null;
   const day = (v) => (DAY.test(String(v ?? '')) ? v : null);
   const p = o.posted && typeof o.posted === 'object' ? o.posted : null;
-  return { start: o.start, placed: day(o.placed), delivered: day(o.delivered), posted: p && day(p.dateLatest) ? { date: day(p.date), dateLatest: p.dateLatest, dateSaid: p.dateSaid ? cleanText(p.dateSaid, 60) : null } : null };
+  return { start: o.start, placed: day(o.placed), delivered: day(o.delivered), posted: p && day(p.dateLatest) ? { date: day(p.date), dateLatest: p.dateLatest, dateSaid: p.dateSaid ? cleanText(p.dateSaid, 60) : null } : null, shot: day(o.shot) };
 }
 
 /** The comparison table (check.js buildComparison), as kept with the row's last check: its words cut to length. */
@@ -458,6 +458,17 @@ export function createFlipkartStore(dataDir) {
         row.pictures = { ...Object.fromEntries(SHOTS.map((w) => [w, []])), ...(row.pictures ?? {}), [which]: kept };
         await writeWhole(rowsFile, JSON.stringify(d));
         return row;
+      });
+    },
+    /** A kept picture's fingerprint (fingerprint.js), for finding the same screenshot in another row; null when the picture is gone. */
+    setFingerprint(id, which, index, fingerprint) {
+      return locked(async () => {
+        const d = await savedRows();
+        const pic = d?.rows.find((r) => r.id === id)?.pictures?.[which]?.[index];
+        if (!pic?.file || typeof fingerprint !== 'string' || !/^[0-9a-f]{8,1024}$/.test(fingerprint)) return null;
+        pic.fingerprint = fingerprint;
+        await writeWhole(rowsFile, JSON.stringify(d));
+        return pic;
       });
     },
     /**

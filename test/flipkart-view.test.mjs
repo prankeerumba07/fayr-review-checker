@@ -506,7 +506,7 @@ const PICTURED = {
   },
 };
 /** A check's steps as the server keeps them: the screenshots opened (one could not be had), every other step coming in a later step. */
-const STEPS_DONE = STEP_NAMES.map((name, i) => ({ n: i + 1, name, state: i === 0 || i === 4 ? 'pass' : i === 2 ? 'fail' : 'later', detail: ['Opened the purchase screenshot.', null, 'The delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.', null, 'Opened the review screenshot.'][i] ?? null }));
+const STEPS_DONE = STEP_NAMES.map((name, i) => ({ n: i + 1, name, state: i === 0 || i === 1 || i === 5 ? 'pass' : i === 3 ? 'fail' : 'later', detail: ['No other row has this order ID, these links or these pictures.', 'Opened the purchase screenshot.', null, 'The delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.', null, 'Opened the review screenshot.'][i] ?? null }));
 const LAST_CHECK = { checkId: 'c20261012123000abcdef', startedAt: '2026-10-12T12:29:58.000Z', finishedAt: '2026-10-12T12:30:00.000Z', seconds: 2, steps: STEPS_DONE };
 /** What a purchase screenshot says, as the server keeps it with the row's last check (step 2). */
 const ORDER_READ = {
@@ -592,15 +592,16 @@ test("a row's page, as on Amazon: its details from the sheet, its screenshots as
   byId(big, 'close-big').attrs.onclick();
   assert.deepEqual([byId(s.page(), 'big'), s.local.revoked.includes('blob:/local/flipkart/rows/r000000000001/picture/order/0')], [null, true]);
   assert.deepEqual(stepsOf(s.page()).map(textOf), [
-    '✓1. Opening the purchase screenshot passedOpened the purchase screenshot.',
-    '–2. Reading the purchase screenshot and comparing it with the sheet comes in a later step',
-    '✗3. Opening the delivery screenshot failedThe delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.',
-    '–4. Reading the delivery screenshot and comparing it comes in a later step',
-    '✓5. Opening the review screenshot passedOpened the review screenshot.',
-    "–6. Reading the reviewer's name and the review's words comes in a later step",
-    "–7. Finding the review among Flipkart's public reviews comes in a later step",
-    "–8. Comparing the reviewer's name and the review's words comes in a later step",
-    '–9. Status, Type and Note comes in a later step',
+    '✓1. Duplicates and links in the sheet passedNo other row has this order ID, these links or these pictures.',
+    '✓2. Opening the purchase screenshot passedOpened the purchase screenshot.',
+    '–3. Reading the purchase screenshot and comparing it with the sheet comes in a later step',
+    '✗4. Opening the delivery screenshot failedThe delivery screenshot is on Google Drive, but the Google account logged in to the dashboard has no access to the file.',
+    '–5. Reading the delivery screenshot and comparing it comes in a later step',
+    '✓6. Opening the review screenshot passedOpened the review screenshot.',
+    "–7. Reading the reviewer's name and the review's words comes in a later step",
+    "–8. Finding the review among Flipkart's public reviews comes in a later step",
+    "–9. Comparing the reviewer's name and the review's words comes in a later step",
+    '–10. Status, Type and Note comes in a later step',
   ]);
   assert.equal(textOf(byId(s.page(), 'current-action')), `Last check finished ${words.ist(LAST_CHECK.finishedAt)}.`);
   // The same marks and words as on Amazon, and one more for a step that comes in a later step.
@@ -618,7 +619,7 @@ test("Check on a row's page: each step shown live as it runs, with the same mark
   const local = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: null } } });
   local.checking = async (onEvent) => {
     onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
-    onEvent({ event: 'step', step: { n: 1, name: STEP_NAMES[0], state: 'running', detail: null } });
+    onEvent({ event: 'step', step: { n: 2, name: STEP_NAMES[1], state: 'running', detail: null } });
     onEvent({ event: 'action', says: 'Opening the purchase screenshot' });
     await gate;
     for (const st of STEPS_DONE) onEvent({ event: 'step', step: st });
@@ -626,17 +627,17 @@ test("Check on a row's page: each step shown live as it runs, with the same mark
     return { ok: true };
   };
   const s = await rowScreen(local);
-  assert.equal(textOf(stepsOf(s.page())[0]), '·1. Opening the purchase screenshot waiting', 'before any check, every step is waiting');
+  assert.equal(textOf(stepsOf(s.page())[0]), '·1. Duplicates and links in the sheet waiting', 'before any check, every step is waiting');
   byId(s.page(), 'check').attrs.onclick();
   await settle();
   let page = s.page();
   assert.deepEqual([textOf(byId(page, 'check')), byId(page, 'check').attrs.disabled, textOf(byId(page, 'stop'))], ['Checking…', true, 'Stop']);
   assert.deepEqual([textOf(byId(page, 'final-word')), textOf(byId(page, 'final-says')), textOf(byId(page, 'current-action'))], ['Checking…', 'This row is being checked now.', 'Opening the purchase screenshot']);
-  assert.equal(textOf(stepsOf(page)[0]), '…1. Opening the purchase screenshot running', 'shown live, as it runs');
+  assert.equal(textOf(stepsOf(page)[1]), '…2. Opening the purchase screenshot running', 'shown live, as it runs');
   release();
   await settle();
   page = s.page();
-  assert.deepEqual(stepsOf(page).map((li) => li.attrs.class), ['fk-step fk-step-good', 'fk-step', 'fk-step fk-step-bad', 'fk-step', 'fk-step fk-step-good', 'fk-step', 'fk-step', 'fk-step', 'fk-step']);
+  assert.deepEqual(stepsOf(page).map((li) => li.attrs.class), ['fk-step fk-step-good', 'fk-step fk-step-good', 'fk-step', 'fk-step fk-step-bad', 'fk-step', 'fk-step fk-step-good', 'fk-step', 'fk-step', 'fk-step', 'fk-step']);
   assert.deepEqual([textOf(byId(page, 'final-word')), byId(page, 'stop'), textOf(byId(page, 'check'))], [FINAL_NONE, null, 'Check'], 'no Status: the row stays Not checked yet');
   assert.ok(local.calls.filter((c) => c.path === '/local/flipkart/rows/r000000000001').length >= 2 && local.calls.filter((c) => c.path === '/local/flipkart/sheet').length >= 2, 'the page and the table are fetched again, to show what was kept');
   local.checking = async (onEvent) => {
@@ -652,7 +653,7 @@ test("Check on a row's page: each step shown live as it runs, with the same mark
   byId(s.page(), 'stop').attrs.onclick();
   await settle();
   assert.match(textOf(s.page()), /The check was stopped, and nothing was saved for it\. Press Check to check this row again\./);
-  assert.equal(STEP_NAMES.length, 9);
+  assert.equal(STEP_NAMES.length, 10);
 });
 
 test('a row\'s page shows what the purchase screenshot says, as on Amazon ("Read from the purchase screenshot"): after a reload, and live as soon as it is read; with no purchase screenshot column, no card', async () => {
@@ -682,7 +683,7 @@ test('a row\'s page shows what the purchase screenshot says, as on Amazon ("Read
   const local = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: null } } });
   local.checking = async (onEvent) => {
     onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
-    onEvent({ event: 'step', step: { n: 2, name: STEP_NAMES[1], state: 'pass', detail: 'Order ID: the same.' }, partial: { order: ORDER_READ } });
+    onEvent({ event: 'step', step: { n: 3, name: STEP_NAMES[2], state: 'pass', detail: 'Order ID: the same.' }, partial: { order: ORDER_READ } });
     await gate;
     onEvent({ event: 'done', result: LAST_CHECK_READ });
     return { ok: true };
@@ -738,7 +739,7 @@ test('a row\'s page shows what the delivery screenshot says ("Read from the deli
   const local = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: null } } });
   local.checking = async (onEvent) => {
     onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
-    onEvent({ event: 'step', step: { n: 4, name: STEP_NAMES[3], state: 'pass', detail: 'It says "Delivered, Thu 23rd Jul".' }, partial: { order: ORDER_READ, delivery: DELIVERY_READ } });
+    onEvent({ event: 'step', step: { n: 5, name: STEP_NAMES[4], state: 'pass', detail: 'It says "Delivered, Thu 23rd Jul".' }, partial: { order: ORDER_READ, delivery: DELIVERY_READ } });
     await gate;
     onEvent({ event: 'done', result: LAST_CHECK_READ });
     return { ok: true };
@@ -811,7 +812,7 @@ test('a row\'s page shows what the review screenshot says ("Read from the review
   const local = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: null } } });
   local.checking = async (onEvent) => {
     onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
-    onEvent({ event: 'step', step: { n: 6, name: STEP_NAMES[5], state: 'pass', detail: 'A written review.' }, partial: { order: ORDER_READ, delivery: DELIVERY_READ, review: REVIEW_READ } });
+    onEvent({ event: 'step', step: { n: 7, name: STEP_NAMES[6], state: 'pass', detail: 'A written review.' }, partial: { order: ORDER_READ, delivery: DELIVERY_READ, review: REVIEW_READ } });
     await gate;
     onEvent({ event: 'done', result: { ...LAST_CHECK_READ, review: REVIEW_READ } });
     return { ok: true };
@@ -827,7 +828,7 @@ test('a row\'s page shows what the review screenshot says ("Read from the review
   assert.equal(card((await page({ ...LAST_CHECK_READ, review: REVIEW_READ }, noColumn)).page()), null);
 });
 
-test('a row\'s page shows what step 7 found on Flipkart ("Found on Flipkart"), as the Amazon screen\'s "Found on Amazon": the review found, opened on Flipkart in one click by its own link, and never a page\'s number; words under another name or under "Flipkart Customer" shown with why they do not count; not found; nothing read yet; live as soon as step 7 has its answer; with no review screenshot or review link column, no card', async () => {
+test('a row\'s page shows what step 8 found on Flipkart ("Found on Flipkart"), as the Amazon screen\'s "Found on Amazon": the review found, opened on Flipkart in one click by its own link, and never a page\'s number; words under another name or under "Flipkart Customer" shown with why they do not count; not found; nothing read yet; live as soon as step 7 has its answer; with no review screenshot or review link column, no card', async () => {
   const card = (tree) => byId(tree, 'card-flipkart');
   const fields = (tree) => findAll(card(tree), (n) => n.tag === 'div' && n.attrs?.class === 'field-row').map((n) => [textOf(findAll(n, (x) => x.tag === 'dt')[0]), textOf(findAll(n, (x) => x.tag === 'dd')[0])]);
   const warned = (tree) => findAll(card(tree), (n) => String(n.attrs?.class ?? '').includes('notice-warn')).map(textOf);
@@ -874,7 +875,7 @@ test('a row\'s page shows what step 7 found on Flipkart ("Found on Flipkart"), a
   const local = fakeLocal({ saved: SAVED, pages: { r000000000001: { row: PICTURED, result: null } } });
   local.checking = async (onEvent) => {
     onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
-    onEvent({ event: 'step', step: { n: 7, name: STEP_NAMES[6], state: 'pass', detail: 'Found the review.' }, partial: { order: ORDER_READ, delivery: DELIVERY_READ, review: REVIEW_READ, flipkart: FLIPKART, found: FOUND } });
+    onEvent({ event: 'step', step: { n: 8, name: STEP_NAMES[7], state: 'pass', detail: 'Found the review.' }, partial: { order: ORDER_READ, delivery: DELIVERY_READ, review: REVIEW_READ, flipkart: FLIPKART, found: FOUND } });
     await gate;
     onEvent({ event: 'done', result: { ...LAST_CHECK_READ, review: REVIEW_READ, flipkart: FLIPKART, found: FOUND } });
     return { ok: true };
@@ -908,7 +909,7 @@ test('"Start checking", as on Amazon: the rows checked one by one from the first
     onEvent({ event: 'run-started', again: false, total: 3, done: 0, left: 3 });
     onEvent({ event: 'row', rowId: 'r000000000001', label: 'Row 1', total: 3, done: 0, left: 3 });
     onEvent({ event: 'started', checkId: 'c20261012123000abcdef', steps: STEP_NAMES, rowId: 'r000000000001', row: 2, name: 'Row 1' });
-    onEvent({ event: 'step', step: { n: 1, name: STEP_NAMES[0], state: 'running', detail: null } });
+    onEvent({ event: 'step', step: { n: 2, name: STEP_NAMES[1], state: 'running', detail: null } });
     onEvent({ event: 'action', says: 'Opening the purchase screenshot' });
     await gate;
     for (const st of STEPS_DONE) onEvent({ event: 'step', step: st });
@@ -931,7 +932,7 @@ test('"Start checking", as on Amazon: the rows checked one by one from the first
   const run = byId(page, 'run');
   assert.equal(textOf(byId(run, 'run-progress')), 'Checking row 1: 0 of 3 rows done, 3 left. Show this row in the table');
   assert.deepEqual(findAll(run, (n) => n.tag === 'progress').map((n) => [n.attrs.max, n.attrs.value]), [['3', '0']]);
-  assert.deepEqual([textOf(byId(run, 'current-action')), textOf(stepsOf(run)[0]), stepsOf(run).length], ['Opening the purchase screenshot', '…1. Opening the purchase screenshot running', 9]);
+  assert.deepEqual([textOf(byId(run, 'current-action')), textOf(stepsOf(run)[1]), stepsOf(run).length], ['Opening the purchase screenshot', '…2. Opening the purchase screenshot running', 10]);
   assert.deepEqual([byId(run, 'live').attrs.class, byId(run, 'activity').attrs.class], ['fk-live fk-live-flat', 'fk-steps fk-steps-flat'], 'inside the checking area, as on Amazon');
   byId(run, 'show-current').attrs.onclick();
   assert.deepEqual(shown, [['row-1', 'center']], 'the table scrolls to the row');
@@ -1484,7 +1485,7 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   await settle();
   add(rowPage);
   pageLocal.checking = (onEvent) => {
-    onEvent({ event: 'step', step: { n: 1, name: STEP_NAMES[0], state: 'running', detail: null } });
+    onEvent({ event: 'step', step: { n: 2, name: STEP_NAMES[1], state: 'running', detail: null } });
     return new Promise(() => {});
   };
   byId(rowPage.page(), 'check').attrs.onclick();
@@ -1499,7 +1500,7 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   runLocal.checking = (onEvent) => {
     onEvent({ event: 'run-started', again: false, total: 3, done: 0, left: 3 });
     onEvent({ event: 'row', rowId: 'r000000000001', label: 'Row 1', total: 3, done: 0, left: 3 });
-    onEvent({ event: 'step', step: { n: 1, name: STEP_NAMES[0], state: 'running', detail: null } });
+    onEvent({ event: 'step', step: { n: 2, name: STEP_NAMES[1], state: 'running', detail: null } });
     return new Promise((resolve) => (pause = () => {
       onEvent({ event: 'paused', kind: 'google-out', says: RUN_GOOGLE_OUT, rowId: 'r000000000001', label: 'Row 1', checked: 0, total: 3, done: 0, left: 3 });
       resolve({ ok: true });

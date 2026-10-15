@@ -14,7 +14,10 @@
 // pages become one picture and a picture over 10 megabytes is made smaller,
 // on this computer (picture-fix.js). Every picture is kept only in
 // data/flipkart/pictures/ (store.js), and a screenshot that cannot be had
-// keeps its reason, as on Amazon: "no access", and the like. Google's login
+// keeps its reason, as on Amazon: "no access", and the like. Each picture
+// kept gets its fingerprint (fingerprint.js), as on Amazon, so the same
+// screenshot given in two rows is found even when it was saved again.
+// Google's login
 // page, a robot check or a block while downloading stops there too (pause),
 // and nothing is got around; Google's login page means the Google login has
 // ended, so both screens say so.
@@ -23,6 +26,7 @@ import { readFile } from 'node:fs/promises';
 import { downloadPicture, createPacer } from './pictures.js';
 import { preparePicture } from './picture-fix.js';
 import { isDriveLink, isFlipkart, isShortLink, isAppStore, linkKey, parseUrl } from './links.js';
+import { fingerprintFile } from './fingerprint.js';
 
 /** The picture websites a screenshot may be downloaded from, besides Google Drive: the Amazon checker's own list (amazon/settings.js), Flipkart's own copy. */
 export const PICTURE_WEBSITES = ['storage.googleapis.com', 'tryboxs.in', 'www.tryboxs.in'];
@@ -59,9 +63,10 @@ export function downloadable(which, link) {
  *   fetch(url, init), the Live Amazon Browser opened when it is not (as
  *   before an Amazon download) and its own download, with no page opened
  * download, prepare — tests may give their own
+ * fingerprint(file) — a picture's fingerprint (fingerprint.js fingerprintFile), or null
  * -> { forCell(rowId, which, { signal }), fetchOne(link, signal), busyNow() }
  */
-export function createScreenshots({ store, google: given = null, download = downloadPicture, prepare = preparePicture, allowed = PICTURE_WEBSITES, gapMs = DOWNLOAD_GAP_MS }) {
+export function createScreenshots({ store, google: given = null, download = downloadPicture, prepare = preparePicture, allowed = PICTURE_WEBSITES, gapMs = DOWNLOAD_GAP_MS, fingerprint = fingerprintFile }) {
   const google = given ?? NOBODY;
   const pacer = createPacer(gapMs);
   /** The Google login is in use: a Google Drive file can be downloaded. */
@@ -153,6 +158,12 @@ export function createScreenshots({ store, google: given = null, download = down
         else items.push(x);
       }
       row = await store.setPictures(rowId, which, items);
+    }
+    // Each picture kept gets its fingerprint once, a picture in the sheet's cell too; one that cannot be looked at is compared by its file alone.
+    for (const [i, p] of (row?.pictures?.[which] ?? []).entries()) {
+      if (!p?.file || p.fingerprint || typeof store.setFingerprint !== 'function') continue;
+      const print = await Promise.resolve(fingerprint?.(store.pictureFile(row, which, i), p.type)).catch(() => null);
+      if (print && (await store.setFingerprint(rowId, which, i, print))) p.fingerprint = print;
     }
     const pics = row?.pictures?.[which] ?? [];
     return {
