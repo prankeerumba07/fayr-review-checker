@@ -45,9 +45,30 @@ export function sameWords(a, b) {
   const y = b.orderIds ?? [];
   if (x.length || y.length) return x.length > 0 && x.length === y.length && x.every((id) => y.includes(id));
   if (wordsOf(a.text).length < 5 || wordsOf(b.text).length < 5) return false;
-  const one = overlapScore(a.text, b.text);
-  const two = overlapScore(b.text, a.text);
+  return mostlySame(a.text, b.text);
+}
+
+/** True when almost all the words of each are in the other. */
+function mostlySame(a, b) {
+  const one = overlapScore(a, b);
+  const two = overlapScore(b, a);
   return one !== null && two !== null && one >= 0.9 && two >= 0.9;
+}
+
+/** The cells that hold a review's picture: the review link (when it is a picture) and the review screenshot. */
+const isReviewCell = (which) => which === 'review' || which === 'reviewShot';
+/** A review's own title and words, as read from its screenshot, without the page around them. */
+export const reviewWords = (r) => [r?.title, r?.body].map((t) => String(t ?? '').trim()).filter(Boolean).join(' ');
+/**
+ * True when two review screenshots show the same review: the review's own
+ * title and words, as read from both, are the same (almost all of them).
+ * Flipkart's My Reviews page looks almost the same for every user of one
+ * product, so the rest of the page's words never count.
+ */
+export function sameReviewWords(a, b) {
+  const x = reviewWords(a);
+  const y = reviewWords(b);
+  return Boolean(x && y) && mostlySame(x, y);
 }
 
 /**
@@ -57,7 +78,9 @@ export function sameWords(a, b) {
  * a cell just read, a picture whose fingerprint is this close counts too, but
  * only when its words, read when its row was checked (seenOf(o, which)), are
  * the same: two orders' screenshots of one product look almost the same, and
- * only their words tell them apart. Copied from amazon/check.js.
+ * only their words tell them apart. Copied from amazon/check.js. On Flipkart,
+ * when either picture is a review's, only the review's own title and words
+ * count (sameReviewWords).
  */
 export function samePictures(row, others, reading, seenOf) {
   const out = { order: [], delivery: [], review: [], reviewShot: [] };
@@ -73,7 +96,8 @@ export function samePictures(row, others, reading, seenOf) {
             if (pic.sha256 && op.sha256 === pic.sha256) return true;
             if (!reading) return false;
             const dist = fingerprintDistance(pic.fingerprint, op.fingerprint);
-            return dist !== null && dist <= SAME_SCREENSHOT && sameWords(reading.read, seenOf(o, ow));
+            const same = isReviewCell(which) || isReviewCell(ow) ? sameReviewWords : sameWords;
+            return dist !== null && dist <= SAME_SCREENSHOT && same(reading.read, seenOf(o, ow));
           });
           if (hit) {
             out[which].push({ o, which: ow });

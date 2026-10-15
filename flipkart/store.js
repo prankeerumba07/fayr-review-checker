@@ -36,6 +36,17 @@ export const CHECK_ID = /^c[0-9]{14}[0-9a-f]{6}$/;
 const STEP_STATES = new Set(['pass', 'fail', 'not-reached', 'not-needed', 'running', 'waiting', 'later']);
 const timeOrNull = (t) => (typeof t === 'string' && t.length <= 40 && !Number.isNaN(Date.parse(t)) ? t : null);
 
+/**
+ * A row that already has a result, so "Start checking" and "Carry on
+ * checking" pass it by, as on Amazon (amazon/store.js hasResult): checked by
+ * the dashboard (or marked Duplicate when another row was checked), or given
+ * a Status in the uploaded file, unless "Check every row again" has been
+ * pressed since.
+ */
+export function hasResult(row) {
+  return Boolean(row?.check) || (Boolean(String(row?.prev?.status ?? '').trim()) && !row?.recheck);
+}
+
 /** A problem with what was asked of the store, with the HTTP status that says so. Copied from the Amazon store. */
 export class StoreError extends Error {
   constructor(status, message) {
@@ -558,11 +569,12 @@ export function createFlipkartStore(dataDir) {
       });
     },
     /**
-     * "Check every row again", as on Amazon: every row's last check goes, so
-     * the rows are checked again from the first one; a result a staff member
-     * changed is kept, so that row is passed by, and a result only marked
-     * right by staff goes like any other (its mark with it). Their pictures
-     * stay. -> how many rows lost their check.
+     * "Check every row again", as on Amazon: every row's last check goes, and
+     * a Status the uploaded file gave a row no longer counts as one (recheck),
+     * so the rows are checked again from the first one; a result a staff
+     * member changed is kept, so that row is passed by, and a result only
+     * marked right by staff goes like any other (its mark with it). Their
+     * pictures stay. -> how many rows lost their check.
      */
     clearChecks() {
       return locked(async () => {
@@ -570,7 +582,9 @@ export function createFlipkartStore(dataDir) {
         if (!d) return 0;
         let n = 0;
         for (const r of d.rows) {
-          if (!r.check || (r.check.staff && !r.check.staff.right)) continue;
+          if (r.check?.staff && !r.check.staff.right) continue;
+          r.recheck = true;
+          if (!r.check) continue;
           delete r.check;
           n++;
         }

@@ -74,6 +74,7 @@ import { reachOf, reaches, keptNotRead } from './kept-reviews.js';
 import { indiaDay, plainText, dateFromWords } from './review-page.js';
 import { linkLabel, isShortLink, reviewPageLink, linkKey, reviewIdFrom } from './links.js';
 import { PICTURE_CELLS, before, firstOf, rowName, rowsNamed, samePictures, lookAlikes } from './duplicates.js';
+import { hasResult } from './store.js';
 import { DEFAULT_MARKS } from './settings.js';
 import { shortName } from './campaigns.js';
 import { wordsOf, productWords, overlapScore } from './text.js';
@@ -436,8 +437,8 @@ export async function runCheck({ row, others = [], has = null, screenshots, mark
   const alsoDuplicate = (o, line) => {
     if (!result.alsoDuplicate.some((d) => d.id === o.id)) result.alsoDuplicate.push({ id: o.id, note: noteOf([duplicateSays(line)]), final: 'fail', finalSays: clean(duplicateSays(line)) });
   };
-  /** "which was already checked", or "and row 2 is the one that will be checked". */
-  const firstSaid = (first) => (first.check ? 'which was already checked' : `and ${rowName(first)} is the one that will be checked`);
+  /** "which was already checked" (it has a result: its check, or a Status the uploaded file gives it, which "Start checking" passes by), or "and row 2 is the one that will be checked". */
+  const firstSaid = (first) => (hasResult(first) ? 'which was already checked' : `and ${rowName(first)} is the one that will be checked`);
   /** The sentences that end the first row's Note: which later rows share it, and that they were not checked. */
   const laterSaid = (what, rows) => afterWhy.add(`The same ${what} is also in ${rowsNamed(rows)}. ${rows.length === 1 ? 'That row is a duplicate and was' : 'Those rows are duplicates and were'} not checked.`);
   /** Stops the check as Duplicate, as on Amazon: the line that says what this row shares and which row is the one checked, and why that makes it a duplicate (the step's line). */
@@ -446,12 +447,12 @@ export async function runCheck({ row, others = [], has = null, screenshots, mark
     finish(n, 'fail', `${cap(why)}.`);
     return true;
   }
-  /** What another row's last check read from one of its cells, to tell the same picture from one that only looks the same: { orderIds, text }, or null. */
+  /** What another row's last check read from one of its cells, to tell the same picture from one that only looks the same: { orderIds, text }, and a review's own title and words (body); null when nothing, or no review's own words, was read. */
   function seenOf(o, which) {
     const c = o?.check;
     if (!c) return null;
     if (!isReview(which)) return c[which]?.ok && c[which].text ? { orderIds: c[which].orderIds ?? [], text: c[which].text } : null;
-    return c.review?.ok && c.review.text && which === reviewCell(o, had) ? { orderIds: [], text: c.review.text } : null;
+    return c.review?.ok && (c.review.title || c.review.body) && which === reviewCell(o, had) ? { orderIds: [], text: c.review.text ?? '', title: c.review.title ?? '', body: c.review.body ?? '' } : null;
   }
   /** True when a row's review picture showed Flipkart's message that the review was not accepted (what its check read, or the Type it gave). */
   const refusalShown = (o, which) => o?.check?.typeKey === 'cannotAddReviews' || (o?.check?.review?.kind === 'refused' && which === reviewCell(o, had));
@@ -480,13 +481,13 @@ export async function runCheck({ row, others = [], has = null, screenshots, mark
       return !(theirs && !mine);
     });
   }
-  /** What a cell's picture says, for comparing it with another row's: its order IDs (none on a review) and all its words. */
-  const wordsRead = (which, r) => ({ orderIds: isReview(which) ? [] : r.orderIds ?? [], text: clean(r.text ?? ''), ...(isReview(which) ? { refused: r.kind === 'refused' } : {}) });
+  /** What a cell's picture says, for comparing it with another row's: its order IDs (none on a review) and all its words; on a review, also the review's own title and words (body), the only ones that count (duplicates.js sameReviewWords). */
+  const wordsRead = (which, r) => ({ orderIds: isReview(which) ? [] : r.orderIds ?? [], text: clean(r.text ?? ''), ...(isReview(which) ? { refused: r.kind === 'refused', title: clean(r.title ?? ''), body: clean(r.body ?? '') } : {}) });
   /** This row shares a picture with rows nearer the top, so it is the later one: Duplicate of the first. */
   function samePictureStop(n, which, hits) {
     const first = firstOf(hits.map((x) => x.o).filter((o) => before(o, row)));
     const h = hits.find((x) => x.o === first) ?? hits[0];
-    return dup(n, `The ${WHAT[which]} in this row is the same picture as the ${WHAT[h.which]} in ${rowName(h.o)}, ${firstSaid(h.o)}.`, `two different orders cannot share one screenshot, so this row is a duplicate and was not checked${h.o.check ? ' again' : ''}`);
+    return dup(n, `The ${WHAT[which]} in this row is the same picture as the ${WHAT[h.which]} in ${rowName(h.o)}, ${firstSaid(h.o)}.`, `two different orders cannot share one screenshot, so this row is a duplicate and was not checked${hasResult(h.o) ? ' again' : ''}`);
   }
   /** The later rows that share this row's picture: this row is the first, so they are Duplicate. */
   function markLater(hits, which) {
@@ -553,7 +554,8 @@ export async function runCheck({ row, others = [], has = null, screenshots, mark
    * Step 1: duplicates and links in the sheet, as on Amazon (amazon/check.js
    * step 1): the same order ID as another row, the same screenshot link or
    * review link (only a picture or one review counts), the same picture file,
-   * and a picture that looks like another row's and reads the same. Of the
+   * and a picture that looks like another row's and reads the same (a review
+   * screenshot: the review's own title and words). Of the
    * rows that share one, only the first in the file's order is checked; this
    * row the later one, it is Duplicate and nothing more is checked. This row
    * the first, its Note names the later ones.
@@ -565,7 +567,7 @@ export async function runCheck({ row, others = [], has = null, screenshots, mark
       const same = others.filter((o) => o.orderId?.value && o.orderId.value === sheetId);
       if (same.length && isLater(same)) {
         const first = firstOf(same.filter((o) => before(o, row)));
-        return dup(n, first.check ? `Order ID ${sheetId} was already checked in ${rowName(first)}.` : `Order ID ${sheetId} is also in ${rowName(first)}, and ${rowName(first)} is the one that will be checked.`, `this row has the same order ID, so it is a duplicate and was not checked${first.check ? ' again' : ''}`);
+        return dup(n, hasResult(first) ? `Order ID ${sheetId} was already checked in ${rowName(first)}.` : `Order ID ${sheetId} is also in ${rowName(first)}, and ${rowName(first)} is the one that will be checked.`, `this row has the same order ID, so it is a duplicate and was not checked${hasResult(first) ? ' again' : ''}`);
       }
       if (same.length) laterSaid('order ID', same);
     }
@@ -596,7 +598,7 @@ export async function runCheck({ row, others = [], has = null, screenshots, mark
           continue;
         }
         const first = firstOf(hits.map((h) => h.o).filter((o) => before(o, row)));
-        return dup(n, `This row uses the same ${what} as ${rowName(first)}, ${firstSaid(first)}.`, `${share}, so this row is a duplicate and was not checked${first.check ? ' again' : ''}`);
+        return dup(n, `This row uses the same ${what} as ${rowName(first)}, ${firstSaid(first)}.`, `${share}, so this row is a duplicate and was not checked${hasResult(first) ? ' again' : ''}`);
       }
     }
     // The review link opens one review that another row's check found on Flipkart.

@@ -1615,3 +1615,22 @@ test("the Flipkart screen's look: the shared one and its own, never the Amazon s
   const html = readFileSync(join(ROOT, 'index.html'), 'utf8');
   assert.deepEqual([...html.matchAll(/<link rel="stylesheet" href="([^"]+)">/g)].map((m) => m[1]), ['styles.css', 'views/amazon.css', 'views/flipkart.css']);
 });
+
+test('a Status the uploaded file already gives a row, as on Amazon: the row has a result, so the Status cards count it, its button says "Check again" and "Start checking" becomes "Carry on checking"; once "Check every row again" is pressed, the Status, Type and Note from the file no longer show', async () => {
+  const fromFile = { ...structuredClone(SAVED.rows[0]), prev: { status: 'Pass', type: 'Verified', note: 'Made-up note from the file.' }, prevFinal: 'pass', final: 'pass', done: true, recheck: false };
+  const local = fakeLocal({ saved: { ...SAVED, rows: [fromFile, structuredClone(SAVED.rows[1]), structuredClone(SAVED.rows[2])], types: TYPES } });
+  const s = await opened(local);
+  const first = (key) => textOf(findAll(byId(s.page(), 'rows-table'), (n) => n.attrs?.['data-cell'] === key)[0]);
+  const seen = () => [first('status'), first('type'), first('note'), textOf(byId(s.page(), 'check-r000000000001')), ['pass', 'fail', 'manual', 'none'].map((k) => textOf(byId(s.page(), `count-${k}-num`)))];
+  assert.deepEqual([textOf(byId(s.page(), 'start-checking')), ...seen()], ['Carry on checking', 'PassFrom the file', 'Verified', 'Made-up note from the file.', 'Check again', ['1', '0', '0', '2']]);
+  let during = null;
+  local.checking = async (onEvent) => {
+    onEvent({ event: 'run-started', again: true, total: 3, done: 0, left: 3 });
+    during = seen();
+    return { ok: true };
+  };
+  byId(s.page(), 'check-every-row').attrs.onclick();
+  await settle();
+  assert.deepEqual(local.calls.filter((c) => c.stream).at(-1).body, { again: true });
+  assert.deepEqual(during, ['Empty', 'Empty', 'Empty', 'Check', ['0', '0', '0', '3']]);
+});

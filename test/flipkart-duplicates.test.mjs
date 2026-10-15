@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync, crc32 } from 'node:zlib';
 import { runCheck, STEP_NAMES } from '../flipkart/check.js';
-import { before, firstOf, rowName, rowsNamed, sameWords } from '../flipkart/duplicates.js';
+import { before, firstOf, rowName, rowsNamed, sameWords, sameReviewWords, reviewWords } from '../flipkart/duplicates.js';
 import { bmpGrey, fingerprintOf, fingerprintDistance, fingerprintFile, SAME_SCREENSHOT, GRID } from '../flipkart/fingerprint.js';
 import { orderIdsIn, datesIn, amountsIn } from '../flipkart/screen-text.js';
 import { parseDelivery } from '../flipkart/delivery-read.js';
@@ -250,4 +250,35 @@ test('on Flipkart, two rows whose reviews are found as the same review on Flipka
   const linked = rowOf(2, { shots: { ...rowOf(2).shots, review: cell({ links: [MINE.link] }) } });
   const byLink = await check(linked, [{ ...one, check: found() }]);
   assert.deepEqual([byLink.result.typeKey, byLink.result.steps[0].state, byLink.result.finalSays], ['duplicate', 'fail', 'This transaction failed because it is a duplicate: the review in this row is the same review on Flipkart as in row 1, which was already checked.']);
+});
+
+test("review screenshots that only look alike: Flipkart's My Reviews page looks almost the same for every user of one product, so one that is not the very same file counts as the same picture only when the review's own title and words, read from both, are the same (most of them), not just most of the page's words; the very same file still counts", async () => {
+  // Two users' short reviews of one product on the same page: most of the page's words are the same, the reviews' own words are not.
+  const page = (words) => ['My Reviews (1)', BOTTLE, '| 5* Terrific purchase', words, `${REVIEWER} @ Certified Buyer 12 Sep, 2026`, 'Edit Delete Share'];
+  const shotOf = (lines) => ({ ...reading(lines), ...parseReviewShot(lines, { reviewer: REVIEWER }) });
+  const [good, nice] = [shotOf(page('Good product')), shotOf(page('Nice bottle'))];
+  assert.deepEqual([good.kind, good.title, good.body, nice.title, nice.body], ['written', 'Terrific purchase', 'Good product', 'Terrific purchase', 'Nice bottle']);
+  assert.equal(sameWords({ orderIds: [], text: good.text }, { orderIds: [], text: nice.text }), true, "most of the page's words are the same");
+  assert.deepEqual([reviewWords(good), sameReviewWords(good, nice)], ['Terrific purchase Good product', false], "the review's own words are not");
+  assert.equal(sameReviewWords(good, { title: 'Terrific  purchase', body: 'Good product.' }), true);
+  assert.equal(sameReviewWords(good, { title: '', body: '' }), false, "no review's words read: never the same");
+  // In a check: this row's review screenshot looks like row 1's (its fingerprint this close), and row 1's check read its review.
+  const print = '0'.repeat(576);
+  const near = `1${'0'.repeat(575)}`;
+  const one = (shown) => rowOf(1, { pictures: { order: [], delivery: [], review: [], reviewShot: [pic('c1', print)] }, check: { final: 'pass', review: { ok: true, kind: 'written', title: shown.title, body: shown.body, text: shown.text } } });
+  const readReview = async () => good;
+  const SAME = 'This transaction failed because it is a duplicate: the review screenshot in this row is the same picture as the review screenshot in row 1, which was already checked.';
+  // Once read (step 7): another user's short review is not the same picture; the same review's words are.
+  const fresh = rowOf(2);
+  assert.notEqual((await check(fresh, [one(nice)], { records: { reviewShot: [pic('d2', near)] }, readReview })).result.typeKey, 'duplicate');
+  const same = await check(fresh, [one(good)], { records: { reviewShot: [pic('d2', near)] }, readReview });
+  assert.deepEqual([same.result.typeKey, same.result.finalSays, stepsOf(same.result)[6]], ['duplicate', SAME, ['fail', 'Two different orders cannot share one screenshot, so this row is a duplicate and was not checked again.']]);
+  // Kept already with its fingerprint: read at step 1, the same rule.
+  const kept = rowOf(2, { pictures: { order: [], delivery: [], review: [], reviewShot: [pic('d2', near)] } });
+  assert.notEqual((await check(kept, [one(nice)], { readReview })).result.typeKey, 'duplicate');
+  const early = await check(kept, [one(good)], { readReview });
+  assert.deepEqual([early.result.typeKey, early.result.finalSays, early.result.steps[0].state], ['duplicate', SAME, 'fail']);
+  // The very same file, whatever its words: the same picture, at step 1.
+  const file = await check(rowOf(2, { pictures: { order: [], delivery: [], review: [], reviewShot: [pic('c1')] } }), [one(nice)], { readReview });
+  assert.deepEqual([file.result.typeKey, file.result.finalSays, file.result.steps[0].state], ['duplicate', SAME, 'fail']);
 });

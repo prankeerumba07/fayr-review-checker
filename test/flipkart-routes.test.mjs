@@ -1189,3 +1189,42 @@ test('"The checked Excel file": the new Status, Type and Note headings all look 
   const ws = wb.getWorksheet('Flipkart');
   assert.deepEqual(['J1', 'K1', 'L1', 'M1'].map((c) => [ws.getCell(c).text, Boolean(ws.getCell(c).font?.bold)]), [['Review Screenshot', true], ['Status', true], ['Type', true], ['Note', true]], 'all bold, as the file\'s headings are');
 });
+
+test('"The checked Excel file" uploaded again with a new row added, as on Amazon (amazon/store.js hasResult): "Carry on checking" passes by every row the file already gives a Status, a staff member\'s too, so only the new row is checked and the results in the file stay; only "Check every row again" checks them, and after it the file\'s Status no longer counts', async () => {
+  const reader = pretendReader();
+  const at = await serve({ flipkart: createFlipkartRoutes({ dataDir: tempDir(), auth, google: driveLogin(), shotOptions: SHOTS_NOW, readers: reader }) });
+  const json = (body) => ({ at, body: Buffer.from(JSON.stringify(body)), type: 'application/json' });
+  const lines = (res) => res.text.trim().split('\n').map((l) => JSON.parse(l));
+  const sheet = async () => (await call('GET', '/local/flipkart/sheet', { at })).json.rows;
+  const checkAll = async (body = {}) => lines(await call('POST', '/local/flipkart/check-all', json(body)));
+  const runLines = (events) => events.filter((e) => !['started', 'action', 'step', 'done'].includes(e.event)).map((e) => [e.event, e.label ?? null, e.done ?? null, e.left ?? null]);
+  const line = (n, name) => [orderId(n), '21-07-2026', 'Test Brand Steel Bottle', 349, name, orderShot(n), deliveryShot(n), '', emailOf(n), reviewShot(n)];
+  assert.equal((await upload(at, 'flipkart-orders.xlsx', await workbook({ Flipkart: [HEADER, line(3, person(3)), line(4, person(4)), line(6, person(6))] }))).status, 200);
+  let rows = await sheet();
+  reader.set(rows);
+  // Every row checked, Row 2's result then changed by a staff member, and "The checked Excel file" downloaded, with a new row added at the end.
+  assert.deepEqual(runLines(await checkAll()).at(-1), ['run-done', null, 3, 0]);
+  assert.equal((await call('POST', `/local/flipkart/rows/${rows[1].id}/result`, json({ final: 'fail', typeKey: 'orderShotMissing', note: 'Made-up note by staff.' }))).status, 200);
+  rows = await sheet();
+  const results = rows.map((r) => [r.last.status, r.last.type]);
+  assert.deepEqual(results[1], ['Fail', 'Purchase screenshot missing']);
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load((await call('GET', '/local/flipkart/sheet/checked.xlsx', { at })).data);
+  wb.getWorksheet('Flipkart').addRow(line(7, 'Test Person Seven'));
+  assert.equal((await upload(at, 'flipkart-orders checked.xlsx', Buffer.from(await wb.xlsx.writeBuffer()))).status, 200);
+  rows = await sheet();
+  reader.set(rows);
+  assert.deepEqual(rows.map((r) => [r.label, r.done, r.last, r.prev && [r.prev.status, r.prev.type]]), [...results.map((said, i) => [`Row ${i + 1}`, true, null, said]), ['Row 4', false, null, null]], 'a Status in the file is a result');
+  assert.equal(rows[1].prev.note, 'Made-up note by staff.');
+  // "Carry on checking": only the new row.
+  assert.deepEqual(runLines(await checkAll()), [['run-started', null, 3, 1], ['row', 'Row 4', 3, 1], ['row-done', 'Row 4', 4, 0], ['run-done', null, 4, 0]]);
+  rows = await sheet();
+  assert.deepEqual(rows.map((r) => [r.done, r.last ? 'checked' : r.prev.status]), [...results.map(([status]) => [true, status]), [true, 'checked']], 'the results in the file stay');
+  const none = await call('POST', '/local/flipkart/check-all', json({}));
+  assert.deepEqual([none.status, none.json.message], [409, 'All rows are checked. To check them all again, press "Check every row again".']);
+  // "Check every row again": every row is checked, and the file's Status no longer counts.
+  const again = runLines(await checkAll({ again: true }));
+  assert.deepEqual([again[0], again.filter(([e]) => e === 'row').map(([, label]) => label)], [['run-started', null, 0, 4], ['Row 1', 'Row 2', 'Row 3', 'Row 4']]);
+  rows = await sheet();
+  assert.deepEqual(rows.map((r) => [r.done, r.recheck, Boolean(r.last), r.final === r.last?.final]), Array.from({ length: 4 }, () => [true, true, true, true]));
+});

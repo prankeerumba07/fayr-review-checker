@@ -21,8 +21,9 @@
 // Flipkart products what was read from Flipkart (its name, its brand, its
 // other colours and sizes, and when), or why it is not used. Then, as on
 // Amazon, "Start checking" (later "Carry on checking"), which checks the rows
-// one by one from the first one not checked yet, with Stop and "Check every
-// row again"; while they are checked, the live checking area beside the table
+// one by one from the first one with no result yet (a row the uploaded file
+// already gives a Status is passed by), with Stop and "Check every row
+// again"; while they are checked, the live checking area beside the table
 // shows the row being checked and its steps as they run. Then the rows,
 // in a table like the Amazon one: every column of the file in its order, with
 // its letter, the rows numbered from 1, each link as a small label saying
@@ -703,7 +704,8 @@ export function tookWords(seconds) {
 function resultOf(r, state) {
   if (state && r?.id && rowBeingChecked(state) === r.id) return { status: 'Checking…', type: '', note: '', from: 'now', final: null };
   if (r?.last && FINAL_WORDS[r.last.final]) return { status: FINAL_WORDS[r.last.final], type: r.last.type ?? '', note: r.last.note ?? '', from: 'check', final: r.last.final, finalSays: r.last.finalSays ?? null, staff: r.last.staff ?? null };
-  const p = obj(r?.prev);
+  // After "Check every row again", the file's Status, Type and Note no longer show, as on Amazon.
+  const p = r?.recheck ? {} : obj(r?.prev);
   const f = FINAL_WORDS[r?.prevFinal] ? r.prevFinal : null;
   if (p.status || p.type || p.note) return { status: FINAL_WORDS[f] ?? '', type: p.type ?? '', note: p.note ?? '', from: 'file', final: f };
   return { status: '', type: '', note: '', from: null, final: null };
@@ -1199,7 +1201,7 @@ async function openRow(ctx, id, { keep = false } = {}) {
 // ---- checking (copied from the Amazon screen) ----
 
 const busy = (s) => Boolean(s.check?.running || s.all?.running || s.upload.busy);
-/** A row that is checked, as the server says: its last check finished. */
+/** A row with a result, as the server says, as on Amazon: its last check finished, or the uploaded file gives it a Status (until "Check every row again"). */
 const isDone = (r) => r?.done === true;
 /** The row being checked at this moment, by its own button or one by one; null when none. */
 const rowBeingChecked = (s) => (s?.check?.running ? s.check.rowId : s?.all?.running && s.all.current && !s.all.current.finished ? s.all.current.rowId : null);
@@ -1283,9 +1285,11 @@ export const STOPPED_SAYS = 'Stopped. The rows finished before it stay checked. 
 
 /**
  * "Start checking" (later "Carry on checking"), as on Amazon: the server
- * checks the rows not checked yet, one at a time from the first one, and the
- * table shows each row as soon as it is finished. again: "Check every row
- * again", which removes every row's last check first.
+ * checks the rows with no result yet (not a row the uploaded file gives a
+ * Status), one at a time from the first one, and the table shows each row as
+ * soon as it is finished. again: "Check every row again", which removes every
+ * row's last check first, and after which the file's Statuses no longer
+ * count.
  */
 async function checkRows(ctx, { again = false } = {}) {
   const s = ctx.state;
@@ -1304,8 +1308,8 @@ async function checkRows(ctx, { again = false } = {}) {
   const out = await ctx.local.stream('POST', `${BASE}/check-all`, again ? { again: true } : {}, (e) => {
     if (!isCurrent()) return;
     if (e?.event === 'run-started') {
-      // "Check every row again": the server has removed every row's last check, but for a result a staff member changed, as on Amazon.
-      if (e.again) for (const r of arr(s.saved?.rows)) if (r && !changedByStaff(r)) Object.assign(r, { last: null, done: false, final: FINAL_WORDS[r.prevFinal] ? r.prevFinal : null, finalSays: null });
+      // "Check every row again": the server has removed every row's last check, but for a result a staff member changed, and the file's Statuses no longer count, as on Amazon.
+      if (e.again) for (const r of arr(s.saved?.rows)) if (r && !changedByStaff(r)) Object.assign(r, { last: null, done: false, recheck: true, final: null, finalSays: null });
     } else if (e?.event === 'row') {
       run.view = { ...newView(), action: 'Starting the check…' };
       run.current = { rowId: e.rowId, label: e.label ?? '' };
@@ -2038,7 +2042,7 @@ function resultCard(ctx, r, res, just = null) {
     h('h3', null, 'Type and Note'),
     shown
       ? h('div', null, h('p', { class: 'fk-row-status' }, h('span', { class: 'tag', 'data-id': 'result-type' }, shown.type), ' ', when ? h('span', { class: 'muted small', 'data-id': 'result-when' }, when) : null), h('p', { class: 'fk-note-text', 'data-id': 'result-note' }, shown.note))
-      : r?.prev
+      : r?.prev && !r.recheck
         ? h('div', null, h('p', { class: 'fk-row-status' }, h('span', { class: 'tag' }, r.prev.type || 'No Type'), ' ', h('span', { class: 'muted small' }, 'From the file')), h('p', { class: 'fk-note-text' }, r.prev.note))
         : h('p', { class: 'muted' }, 'Not checked yet.'),
   );

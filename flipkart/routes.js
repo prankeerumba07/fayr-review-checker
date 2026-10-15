@@ -41,7 +41,7 @@
 import { openWorkbook, guessColumns, columnProblems, rememberedChoice, sheetRows, SheetError, FIELDS, RESULT_FIELDS, RESULT_HEADERS, columnLetter, resultColumns, dayFirst, EMAIL_SHAPE } from './workbook.js';
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { createFlipkartStore, putCampaign, MAX_SHEET_BYTES, SHOTS, ROW_ID, StoreError } from './store.js';
+import { createFlipkartStore, putCampaign, hasResult, MAX_SHEET_BYTES, SHOTS, ROW_ID, StoreError } from './store.js';
 import { cellLinks, linkLabel, linksIn, isDriveLink, linkKey, reviewPageLink } from './links.js';
 import { FINAL_WORDS, FINAL_KEYS, TYPE_KEYS, TYPE_WORDS, finalOfFile, typeFromWords } from './final.js';
 import { emailFor, hasEmail } from './emails.js';
@@ -78,12 +78,10 @@ const withLinks = (r) => (r?.links === true ? r : null);
 /** A reading Flipkart stopped (a robot check, a refused page, an error, a page too slow): the rest of the checking run does not ask Flipkart again, even when no page of reviews was read. */
 const stoppedByFlipkart = (r) => r?.end === 'prevented' || r?.end === 'slow';
 
-/** A row counts as checked once its last check finished: only a finished check is kept with the row (store.js saveCheck). */
-const isChecked = (r) => Boolean(r?.check);
 /** A row in a sentence, as on Amazon: "Row 3", its number on the dashboard. */
 const labelOf = (r) => `Row ${r?.n ?? '?'}`;
-/** The key of a row's Type, as on Amazon: its last check's (or the one staff chose), else the one its Type in the file names when the file gives it a Status; null when the row has no result. */
-const typeKeyOf = (r) => (r?.check?.final ? r.check.typeKey ?? null : r?.prev && finalOfFile(r.prev) ? typeFromWords(r.prev.type) : null);
+/** The key of a row's Type, as on Amazon: its last check's (or the one staff chose), else the one its Type in the file names when the file gives it a Status (until "Check every row again"); null when the row has no result. */
+const typeKeyOf = (r) => (r?.check?.final ? r.check.typeKey ?? null : r?.prev && !r.recheck && finalOfFile(r.prev) ? typeFromWords(r.prev.type) : null);
 /** A pause's sentence, naming the button there is to press: Check or "Check again" for one row, "Carry on checking" for the rows one by one. */
 const pressing = (says, button) => String(says).replace('"Carry on checking"', button).replace(/then try again\.$/, `then press ${button}.`);
 
@@ -227,9 +225,10 @@ function staffView(r) {
  * cell's own words when they are not a link themselves) and how a picture
  * was given ('cell' or 'floating') with each picture kept or why it could
  * not be had, the file's other columns, the Status, Type and Note the file
- * already had, and whether it is checked (done: its last check finished, or
- * a staff member gave it a result). The pictures themselves never come with
- * it.
+ * already had, and whether it has a result, as on Amazon (done: its last
+ * check finished, a staff member gave it one, or the file gives it a Status;
+ * recheck: "Check every row again" was pressed, so the file's Status no
+ * longer counts). The pictures themselves never come with it.
  */
 export function rowView(r) {
   const shot = (which) => {
@@ -267,10 +266,12 @@ export function rowView(r) {
     // staff member chose; null when the row has none. staff, as on Amazon: right (true: "The result is right" was pressed, the result stays the
     // dashboard's) or changed by hand (false: "Changed by staff"), with when; was is what the dashboard itself said, for the count of right results.
     last: r.check?.final ? { checkId: r.check.checkId ?? null, final: r.check.final, finalSays: r.check.finalSays ?? null, status: FINAL_WORDS[r.check.final] ?? '', type: r.check.type ?? '', typeKey: r.check.typeKey ?? null, note: r.check.note ?? '', at: (r.check.staff && !r.check.staff.right ? r.check.staff.at : r.check.finishedAt) ?? null, seconds: r.check.seconds ?? null, staff: staffView(r) } : null,
-    // The Status: the last check's; else the one the file gave (a check made before Flipkart rows had a Status leaves it); else null (not checked yet).
-    final: r.check?.final ?? (r.prev ? finalOfFile(r.prev) : null),
+    // The Status: the last check's; else the one the file gave (a check made before Flipkart rows had a Status leaves it), until "Check every row again"; else null (not checked yet).
+    final: r.check?.final ?? (r.prev && !r.recheck ? finalOfFile(r.prev) : null),
     finalSays: r.check?.final ? r.check.finalSays ?? null : null,
-    done: isChecked(r),
+    // A result of any kind, so "Start checking" passes the row by, as on Amazon; recheck: "Check every row again" was pressed, so the file's Status no longer counts.
+    done: hasResult(r),
+    recheck: Boolean(r.recheck),
     // The Type whose email "Prepare email" shows, as on Amazon's "Email this user"; null when the row's Type has none (Verified, Rating Only) or it has no result.
     emailKey: hasEmail(typeKeyOf(r)) ? typeKeyOf(r) : null,
   };
@@ -733,10 +734,10 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       return null;
     }
   }
-  /** A row's own button, as the screen words it, as on Amazon: Check, or "Check again" once the row is checked. */
-  const checkButton = (row) => (isChecked(row) ? '"Check again"' : 'Check');
-  /** The button that checks the rows one by one: "Carry on checking" once a row is checked. */
-  const runButton = (rows) => (rows.some(isChecked) ? RUN_BUTTON : '"Start checking"');
+  /** A row's own button, as the screen words it, as on Amazon: Check, or "Check again" once the row has a result. */
+  const checkButton = (row) => (hasResult(row) ? '"Check again"' : 'Check');
+  /** The button that checks the rows one by one: "Carry on checking" once a row has a result. */
+  const runButton = (rows) => (rows.some(hasResult) ? RUN_BUTTON : '"Start checking"');
   /** True when a row has a review to search Flipkart's reviews for: a review screenshot, or a review link. */
   const hasReviewProof = (r) => Boolean(r.shots?.reviewShot?.links?.length || r.shots?.reviewShot?.picture || r.shots?.review?.links?.length);
   /**
@@ -878,16 +879,18 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
 
   // ---- checking the rows one by one (copied from the Amazon routes, amazon/routes.js, and changed for Flipkart) ----
 
-  /** How many rows there are, how many are checked, and how many are left. */
+  /** How many rows there are, how many have a result, and how many are left. */
   function tally(rows) {
-    const done = rows.filter(isChecked).length;
+    const done = rows.filter(hasResult).length;
     return { total: rows.length, done, left: rows.length - done };
   }
 
   /**
-   * "Start checking" (later "Carry on checking"): the rows not checked yet,
-   * one at a time, from the first one, in the file's order, as on Amazon.
-   * "Check every row again" (again) first removes every row's last check. As
+   * "Start checking" (later "Carry on checking"): the rows with no result
+   * yet, one at a time, from the first one, in the file's order, as on
+   * Amazon: a row the uploaded file already gives a Status is passed by.
+   * "Check every row again" (again) first removes every row's last check,
+   * and the file's Statuses no longer count. As
    * on Amazon, before a row with a Google Drive screenshot to download, a
    * login using the Live Amazon Browser or no one logged in to Google pauses
    * it; so does a pause in a row's check (Google's login page, a robot check
@@ -906,7 +909,7 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
     if (job) return refuse(res, 409, `${READING_NOW} Wait for it to finish, then press ${button} again.`);
     if (checking) return refuse(res, 409, checkingSays(`press ${button} again`));
     if (!rows.length) return refuse(res, 400, 'There are no rows to check. Upload the file first.');
-    if (!again && rows.every(isChecked)) return refuse(res, 409, 'All rows are checked. To check them all again, press "Check every row again".');
+    if (!again && rows.every(hasResult)) return refuse(res, 409, 'All rows are checked. To check them all again, press "Check every row again".');
     const run = (checking = { rowId: null, all: true, stop: new AbortController() });
     res.on('close', () => {
       if (!res.writableFinished) run.stop.abort();
@@ -935,8 +938,8 @@ export function createFlipkartRoutes({ dataDir, auth, log = () => {}, browser = 
       emit({ event: 'run-started', again, ...tally(rows) });
       for (;;) {
         if (run.stop.signal.aborted) break;
-        // The first row not checked yet.
-        const r = rows.find((x) => !isChecked(x) && !tried.has(x.id));
+        // The first row with no result. A row the file gives a Status, or one the last check marked Duplicate, has one, so it is passed by.
+        const r = rows.find((x) => !hasResult(x) && !tried.has(x.id));
         if (!r) break;
         tried.add(r.id);
         run.rowId = r.id;
