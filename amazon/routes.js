@@ -438,7 +438,7 @@ export function createAmazonRoutes({ store, live, images, auth, log = () => {}, 
   let running = null; // { kind: 'check' | 'run' | 'sheet' | 'remove' | 'campaign' | 'email', rowId, stop }
   // Sends an email through Gmail in the Live Amazon Browser (gmail.js); tests give a pretend one.
   const mailer = sender ?? createEmailSender({ live, google, now });
-  // Every try at sending an email: the time, the row, what happened and the reason, in the Terminal window and in data/email-log.txt; never the email's words or address.
+  // Every try at sending an email: the time, the row, what happened and the reason, in the Terminal window and in data/email-log.txt; never the email's words or address, nor what the file has in its email address cell.
   const emailLines = emailLog ?? createLineLog(join(store.dataDir, EMAIL_LOG), { log, now });
   let finalsFilled = null; // rows checked before the three Status words were added get one, once
   let rowsNumbered = null; // rows of a sheet uploaded before rows were numbered from 1 get their number, once
@@ -1334,13 +1334,18 @@ export function createAmazonRoutes({ store, live, images, auth, log = () => {}, 
     placeholders: PLACEHOLDERS,
   });
 
-  /** The row's own email address, from the file's email address column: { address, ok, says }, says being why a Real email cannot go to it. */
+  /**
+   * The row's own email address, from the file's email address column:
+   * { address, ok, says, logSays }, says being why a Real email cannot go to
+   * it (for the screen), and logSays the same without what the file has in
+   * the cell, for the email log and the Terminal window.
+   */
   function addressOf(row, sheet) {
     const col = sheet?.mapping?.email;
     if (!Number.isInteger(col)) return { address: '', ok: false, says: 'This file has no email address column.' };
     const text = String(row?.values?.[col]?.text ?? '').trim();
     if (!text) return { address: '', ok: false, says: 'There is no email address in the file for this row.' };
-    if (!EMAIL_SHAPE.test(text)) return { address: text, ok: false, says: `What the file has for this row is not an email address: "${text}".` };
+    if (!EMAIL_SHAPE.test(text)) return { address: text, ok: false, says: `What the file has for this row is not an email address: "${text}".`, logSays: 'What the file has for this row is not an email address.' };
     return { address: text, ok: true, says: null };
   }
 
@@ -1408,7 +1413,8 @@ export function createAmazonRoutes({ store, live, images, auth, log = () => {}, 
    * address in the file's email address column, and a row without one (or
    * with something that is not an address) is not sent, and says why. Every
    * try is kept in data/email-log.txt (the time, the row, what happened and
-   * the reason; never the email's words or address). An email Gmail did not
+   * the reason; never the email's words or address, nor what the file has in
+   * its email address cell). An email Gmail did not
    * say was sent is "maybe sent", kept on the row like a sent one, so nobody
    * sends it twice by mistake. Rows cannot be checked while emails are sent,
    * and no email is sent while rows are checked. A login page, a robot
@@ -1470,7 +1476,8 @@ export function createAmazonRoutes({ store, live, images, auth, log = () => {}, 
           const own = mode === 'real' ? addressOf(row, sheet) : null;
           if (own && !own.ok) {
             counts.failed++;
-            emailLines(`${label}, ${name}: not sent. ${own.says}`);
+            // Never what the file has in the cell: it can be anything the user typed.
+            emailLines(`${label}, ${name}: not sent. ${own.logSays ?? own.says}`);
             emit({ event: 'email-failed', rowId: row.id, label, says: own.says });
             continue;
           }

@@ -64,25 +64,30 @@ Not placed: **parity-3**, which the second helper proved wrong: Flipkart passing
 
 - **1.1 X8** · `test/accuracy.test.mjs:324` · Amazon · *cross check, confirmed by hand* · privacy  
   A word in a test file equals one Amazon customer's whole Reviewer Name cell, and the file is on GitHub.  
-  *Example (not made up, so the word itself is not written here):* Anyone who can open the repository on GitHub can read the word, in the file and in its history.
+  *Example (not made up, so the word itself is not written here):* Anyone who can open the repository on GitHub can read the word, in the file and in its history.  
+  **Done 19-10-2026:** a script found the word by its line and place and put the made-up "Test Buyer" there, so the word was never written. A yes-or-no check said the old word equalled a whole Reviewer Name cell and the new name equals none; no file git keeps holds the old word now. Older commits still hold it (see "Left, with the reason"). A test checks that every name before "Edit public name" in the tests starts with Test.
 - **1.2 a-routes-5** · `amazon/routes.js:1473` · Amazon · *confirmed, high* · privacy  
   When a row's email cell is not a proper address, the Amazon email log and the Terminal keep the cell's whole text.  
   *Made-up example:* A made-up email cell holds a phone number, or two addresses. The row is not sent, and the whole cell goes into the email log and the Terminal.
   - Same problem: **a-mail-login-10** · `amazon/routes.js:1473` · Amazon · *confirmed, high*: The email log and the Terminal keep what the file has in the email address cell.
   - Same problem: **X5** · `amazon/routes.js:1343` · Amazon · *cross check, high*: Privacy: the email log keeps whatever is in the email cell when it is not an address.
+  - **Done 19-10-2026**, with its same problems: the email log and the Terminal now say only "What the file has for this row is not an email address."; the screen still shows what the cell has, so staff can put it right.
 - **1.3 X6** · `amazon/gmail.js:30` · Amazon · *cross check, medium* · privacy  
   Each email sent from the Amazon screen leaves its address, subject and words in the Live Amazon Browser's history, because Gmail's compose page is opened with them in its address.  
   *Made-up example:* After 50 real emails, the browser profile's history holds 50 addresses with order IDs, and "Remove all rows" does not clear them.
   - Same problem: **a-mail-login-16** · `amazon/gmail.js:32` · Amazon · *not double-checked, medium*: Every email's full words and address are kept in the Live Amazon Browser profile's history.
   - Same problem: **a-routes-16** · `amazon/gmail.js:32` · Amazon · *not double-checked, medium*: Sending an email puts the address, subject and words in the Gmail page address, which Chrome keeps in the Live Amazon Browser's saved profile.
   - Same problem: **shared-8** · `amazon/gmail.js:32` · Amazon · *not double-checked, medium*: Each email's address, subject and words stay in the Live Amazon Browser's history.
+  - **Done 19-10-2026**, with its same problems: Gmail's page for a new email is opened empty, and the address, the subject and the words are written in that email's own fields with no key pressed (only in the one empty box; never in a login page). A hidden Chrome test finds nothing of a sent, or written but not sent, made-up email anywhere in the profile, where the old way left it in the history, the saved tabs and the sessions. Not yet tried with the real Gmail (no Google page is opened here): if Gmail's page differs, the email says "not sent" with the reason, and nothing wrong is sent. Old emails stay in that history (see "Left, with the reason").
 - **1.4 X7** · `amazon/store.js:352` · Amazon · *cross check, medium* · privacy  
   "Remove all rows" and "Delete row" leave each check's record in data/checks, with everything read from the screenshots, and the buttons do not say so.  
   *Made-up example:* Staff remove a finished batch. The words read from every screenshot, a delivery name and address among them, stay on disk.
   - Same problem: **a-view-16** · `views/amazon.js:1065` · Amazon · *not double-checked, medium*: "Delete row" and "Remove all rows" say the pictures go, but what was read from them stays on this computer.
+  - **Done 19-10-2026**, with its same problem: "Delete row" also removes the folder of every check of that row (older ones too, never another row's), and "Remove all rows" removes every check's folder, even one stopped part way. Both questions and both messages say the check results go. Uploading a new file still leaves the old rows' check folders until "Remove all rows" (not part of this item).
 - **1.5 X9** · `.gitignore:2` · shared files · *cross check, low* · privacy  
   .gitignore keeps only data/ out of git, so a customer's Excel or CSV file saved anywhere else in the folder can be committed and pushed.  
-  *Made-up example:* Staff save the customer file in the project folder to upload it, and the next commit takes it along.
+  *Made-up example:* Staff save the customer file in the project folder to upload it, and the next commit takes it along.  
+  **Done 19-10-2026:** .gitignore leaves out every .xlsx, .xlsm, .xls and .csv file, in capital or small letters, except in test/fixtures/; a test asks git about made-up file names.
 - **1.6 a-view-15** · `views/flipkart.js:192` · Flipkart · *confirmed, high* · could lose results  
   Flipkart replaces every row and every result, staff changes too, on any upload, without asking, even for a file dropped on a row's page. Amazon asks first and ignores drops on a row's page.  
   *Made-up example:* 200 Flipkart rows are checked, and a file dropped by mistake replaces them all with no question.

@@ -1073,7 +1073,7 @@ test('a row added by hand: its words, and each picture as a file or a link; a re
   }
 });
 
-test('Delete row and Remove all rows: rows, their pictures, and the rows made with the old layout go; the results, the login, choices and uploaded files stay', async () => {
+test("Delete row and Remove all rows: rows, their pictures, their checks' folders (what was read from the screenshots) and the rows made with the old layout go; the login, choices and uploaded files stay", async () => {
   const l = await lab();
   try {
     await call('POST', '/local/amazon/sheet', { ...l.opts, ...multipart({}, [{ field: 'file', name: 'orders.xlsx', data: ORDERS }]) });
@@ -1091,9 +1091,14 @@ test('Delete row and Remove all rows: rows, their pictures, and the rows made wi
       plan.delete(r.id);
       assert.ok(readdirSync(join(l.dir, 'pictures')).some((f) => f.startsWith(r.id)), `row ${r.row}, once checked, has its picture`);
     }
+    // Each check keeps a folder: what was read from the screenshots, and the pictures of its steps.
+    const foldersOf = (r) => checks.filter((c) => c.rowId === r.id).map((c) => join(l.dir, 'checks', c.checkId));
+    assert.ok(foldersOf(one).length === 1 && foldersOf(three).length === 1 && [...foldersOf(one), ...foldersOf(three)].every((f) => existsSync(join(f, 'result.json')) && existsSync(join(f, 'step-6.png'))));
     const del = await call('POST', `/local/amazon/rows/${one.id}/remove`, { ...l.opts, body: '{}', type: 'application/json' });
     assert.deepEqual(del.json, { removed: 1, row: { id: one.id, label: 'Row 1' } });
     assert.ok(!readdirSync(join(l.dir, 'pictures')).some((f) => f.startsWith(one.id)), 'its pictures are gone');
+    assert.ok(foldersOf(one).every((f) => !existsSync(f)), "its check's folder is gone");
+    assert.ok(foldersOf(three).every((f) => existsSync(join(f, 'result.json'))), "another row's check stays");
     assert.equal((await call('POST', `/local/amazon/rows/${one.id}/remove`, { ...l.opts, body: '{}', type: 'application/json' })).status, 404);
     const wrong = await call('POST', '/local/amazon/rows/remove-all', { ...l.opts, body: JSON.stringify({ expected: 5 }), type: 'application/json' });
     assert.equal(wrong.status, 409);
@@ -1104,12 +1109,39 @@ test('Delete row and Remove all rows: rows, their pictures, and the rows made wi
     const after = await rowsNow(l.opts);
     assert.deepEqual([after.rows.length, after.oldRows], [0, 0]);
     assert.deepEqual(readdirSync(join(l.dir, 'pictures')).filter((f) => f !== 'small'), []);
+    assert.deepEqual(readdirSync(join(l.dir, 'checks')), [], "every check's folder is gone");
     assert.ok(!existsSync(join(l.dir, 'screenshots', 'u000000000001-delivery.png')), "the old layout's screenshots go");
     assert.ok(existsSync(join(l.dir, 'screenshots', 'uploaded', 'kept.png')), 'the screenshots uploaded by file name stay');
     assert.ok(after.sheet, 'the uploaded sheet stays');
     assert.equal(after.sheet.mapping.orderId, 1, 'the remembered columns stay');
   } finally {
     await l.close();
+  }
+});
+
+test("the store: removing a row removes every check of that row, older ones too, never another row's; a check stopped before it had a result names no row, so it goes only with Remove all rows, which removes every check's folder", async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'arc-store-checks-'));
+  try {
+    const s = createStore(dir);
+    await s.init();
+    const [a, b] = await s.replaceSheetRows([{ row: 2, orderId: { text: '403-0000001-0000001' } }, { row: 3, orderId: { text: '403-0000002-0000002' } }]);
+    // Made-up checks: two of row a (an older one, then its last), one of row b, and one stopped before it had a result.
+    const ID = { aOld: 'c20261019100000aaaaa1', aLast: 'c20261019100100aaaaa2', b: 'c20261019100200bbbbb1', stopped: 'c20261019100300ccccc1' };
+    const made = (checkId, rowId) => s.saveResult({ checkId, rowId, status: 'Fail', type: 'Not delivered', typeKey: 'notDelivered', final: 'fail', note: 'A made-up note.', finishedAt: '2026-10-19T10:00:00.000Z', steps: [], seen: { delivery: { orderIds: ['403-0000001-0000001'], text: 'Made-up words read from a screenshot' } } });
+    await made(ID.aOld, a.id);
+    await made(ID.aLast, a.id);
+    await made(ID.b, b.id);
+    mkdirSync(join(dir, 'checks', ID.stopped));
+    for (const id of Object.values(ID)) writeFileSync(join(dir, 'checks', id, 'step-1.png'), PNG);
+    assert.equal((await s.get(a.id)).last.checkId, ID.aLast);
+    await s.remove(a.id);
+    assert.deepEqual(readdirSync(join(dir, 'checks')).sort(), [ID.b, ID.stopped], "both of row a's checks went; row b's and the stopped one stay");
+    assert.equal((await s.get(b.id)).last.checkId, ID.b);
+    assert.ok(existsSync(join(dir, 'checks', ID.b, 'result.json')));
+    assert.equal(await s.removeAll(), 1);
+    assert.deepEqual(readdirSync(join(dir, 'checks')), [], "every check's folder is gone");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
@@ -1831,9 +1863,10 @@ test("Real mode: the file's email address column is found by its name and shown 
     assert.deepEqual([record.mode, record.maybe, record.name], ['real', false, 'Not delivered']);
     const logText = readFileSync(join(l.dir, 'email-log.txt'), 'utf8');
     assert.ok(logText.includes("Sending 3 emails: each one to the user's own email address from the file."), logText);
-    assert.ok(logText.includes('Row 2, Not delivered: not sent. What the file has for this row is not an email address: "not an address".'), logText);
+    assert.ok(logText.includes('Row 2, Not delivered: not sent. What the file has for this row is not an email address.'), logText);
     assert.ok(logText.includes('Done: 1 sent, 0 maybe sent, 2 not sent, 0 not tried.'), logText);
     assert.doesNotMatch(logText, /@/, 'never an address');
+    assert.ok(!logText.includes('not an address'), 'never what the file has in the cell');
     // Test mode still goes only to the test address.
     await post('/local/amazon/email-address', { email: 'test.person@example.test' });
     const testMode = await post('/local/amazon/emails/send', { mode: 'test', emails: mine });
@@ -1844,6 +1877,50 @@ test("Real mode: the file's email address column is found by its name and shown 
     assert.equal((await rowsNow(l.opts)).emails.emailColumn, false);
     assert.equal((await post('/local/amazon/emails/send', { mode: 'real', emails: mine })).json.message, 'This file has no email address column, so emails can only go to the test email address. Choose Test.');
     assert.equal(sent.length, 4, 'nothing more was sent');
+  } finally {
+    plan.clear();
+    await l.close();
+  }
+});
+
+test("Real mode: what the file has in a row's email address cell when it is not an address (a phone number, two addresses) is shown on the screen, but never kept in the email log nor written in the Terminal window", async () => {
+  const sent = [];
+  const terminal = [];
+  const sender = { async send(email) { sent.push(email.to); return { ok: true, at: '2026-10-08T10:00:00.000Z' }; } };
+  const l = await lab({ sender, log: (line) => terminal.push(String(line)) });
+  const post = (path, body) => json('POST', path, body, l.opts);
+  try {
+    // Made-up cells: a phone number, and two addresses in one cell.
+    const PHONE = '98765 43210';
+    const TWO = 'made.up.first@example.test, made.up.second@example.test';
+    const header = [...NEW_HEADER, 'Email ID'];
+    const rows = NEW_ROWS.map((r, i) => [...r, i === 0 ? PHONE : i === 1 ? TWO : `test.reviewer.${i + 1}@example.test`]);
+    await call('POST', '/local/amazon/sheet', { ...l.opts, ...multipart({}, [{ field: 'file', name: NEW_FILE_NAME, data: await newLayoutBook({ header, rows }) }]) });
+    const [one, two] = (await rowsNow(l.opts)).rows;
+    for (const r of [one, two]) {
+      plan.set(r.id, { typeKey: 'notDelivered', final: 'fail' });
+      await call('POST', `/local/amazon/rows/${r.id}/check`, { ...l.opts, body: '{}', type: 'application/json' });
+    }
+    plan.clear();
+    const preview = await post('/local/amazon/emails/preview', { rowIds: [one.id, two.id] });
+    const screen = [`What the file has for this row is not an email address: "${PHONE}".`, `What the file has for this row is not an email address: "${TWO}".`];
+    assert.deepEqual(preview.json.emails.map((e) => e.addressSays), screen, 'the screen says what the cell has, so staff can put it right');
+    const mine = preview.json.emails.map((e) => ({ rowId: e.rowId, key: e.key, subject: e.subject, message: e.message }));
+    const real = await post('/local/amazon/emails/send', { mode: 'real', emails: mine });
+    assert.equal(real.status, 200, real.text);
+    assert.deepEqual(real.lines.filter((x) => x.event === 'email-failed').map((x) => x.says), screen);
+    assert.deepEqual(sent, [], 'nothing was sent');
+    // The log's lines are kept a moment after they are written in the Terminal window: wait for the last one.
+    const logFile = join(l.dir, 'email-log.txt');
+    await until(() => existsSync(logFile) && readFileSync(logFile, 'utf8').includes('Done: 0 sent'), 'every line kept in email-log.txt');
+    const logText = readFileSync(logFile, 'utf8');
+    assert.ok(logText.includes('Row 1, Not delivered: not sent. What the file has for this row is not an email address.'), logText);
+    assert.ok(logText.includes('Row 2, Not delivered: not sent. What the file has for this row is not an email address.'), logText);
+    assert.ok(terminal.some((t) => t.includes('Row 1, Not delivered: not sent.')), 'the Terminal window was given the same lines');
+    for (const text of [logText, terminal.join('\n')]) {
+      assert.doesNotMatch(text, /98765|43210/, 'never the phone number');
+      assert.doesNotMatch(text, /made\.up|@/, 'never an address');
+    }
   } finally {
     plan.clear();
     await l.close();

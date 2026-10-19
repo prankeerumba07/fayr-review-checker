@@ -7,10 +7,11 @@
 // other profile is ever started. One Amazon page at a time, at least 3
 // seconds apart, never hidden as automated (Chrome's own "controlled by
 // automated test software" bar stays), and it never types anything into
-// Amazon or Google. The one thing it ever presses is Gmail's Send button, on
-// Gmail's page for a new email, when a staff member sends an email to a user
-// (gmail.js). The image reader is a headless Chrome that only ever looks at
-// local images.
+// Amazon. Into Google it writes only the email a staff member sends to a
+// user: the address, the subject and the words, in that email's own fields
+// on Gmail's page for a new email, with no key pressed (gmail.js). The one
+// thing it ever presses is Gmail's Send button, on that page. The image
+// reader is a headless Chrome that only ever looks at local images.
 //
 // Playwright never closes either browser by itself when the dashboard is
 // stopped (Control+C, or its Terminal window closing): the dashboard closes
@@ -23,7 +24,7 @@ import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 import { readAmazonPage, readAccountLine, accountFrom, isLoginPage, scrollToReviewsInPage, readGoogleLine, googleAccountFrom } from './page-read.js';
 import { analyseImage, makeThumbnail, pictureForReading } from './image-read.js';
-import { readGmailPage, gmailSendButton } from './gmail.js';
+import { readGmailPage, gmailSendButton, gmailFields } from './gmail.js';
 
 export const LIVE_BROWSER_NAME = 'Live Amazon Browser';
 export const PAGE_GAP_MS = 3000;
@@ -214,6 +215,60 @@ export class LiveBrowser {
       return await this.page.evaluate(readGmailPage, wanted);
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Writes the email in Gmail's page for a new email: the address, the
+   * subject and the words, each in its own field of the new email's box
+   * (gmailFields), so none of them is ever in the page's address, which
+   * Chrome keeps in this window's history. Only on a Gmail page, and with no
+   * key pressed (the words are put in as they are), so no key can send the
+   * email or choose another address; Chrome is told to keep nothing written
+   * in the address and subject fields for its own suggestions. The words go
+   * before anything Gmail put there (the account's own signature).
+   * -> 'written'; 'none' when the new email's box is not there (nothing was
+   * written); 'failed' when writing went wrong part way.
+   */
+  async writeGmail(email) {
+    const address = String(email?.to ?? '');
+    const subjectWords = String(email?.subject ?? '');
+    const words = String(email?.message ?? '');
+    if (!this.isOpen() || !address || !subjectWords || !words) return 'none';
+    const handles = [];
+    let started = false;
+    try {
+      if (new URL(this.page.url()).hostname !== 'mail.google.com') return 'none';
+      const fields = await this.page.evaluateHandle(gmailFields);
+      handles.push(fields);
+      if (!(await fields.evaluate((f) => Boolean(f)))) return 'none';
+      const [to, subject, body] = await Promise.all(['to', 'subject', 'body'].map(async (k) => (await fields.getProperty(k)).asElement()));
+      handles.push(...[to, subject, body].filter(Boolean));
+      if (!to || !subject || !body) return 'none';
+      started = true;
+      for (const field of [to, subject]) await field.evaluate((e) => e.setAttribute('autocomplete', 'off'));
+      await to.fill(address, { timeout: 5000 });
+      // Leaving the address field for the subject makes Gmail take the address as the email's own.
+      await subject.fill(subjectWords, { timeout: 5000 });
+      if (await body.evaluate((e) => e.tagName === 'TEXTAREA')) {
+        await body.fill(words, { timeout: 5000 });
+      } else {
+        await body.evaluate((e) => {
+          e.focus();
+          const start = document.createRange();
+          start.setStart(e, 0);
+          start.collapse(true);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(start);
+        });
+        await this.page.keyboard.insertText(words);
+      }
+      return 'written';
+    } catch {
+      return started ? 'failed' : 'none';
+    } finally {
+      for (const h of handles) await h.dispose().catch(() => {});
     }
   }
 

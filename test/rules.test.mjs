@@ -82,3 +82,28 @@ test("every module passes Node's syntax check", () => {
     assert.equal(r.status, 0, `${relative(ROOT, f)}: ${r.stderr}`);
   }
 });
+
+test('the pretend lines of a review screenshot in the tests name only made-up people: every name before "Edit public name" starts with Test', () => {
+  let looked = 0;
+  for (const f of TEXT.filter((x) => x.includes(`${join(ROOT, 'test')}`))) {
+    for (const m of readFileSync(f, 'utf8').matchAll(/([A-Z][\p{L}'.-]*(?: [A-Z][\p{L}'.-]*)*) Edit public name/gu)) {
+      looked++;
+      // The name itself is never written in the message: it could be a real one.
+      assert.match(m[1], /^Test\b/, `${relative(ROOT, f)} has a name before "Edit public name" that is not a made-up one`);
+    }
+  }
+  assert.ok(looked >= 2, `${looked} such lines looked at`);
+});
+
+test('git leaves out every Excel and CSV file saved anywhere in this folder (a customer file, or the results downloaded), in capital or small letters; only the made-up ones in test/fixtures are kept', (t) => {
+  const inGit = spawnSync('git', ['-C', ROOT, 'rev-parse', '--is-inside-work-tree'], { encoding: 'utf8' });
+  if (inGit.status !== 0 || inGit.stdout.trim() !== 'true') return t.skip('this folder is not kept in git here');
+  // Made-up file names, whether or not such files are there: git says whether it would leave each out.
+  const leftOut = (path) => {
+    const r = spawnSync('git', ['-C', ROOT, 'check-ignore', '-q', '--no-index', path], { encoding: 'utf8' });
+    assert.ok(r.status === 0 || r.status === 1, `${path}: ${r.stderr}`);
+    return r.status === 0;
+  };
+  for (const p of ['July orders.xlsx', 'July orders checked 2026-10-19.xlsx', 'ORDERS.XLSX', 'orders with macros.xlsm', 'an old file.xls', 'amazon-review-results-2026-10-19.csv', 'Results.CSV', 'Downloads/July orders.xlsx', 'test/July orders.xlsx', 'flipkart/orders.csv', 'views/orders.Xlsx']) assert.equal(leftOut(p), true, `${p} is left out of git`);
+  for (const p of ['test/fixtures/sheets/orders.xlsx', 'test/fixtures/flipkart/flipkart-orders.xlsx', 'test/fixtures/sheets/made-up.csv', 'README.md', 'amazon/workbook.js', 'notes on xlsx files.md']) assert.equal(leftOut(p), false, `${p} is kept in git`);
+});

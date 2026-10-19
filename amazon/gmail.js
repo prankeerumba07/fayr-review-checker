@@ -1,21 +1,23 @@
 // Sending an email through Gmail, in the Live Amazon Browser, with the
 // Google login already saved there: Gmail's page for writing a new email is
-// opened with the address, the subject and the words already in it (Gmail
-// fills them in from the page's address; nothing is typed), the page is read
-// until it shows the email as the staff member saw it, and then Gmail's Send
-// button is pressed, in that email's own box. Then the page is read until
-// Gmail says "Message sent", and the window stays until Gmail has finished
-// (its "Undo" time) before it leaves Gmail. When Gmail does not say the
-// email was sent, the email is "maybe sent": it may or may not have gone,
-// and the staff member is told to look in their Sent emails. Nothing else in
-// Gmail is ever opened, read or changed. A login page, a robot check or a
-// block stops the sending and is said plainly; nothing is got around.
-// readGmailPage() and gmailSendButton() run INSIDE the page (Playwright's
-// page.evaluate), so they are self-contained and only read.
+// opened empty, and the address, the subject and the words are written in
+// that email's own fields, with no key pressed. They are never put in the
+// page's address, which Chrome would keep in the window's history (and in its
+// saved tabs) on this computer. The page is read until it shows the email as
+// the staff member saw it, and then Gmail's Send button is pressed, in that
+// email's own box. Then the page is read until Gmail says "Message sent", and
+// the window stays until Gmail has finished (its "Undo" time) before it
+// leaves Gmail. When Gmail does not say the email was sent, the email is
+// "maybe sent": it may or may not have gone, and the staff member is told to
+// look in their Sent emails. Nothing else in Gmail is ever opened, read or
+// changed. A login page, a robot check or a block stops the sending and is
+// said plainly; nothing is got around, and nothing is written there.
+// readGmailPage(), gmailFields() and gmailSendButton() run INSIDE the page
+// (Playwright's page.evaluate), so they are self-contained and only read.
 
 import { GMAIL_COMPOSE_URL } from './links.js';
 
-/** How long Gmail is given to show the page for a new email, filled in as it was on the screen. */
+/** How long Gmail is given to show the page for a new email, and then to show the email written in it as it was on the screen. */
 export const GMAIL_WAIT_MS = 30_000;
 /** How long Gmail is given, after Send is pressed, to say "Message sent". */
 export const GMAIL_SENT_WAIT_MS = 30_000;
@@ -26,10 +28,10 @@ const GONE_GRACE_MS = 3000;
 const POLL_MS = 400;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** The address of Gmail's page for writing a new email, with the address, the subject and the words already in it. */
-export function composeUrl({ to, subject, message }) {
+/** The address of Gmail's page for writing a new email, opened empty: nothing of the email is ever in it. */
+export function composeUrl() {
   const u = new URL(GMAIL_COMPOSE_URL);
-  u.search = new URLSearchParams({ view: 'cm', fs: '1', tf: '1', to: String(to ?? ''), su: String(subject ?? ''), body: String(message ?? '') }).toString();
+  u.search = new URLSearchParams({ view: 'cm', fs: '1', tf: '1' }).toString();
   return u.href;
 }
 
@@ -158,6 +160,62 @@ export function gmailSendButton(wanted) {
   }
   return Array.prototype.slice.call(root.querySelectorAll(SEND)).filter(shown)[0] || null;
 }
+
+/**
+ * Where the email is written, found INSIDE the page: the fields of the new
+ * email's box, { to, subject, body }, or null. The new email's box is the
+ * one box whose subject is still empty: with none, or with more than one,
+ * nothing is written. Its address field is the one Gmail put the cursor in
+ * (as it does for a new email), else the one Gmail names for the address; a
+ * field Gmail has hidden is never used. A box that cannot be told apart from
+ * the rest of the page is used only when it is the page's one box.
+ */
+export function gmailFields() {
+  var squash = function (s) {
+    return (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim();
+  };
+  var list = function (nodes) {
+    return Array.prototype.slice.call(nodes || []);
+  };
+  var SUBJECT = 'input[name="subjectbox"], input[name="subject"]';
+  var TO = 'textarea[name="to"], input[name="to"]';
+  var BODY = 'div[aria-label="Message Body"], div[g_editable="true"][role="textbox"], textarea[name="body"]';
+  var SEND = 'div[role="button"][aria-label^="Send"], button[aria-label^="Send"], [data-tooltip^="Send"]';
+  // The field for the address, best first: by Gmail's own label for it, by its name, then by the kind of field it is.
+  var ADDRESS = ['input[aria-label="To recipients"], input[aria-label="To"], textarea[aria-label="To"]', 'textarea[name="to"], input[name="to"]', 'input[peoplekit-id], input[role="combobox"]'];
+  var shown = function (e) {
+    return e.getClientRects().length > 0;
+  };
+  var subjects = list(document.querySelectorAll(SUBJECT)).filter(shown);
+  var empty = subjects.filter(function (s) {
+    return !squash(s.value);
+  });
+  if (empty.length !== 1) return null;
+  var subject = empty[0];
+  // A field the address can be written in: shown, open to writing, one line of words, and not a subject.
+  var writable = function (e) {
+    if (!e || !e.tagName || subjects.indexOf(e) >= 0 || e.disabled || e.readOnly || !shown(e)) return false;
+    if (e.tagName === 'TEXTAREA') return true;
+    return e.tagName === 'INPUT' && ['', 'text', 'email'].indexOf(String(e.getAttribute('type') || '').toLowerCase()) >= 0;
+  };
+  var firstIn = function (root, sel) {
+    return list(root.querySelectorAll(sel)).filter(writable)[0] || null;
+  };
+  // The box of the new email: from its subject up to the nearest ancestor that also holds a Send button and a field for the address.
+  var box = null;
+  var node = subject.parentElement;
+  for (var i = 0; node && i < 20 && !box; i++) {
+    if (node.querySelector(SEND) && (node.querySelector(TO) || ADDRESS.some(function (sel) { return firstIn(node, sel); }))) box = node;
+    node = node.parentElement;
+  }
+  if (!box && subjects.length > 1) return null;
+  var root = box || document;
+  var active = document.activeElement;
+  var to = writable(active) && root.contains(active) ? active : null;
+  for (var k = 0; k < ADDRESS.length && !to; k++) to = firstIn(root, ADDRESS[k]);
+  var body = list(root.querySelectorAll(BODY)).filter(shown)[0] || null;
+  return to && body ? { to: to, subject: subject, body: body } : null;
+}
 /* eslint-enable no-var */
 
 /**
@@ -196,7 +254,8 @@ export const EMAIL_SAYS = {
   timeout: 'Gmail took too long to open, so the email was not sent.',
   network: 'Gmail could not be reached, so the email was not sent. Check that this computer is online.',
   noCompose: 'Gmail did not show its page for writing a new email, so the email was not sent.',
-  different: (what) => `Gmail did not fill in the email as it was on the screen (${what} ${what === 'the words' ? 'were' : 'was'} different), so it was not sent.`,
+  noFields: "The email could not be written in Gmail's page for a new email, so it was not sent.",
+  different: (what) => `Gmail did not show the email as it was on the screen (${what} ${what === 'the words' ? 'were' : 'was'} different), so it was not sent.`,
   noSend: "Gmail's Send button could not be pressed, so the email was not sent.",
   maybe: 'Send was pressed, but Gmail did not say the email was sent, so it may or may not have gone. Look in your Sent emails before sending it again.',
   stopped: 'Sending was stopped, so the email was not sent.',
@@ -223,7 +282,7 @@ export function differs(compose, email) {
 }
 
 /**
- * live - the LiveBrowser (begin, open, readGmail, pressSend, leave).
+ * live - the LiveBrowser (begin, open, readGmail, writeGmail, pressSend, leave).
  * google - the Google login (loggedOut), told when Gmail asks to log in.
  * log(words) - writes a line in the Terminal window (nothing by default).
  * -> { send(email, { signal, say }) }:
@@ -244,6 +303,30 @@ export function createEmailSender({ live, google = null, log = () => {}, now = (
       line = await live.readGmail(wanted);
     }
     return line;
+  }
+
+  /**
+   * Gmail's page read until the box for a new email is there, and the email
+   * then written in it, once: { line, wrote }, wrote being 'written', 'none'
+   * (the box never came, the page is one that stops the sending, or sending
+   * was stopped) or 'failed' (writing went wrong part way, so nothing more is
+   * written on this page).
+   */
+  async function writeWhenDrawn(email, signal, say, stops) {
+    const end = Date.now() + waitMs;
+    let told = false;
+    for (;;) {
+      const line = await live.readGmail(null);
+      if (stops(line)) return { line, wrote: 'none' };
+      if (line?.compose && !signal?.aborted) {
+        if (!told) say('Writing the email in Gmail');
+        told = true;
+        const wrote = await live.writeGmail(email);
+        if (wrote !== 'none') return { line, wrote };
+      }
+      if (signal?.aborted || Date.now() >= end) return { line, wrote: 'none' };
+      await sleep(pollMs);
+    }
   }
 
   /** After Send: read until Gmail says "Message sent" (or asks to log in, or shows a robot check); a box gone without a word is given a little longer, then that is that. */
@@ -281,18 +364,30 @@ export function createEmailSender({ live, google = null, log = () => {}, now = (
       return { ok: false, says: EMAIL_SAYS.launch };
     }
     say("Opening Gmail's page for a new email in the Live Amazon Browser");
-    const res = await live.open(composeUrl(email), { onWait: (ms) => say(`Waiting ${Math.ceil(ms / 1000)} seconds before opening Gmail`) });
+    // Opened empty: the email is written in the page, never put in its address, which Chrome would keep in the window's history.
+    const res = await live.open(composeUrl(), { onWait: (ms) => say(`Waiting ${Math.ceil(ms / 1000)} seconds before opening Gmail`) });
     if (!res?.ok) return { ok: false, says: EMAIL_SAYS[res?.error] ?? EMAIL_SAYS.network };
-    // Gmail draws the box for the new email, and fills in its fields, a moment after it opens: the page is read until the email is there as it was on the screen.
-    const ready = (l) => Boolean(l?.compose && !differs(l.compose, email) && l.compose.send);
-    let line = await readUntil((l) => l && (ready(l) || l.loginForm || l.refused || l.robot), waitMs, signal, wanted);
-    const kind = gmailPageIs(line, res.status);
+    const stops = (l) => Boolean(l?.loginForm || l?.refused || l?.robot);
+    // Gmail draws the box for the new email a moment after it opens: the email is written in it once it is there.
+    const first = await writeWhenDrawn(email, signal, say, stops);
+    const kind = gmailPageIs(first.line, res.status);
     if (kind === 'signin') return pause('google-signin');
     if (kind === 'robot') return pause('google-robot');
     if (kind === 'blocked') return pause('google-blocked');
     if (kind === 'refused') return pause('google-refused');
-    if (signal?.aborted && !ready(line)) return fail(EMAIL_SAYS.stopped);
+    if (first.wrote === 'failed') return fail(EMAIL_SAYS.noFields);
+    if (signal?.aborted) return fail(EMAIL_SAYS.stopped);
     if (kind !== 'compose') return fail(EMAIL_SAYS.noCompose);
+    if (first.wrote !== 'written') return fail(EMAIL_SAYS.noFields);
+    // Gmail takes the address as the email's own a moment after its field is left: the page is read until the email is there as it was on the screen.
+    const ready = (l) => Boolean(l?.compose && !differs(l.compose, email) && l.compose.send);
+    let line = await readUntil((l) => l && (ready(l) || stops(l)), waitMs, signal, wanted);
+    const shown = gmailPageIs(line, null);
+    if (shown === 'signin') return pause('google-signin');
+    if (shown === 'robot') return pause('google-robot');
+    if (shown === 'refused') return pause('google-refused');
+    if (signal?.aborted && !ready(line)) return fail(EMAIL_SAYS.stopped);
+    if (shown !== 'compose') return fail(EMAIL_SAYS.noCompose);
     const wrong = differs(line.compose, email);
     if (wrong) return fail(EMAIL_SAYS.different(wrong));
     if (!line.compose.send) return fail(EMAIL_SAYS.noSend);

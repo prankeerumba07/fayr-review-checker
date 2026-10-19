@@ -321,7 +321,7 @@ test('a delivery screenshot with no order ID read is read the other ways even wh
 });
 
 test("Amazon's refusal read only in part on a small screenshot: read once more enlarged, for the whole message", async () => {
-  const tesseract = fakeTesseract((file) => (/\/arc-picture-/.test(file) ? ['@ We apologise but Amazon is not accepting reviews on this item or product from this account. For'] : ['harshit Edit public name', 'n this item or product from th', 'mmunity guid']));
+  const tesseract = fakeTesseract((file) => (/\/arc-picture-/.test(file) ? ['@ We apologise but Amazon is not accepting reviews on this item or product from this account. For'] : ['Test Buyer Edit public name', 'n this item or product from th', 'mmunity guid']));
   const out = await readReviewPicture(['/made-up/refusal.png'], { settings: SETTINGS, tesseract, sips: fakeSips });
   assert.equal(out.kind, 'refused');
   assert.match(out.refusal, /not accepting reviews on this item/i);

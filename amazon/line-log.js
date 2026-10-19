@@ -3,7 +3,7 @@
 // about its last half megabyte, and is readable only by this Mac account.
 // Used for the login lines (data/login-log.txt) and the email lines
 // (data/email-log.txt). Nothing private goes in: never a password, a cookie,
-// an email's words or an email address.
+// an email's words, an email address, or what a customer's file has in a cell.
 
 import { appendFile, readFile, stat, writeFile } from 'node:fs/promises';
 

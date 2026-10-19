@@ -7,3 +7,13 @@ data-backup*/
 *-profile/
 # Mac Finder's folder files.
 .DS_Store
+# Excel and CSV files (a customer's file, or the results downloaded), wherever they are saved, in capital or small letters.
+*.[xX][lL][sS][xX]
+*.[xX][lL][sS][mM]
+*.[xX][lL][sS]
+*.[cC][sS][vV]
+# Except the made-up ones the tests use.
+!test/fixtures/**/*.[xX][lL][sS][xX]
+!test/fixtures/**/*.[xX][lL][sS][mM]
+!test/fixtures/**/*.[xX][lL][sS]
+!test/fixtures/**/*.[cC][sS][vV]

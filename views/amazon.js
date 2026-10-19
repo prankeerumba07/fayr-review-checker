@@ -1062,13 +1062,13 @@ function forget(ctx, ids) {
 async function deleteRow(ctx, id) {
   const s = ctx.state;
   if (!id || removeBlocked(s)) return;
-  if (!ctx.confirm('Delete this row and its pictures from this dashboard? This cannot be undone.')) return;
+  if (!ctx.confirm('Delete this row, its pictures and its check results (what was read from its screenshots) from this dashboard? This cannot be undone.')) return;
   ctx.update((st) => {
     st.removing = true;
     st.notice = null;
     st.rowsNotice = null;
   });
-  let text = 'The row and its pictures were deleted. Its check results stay saved on this computer, but no longer show here.';
+  let text = 'The row, its pictures and its check results were deleted from this computer.';
   try {
     await ctx.local.api('POST', `${ROWS}/${encodeURIComponent(id)}/remove`, {});
   } catch (err) {
@@ -1096,7 +1096,7 @@ async function removeAllRows(ctx) {
   const n = arr(s.list.items).length + (s.list.oldRows || 0);
   if (!n || removeBlocked(s)) return;
   const who = n === 1 ? 'the 1 row' : `all ${n} rows`;
-  if (!ctx.confirm(`Remove ${who} from this dashboard, with their pictures? This removes the rows from the sheet, the rows added by hand, and any rows made with the old layout. This cannot be undone.`)) return;
+  if (!ctx.confirm(`Remove ${who} from this dashboard, with their pictures and their check results (what was read from their screenshots)? This removes the rows from the sheet, the rows added by hand, and any rows made with the old layout. This cannot be undone.`)) return;
   ctx.update((st) => {
     st.removing = true;
     st.removeError = null;
@@ -1109,7 +1109,7 @@ async function removeAllRows(ctx) {
     forget(ctx, null);
     ctx.update((st) => {
       st.removing = false;
-      st.rowsNotice = { tone: 'good', text: `Removed ${removed === 1 ? '1 row' : `${removed} rows`} and their pictures. The Amazon login, the uploaded sheet, the remembered columns and the campaigns are kept. The check results stay saved on this computer, but no longer show here.` };
+      st.rowsNotice = { tone: 'good', text: `Removed ${removed === 1 ? '1 row' : `${removed} rows`}, their pictures and their check results. The Amazon login, the uploaded sheet, the remembered columns and the campaigns are kept.` };
     });
     ctx.reveal?.('rows');
   } catch (err) {

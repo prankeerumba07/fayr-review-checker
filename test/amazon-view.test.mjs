@@ -1064,12 +1064,13 @@ test('one Download button offers "The checked Excel file" and "The results only"
   assert.equal(byId(csvOnly.draw(), 'download-excel').attrs.disabled, true, 'a CSV upload has no Excel file to fill in');
 });
 
-test('Delete row asks first; Remove all rows asks with the number, counting the rows of the old layout, which the screen also mentions', async () => {
+test('Delete row asks first; Remove all rows asks with the number, counting the rows of the old layout, which the screen also mentions; both say the check results go too', async () => {
   const local = fakeLocal(standard);
   const page = await rowPageOf(local);
   page.click('delete-row');
   await settle();
-  assert.equal(page.asked.at(-1), 'Delete this row and its pictures from this dashboard? This cannot be undone.');
+  assert.equal(page.asked.at(-1), 'Delete this row, its pictures and its check results (what was read from its screenshots) from this dashboard? This cannot be undone.');
+  assert.equal(page.state.rowsNotice.text, 'The row, its pictures and its check results were deleted from this computer.');
   assert.ok(local.calls.some((c) => c.path === `/local/amazon/rows/${R2}/remove`));
   assert.deepEqual(page.went.at(-1), 'amazon');
   assert.deepEqual(page.revealed, ['rows']);
@@ -1082,9 +1083,11 @@ test('Delete row asks first; Remove all rows asks with the number, counting the 
   assert.ok(byId(more, 'remove-all') && byId(more, 'add'), '"Add a row by hand" and "Remove all rows" are under "More"');
   s.click('remove-all');
   await settle();
-  assert.equal(s.asked.at(-1), 'Remove all 6 rows from this dashboard, with their pictures? This removes the rows from the sheet, the rows added by hand, and any rows made with the old layout. This cannot be undone.');
+  assert.equal(s.asked.at(-1), 'Remove all 6 rows from this dashboard, with their pictures and their check results (what was read from their screenshots)? This removes the rows from the sheet, the rows added by hand, and any rows made with the old layout. This cannot be undone.');
   assert.deepEqual(old.calls.find((c) => c.path === '/local/amazon/rows/remove-all').body, { expected: 6 });
-  assert.match(textOf(byId(s.draw(), 'rows-notice')), /^Removed 6 rows and their pictures\./);
+  const notice = textOf(byId(s.draw(), 'rows-notice'));
+  assert.match(notice, /^Removed 6 rows, their pictures and their check results\. The Amazon login, the uploaded sheet, the remembered columns and the campaigns are kept\./);
+  assert.doesNotMatch(notice, /stay saved/);
 });
 
 test('Add a row by hand: the same fields as the sheet, each picture as a file or a link', async () => {

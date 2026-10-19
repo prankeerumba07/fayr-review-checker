@@ -157,6 +157,31 @@ export function createStore(dataDir) {
     }
   }
 
+  /**
+   * Removes the folders of these rows' checks (every check's when ids is
+   * null): what was read from the screenshots, the pictures of each step and
+   * the kept pages. A check's row is named in its result; the folder of a
+   * check stopped before it had a result names no row, so it goes only with
+   * every row. A check a row still left points to always stays.
+   */
+  async function sweepChecks(ids, left = []) {
+    let names = [];
+    try {
+      names = await readdir(checksDir);
+    } catch {
+      return;
+    }
+    const stays = new Set(left.map((r) => r.last?.checkId).filter(Boolean));
+    for (const name of names) {
+      if (!CHECK_ID.test(name) || stays.has(name)) continue;
+      if (ids !== null) {
+        const result = await readJson(join(checksDir, name, 'result.json'), null).catch(() => null);
+        if (!ids.has(result?.rowId)) continue;
+      }
+      await rm(join(checksDir, name), { recursive: true, force: true });
+    }
+  }
+
   /** The old layout's screenshots and small pictures. Never the screenshots uploaded by file name, in their own folder. */
   async function sweepOld() {
     for (const dir of [oldShotsDir, join(oldShotsDir, 'small')]) {
@@ -332,22 +357,25 @@ export function createStore(dataDir) {
       });
     },
 
-    /** Removes one row, with its pictures and small pictures. Its check results stay. -> the removed row. */
+    /** Removes one row, with its pictures, its small pictures and its checks' folders (what was read from its screenshots). -> the removed row. */
     remove(id) {
       return locked(async () => {
         const rows = await all();
         const row = rows.find((r) => r.id === id);
         if (!row) throw new StoreError(404, 'No row has that id.');
-        await saveAll(rows.filter((r) => r.id !== id));
+        const left = rows.filter((r) => r.id !== id);
+        await saveAll(left);
         await sweep(new Set([id]));
+        await sweepChecks(new Set([id]), left);
         return row;
       });
     },
     /**
      * Removes every row, from the sheet and added by hand, and every row made
-     * with the old layout, with their pictures. `expected` is how many rows
-     * the person was asked about: when there are more or fewer now, nothing
-     * is removed. -> how many were removed.
+     * with the old layout, with their pictures and every check's folder
+     * (what was read from the screenshots). `expected` is how many rows the
+     * person was asked about: when there are more or fewer now, nothing is
+     * removed. -> how many were removed.
      */
     removeAll(expected) {
       return locked(async () => {
@@ -357,6 +385,7 @@ export function createStore(dataDir) {
         }
         await saveAll([]);
         await sweep(null);
+        await sweepChecks(null);
         await rm(oldUsersFile, { force: true });
         await sweepOld();
         return now;
